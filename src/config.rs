@@ -1,8 +1,13 @@
 //! Where the exports are and where to serve them from.
 //!
-//! Settings come from `~/.config/mapstique/config.toml`, and command-line flags
-//! win over the file. The file is written with the defaults on a first run, so
-//! there is always something to edit.
+//! Settings come from a file and command-line flags win over it. The file is
+//! written with the defaults on a first run, so there is always something to
+//! edit.
+//!
+//! Which file depends on who started this. Run by hand it is
+//! `~/.config/mapstique/config.toml`; started by the server mod it is
+//! `mapstique.conf` in the game's `ModConfig` folder, which the mod names with
+//! `--config` so that everything about one server's map sits with that server.
 
 use std::path::{Path, PathBuf};
 
@@ -31,6 +36,33 @@ pub struct Config {
     /// How many threads render tiles. Zero decides from the machine, capped so
     /// that the game server this usually shares a box with keeps its cores.
     pub threads: usize,
+
+    /// How much memory rendered tiles may occupy before the least used are
+    /// dropped. They are rebuilt on demand, so this costs time and not the map.
+    pub tile_cache_mb: usize,
+
+    /// Whether the server mod starts this service itself.
+    ///
+    /// Read by the mod rather than by anything here — it is a setting about who
+    /// runs the map, and the only sensible place for it is beside everything else
+    /// about the map. Turn it off to run `mapstique serve` yourself, which is what
+    /// a map that should outlive the game server wants.
+    pub autostart: bool,
+
+    /// Whether the server mod tells a player where the map is when they join.
+    ///
+    /// Read by the mod, like `autostart`: a map nobody knows the address of is a
+    /// map nobody looks at, and the mod is the half that can say so in chat.
+    pub announce: bool,
+
+    /// What to tell them, when it is not where this is listening.
+    ///
+    /// Empty means the address this works out for itself, which is right on a
+    /// machine somebody can reach directly and wrong everywhere else: a server on
+    /// the open internet is reached at a name, through a proxy, on a port this
+    /// never sees. Only an operator knows that address, so only an operator can
+    /// set it.
+    pub announce_url: String,
 }
 
 impl Default for Config {
@@ -40,6 +72,10 @@ impl Default for Config {
             bind: "0.0.0.0:8080".to_owned(),
             api_socket: String::new(),
             threads: 0,
+            tile_cache_mb: 256,
+            autostart: true,
+            announce: true,
+            announce_url: String::new(),
         }
     }
 }
@@ -111,7 +147,15 @@ impl Config {
              # api_socket is where the mod posts live data. Empty means a unix\n\
              # socket in /tmp named after this folder, which is where the mod\n\
              # looks; a host:port is accepted instead.\n\
-             # threads is how many requests are answered at once; 0 decides.\n\n{body}"
+             # threads is how many requests are answered at once; 0 decides.\n\
+             # tile_cache_mb is how much memory rendered tiles may hold.\n\
+             # autostart is whether the server mod runs this service itself.\n\
+             # Turn it off to run `mapstique serve` by hand, which is what a map\n\
+             # that should outlive the game server wants.\n\
+             # announce is whether the mod tells a player where the map is when\n\
+             # they join. announce_url is what to tell them: empty means the\n\
+             # address this works out for itself, which is right on a machine\n\
+             # they can reach directly and wrong behind a proxy or a domain.\n\n{body}"
         )
     }
 }

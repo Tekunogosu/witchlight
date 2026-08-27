@@ -11,6 +11,50 @@
   .leaflet-container { background: #14141a; outline: none; }
   /* One pixel is one block, so a magnified tile must stay blocks and not blur. */
   .leaflet-tile { image-rendering: pixelated; }
+  #who { position: absolute; right: 12px; top: 12px; z-index: 500; width: 216px;
+         max-height: calc(100% - 24px); overflow-y: auto;
+         display: flex; flex-direction: column; gap: 6px; }
+  #who:empty { display: none; }
+  .card { display: grid; grid-template-columns: 40px 1fr; gap: 9px;
+          align-items: center; padding: 8px 10px;
+          background: #000000cc; border: 1px solid #33333f; border-radius: 4px;
+          cursor: pointer; }
+  .card:hover { border-color: #4dd2ff66; background: #0a0a12dd; }
+  .card.followed { border-color: #4dd2ff; background: #0d1a22ee; }
+  .card .face { width: 40px; height: 40px; border-radius: 3px; background: #1c1c24;
+                border: 1px solid #33333f; display: grid; place-items: center;
+                font-size: 17px; color: #6f7a86; overflow: hidden; }
+  .card .face svg { width: 100%; height: 100%; display: block; }
+  /* A portrait is one block per pixel of a rendered seraph, so it is scaled the
+     way the terrain is: crisp, rather than smeared into a thumbnail. */
+  .card .face img { width: 100%; height: 100%; display: block; object-fit: contain;
+                    image-rendering: pixelated; }
+  /* A grid column will not shrink below its content unless told it may, and a
+     player may call themselves anything, so without this a long name pushes the
+     card and its bars out past their own border. */
+  .card > div:last-child { min-width: 0; }
+  .card .name { color: #e8e8ee; font-size: 12px; margin-bottom: 4px;
+                overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bar { height: 5px; border-radius: 3px; background: #ffffff14; margin-top: 3px;
+         overflow: hidden; }
+  .bar > i { display: block; height: 100%; }
+  .bar.hp > i { background: #e05a5a; }
+  .bar.food > i { background: #74a94a; }
+  #cog { position: absolute; right: 12px; bottom: 12px; z-index: 500;
+         width: 40px; height: 40px; display: grid; place-items: center;
+         background: #000000cc; border: 1px solid #33333f; border-radius: 4px;
+         color: #cfcfd6; cursor: pointer; font-size: 20px; line-height: 1;
+         user-select: none; }
+  #cog:hover { border-color: #4dd2ff66; color: #fff; }
+  #settings { position: absolute; right: 12px; bottom: 60px; z-index: 500;
+              width: 216px; padding: 10px 12px; background: #000000e6;
+              border: 1px solid #33333f; border-radius: 4px; display: none; }
+  #settings.open { display: block; }
+  #settings h2 { margin: 0 0 8px; font-size: 11px; letter-spacing: .08em;
+                 text-transform: uppercase; color: #8a8a96; font-weight: normal; }
+  #settings label { display: flex; align-items: center; gap: 8px; padding: 4px 0;
+                    font-size: 12px; color: #cfcfd6; cursor: pointer; }
+  #settings input { accent-color: #4dd2ff; margin: 0; }
   #hud { position: absolute; left: 12px; bottom: 12px; z-index: 500;
          padding: 7px 11px; background: #000000cc; border: 1px solid #33333f;
          border-radius: 4px; pointer-events: none; white-space: pre; }
@@ -19,6 +63,16 @@
          border: 2px solid #000000cc; border-radius: 50%; background: #4dd2ff; }
   .diamond { display: block; width: 11px; height: 11px; margin: -6px 0 0 -6px;
              border: 1.5px solid #000000aa; transform: rotate(45deg); }
+  /* The game's own marker pictures are single colour silhouettes, so they are
+     used as a mask and filled with the colour their owner chose — the same way
+     the game draws them. A drop shadow stands in for an outline, since a mask
+     has no edge of its own to stroke. */
+  .icon { display: block; width: 18px; height: 18px; margin: -9px 0 0 -9px;
+          -webkit-mask-size: contain; mask-size: contain;
+          -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+          -webkit-mask-position: center; mask-position: center;
+          filter: drop-shadow(0 0 1px #000) drop-shadow(0 0 2px #000a); }
+  body.no-names .tag { display: none; }
   .tag { position: absolute; left: 50%; transform: translateX(-50%);
          bottom: 9px; white-space: nowrap; font-size: 11px; color: #4dd2ff;
          text-shadow: 0 0 3px #000, 0 0 3px #000, 0 0 3px #000; }
@@ -31,11 +85,29 @@
   .leaflet-control-attribution { display: none; }
 </style>
 <div id="map"></div>
+<div id="who"></div>
+<div id="settings"><h2>Show</h2></div>
+<div id="cog" title="Settings">⚙</div>
 <div id="hud">loading…</div>
 <script src="/leaflet.js"></script>
 <script>
 const TILE = __TILE__;
 const bounds = { minX: __MIN_X__, minZ: __MIN_Z__, maxX: __MAX_X__, maxZ: __MAX_Z__ };
+
+/**
+ * Where the game counts from.
+ *
+ * Vintage Story shows every coordinate a player sees relative to world spawn,
+ * while the world itself is a million blocks across with spawn near the middle.
+ * Showing absolute positions is not wrong, but it agrees with nothing the player
+ * can compare it against, which comes to the same thing.
+ */
+let spawn = { x: 0, z: 0 };
+
+/** A world position as the game would say it. */
+const said = (x, z) => settings.absolute.on
+  ? [Math.round(x), Math.round(z)]
+  : [Math.round(x - spawn.x), Math.round(z - spawn.z)];
 
 /** How far past one block per pixel the view may go. Costs no extra tiles: Leaflet
  *  stretches the finest level rather than asking for one that does not exist. */
@@ -86,8 +158,93 @@ let generation = 0;
 let levels = 0;
 let chunks = 0;
 let players = [];
+/** Marker pictures the service has. A name not in here gets a plain shape. */
+let icons = new Set();
+
+/**
+ * What each skin part variant looks like.
+ *
+ * A player's appearance arrives as the names of the parts they chose — `skin4`,
+ * `mossgreen`, `azure` — because a variant's colour is not written down anywhere
+ * the server can read. The colours come from a client, once, and are the same for
+ * everybody, so this is one small table rather than something sent per player.
+ */
+let skinColors = {};
 
 const hud = document.getElementById('hud');
+const who = document.getElementById('who');
+
+/**
+ * What the reader has chosen to see.
+ *
+ * Kept in the browser rather than on the server: these are one person's
+ * preferences about one screen, and everybody looking at the same map is
+ * entitled to a different answer.
+ */
+const settings = {
+  players: { label: 'Players', on: true, apply: on => layer(people, on) },
+  markers: { label: 'Markers', on: true, apply: on => layer(places, on) },
+  panel: { label: 'Player list', on: true, apply: on => { who.style.display = on ? '' : 'none'; } },
+  absolute: { label: 'Absolute coordinates', on: false, apply: () => say() },
+  names: { label: 'Player names', on: true, apply: on => {
+    document.body.classList.toggle('no-names', !on);
+  } },
+};
+
+function layer(group, on) {
+  if (on) {
+    if (!map.hasLayer(group)) map.addLayer(group);
+  } else if (map.hasLayer(group)) {
+    map.removeLayer(group);
+  }
+}
+
+function buildSettings() {
+  const panel = document.getElementById('settings');
+  for (const [key, setting] of Object.entries(settings)) {
+    const label = document.createElement('label');
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.checked = setting.on;
+    box.addEventListener('change', () => {
+      setting.on = box.checked;
+      remember();
+      setting.apply(box.checked);
+    });
+    label.append(box, document.createTextNode(setting.label));
+    panel.append(label);
+  }
+
+  document.getElementById('cog').addEventListener('click', event => {
+    event.stopPropagation();
+    panel.classList.toggle('open');
+  });
+  // Anywhere else closes it, including the map underneath.
+  addEventListener('click', () => panel.classList.remove('open'));
+  panel.addEventListener('click', event => event.stopPropagation());
+}
+
+/** Choices survive a reload; a browser that refuses to remember is not an error. */
+function remember() {
+  try {
+    const state = {};
+    for (const [key, setting] of Object.entries(settings)) state[key] = setting.on;
+    localStorage.setItem('mapstique.settings', JSON.stringify(state));
+  } catch (error) {
+    /* private windows and cleared storage are allowed to say no */
+  }
+}
+
+function recall() {
+  try {
+    const state = JSON.parse(localStorage.getItem('mapstique.settings') || '{}');
+    for (const [key, setting] of Object.entries(settings)) {
+      if (typeof state[key] === 'boolean') setting.on = state[key];
+    }
+  } catch (error) {
+    /* whatever was stored is not usable, so the defaults stand */
+  }
+}
 
 /**
  * Blocks rather than degrees, and north stays up.
@@ -189,6 +346,10 @@ function resize() {
       // page black, at exactly the magnification `maxNativeZoom` exists to serve.
       minZoom: 0,
       maxZoom: NATIVE_ZOOM + ZOOM_IN_BEYOND_NATIVE,
+      // A tile the service has not built answers 404. Without something to put
+      // there the browser draws a broken image, which on a world explored in an
+      // awkward shape is a grid of them.
+      errorTileUrl: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7',
       noWrap: true,
       keepBuffer: 2,
       updateWhenZooming: false,
@@ -235,10 +396,34 @@ function writeAddress() {
 const people = L.layerGroup().addTo(map);
 const places = L.layerGroup().addTo(map);
 
+/** Players on the map, by the identity that survives a rename. */
+const drawnPlayers = new Map();
+
+/**
+ * Moves the players who moved.
+ *
+ * Everything here used to be cleared and rebuilt on every poll, which at forty
+ * markers and a picture each was forty elements destroyed and recreated every two
+ * seconds — a map that flickered twice a minute for every minute it was open.
+ * A player who is still online keeps the marker they had and is moved to where
+ * they are now.
+ */
 function drawPlayers() {
-  people.clearLayers();
+  const seen = new Set();
+
   for (const player of players) {
-    L.marker(at(player.X, player.Z), {
+    const uid = String(player.Uid || player.Name);
+    seen.add(uid);
+
+    const drawn = drawnPlayers.get(uid);
+    if (drawn) {
+      drawn.marker.setLatLng(at(player.X, player.Z));
+      // Only the parts that can change: the popup carries their position.
+      drawn.marker.setPopupContent(popupFor(player));
+      continue;
+    }
+
+    const marker = L.marker(at(player.X, player.Z), {
       icon: L.divIcon({
         className: 'player',
         html: `<i class="pin"></i><span class="tag">${escaped(player.Name)}</span>`,
@@ -246,27 +431,283 @@ function drawPlayers() {
       // Above markers: a player is the thing that is moving.
       zIndexOffset: 1000,
     })
-      .bindPopup(`<b>${escaped(player.Name)}</b><br>${player.X}, ${player.Y}, ${player.Z}`)
+      .bindPopup(popupFor(player))
       .addTo(people);
+    drawnPlayers.set(uid, { marker });
+  }
+
+  for (const [uid, drawn] of drawnPlayers) {
+    if (!seen.has(uid)) {
+      people.removeLayer(drawn.marker);
+      drawnPlayers.delete(uid);
+    }
   }
 }
 
+/** What the markers looked like last time, so an unchanged set is left alone. */
+let drawnPlaces = null;
+
+/**
+ * Draws the markers, when they are not the ones already drawn.
+ *
+ * Markers change a few times an hour and arrive every two seconds. Rebuilding
+ * them on arrival meant tearing down every marker on the map to discover that
+ * none of them had moved.
+ */
 function drawPlaces(waypoints) {
+  const shape = JSON.stringify(waypoints);
+  if (shape === drawnPlaces) {
+    return;
+  }
+  drawnPlaces = shape;
+
   places.clearLayers();
   for (const place of waypoints) {
     const colour = /^#[0-9a-f]{6}$/i.test(place.Color || '') ? place.Color : '#ffffff';
+    const name = String(place.Icon || '');
+    const shape = icons.has(name)
+      ? `<i class="icon" style="background:${colour};` +
+        `-webkit-mask-image:url(/icons/${encodeURIComponent(name)}.svg);` +
+        `mask-image:url(/icons/${encodeURIComponent(name)}.svg)"></i>`
+      : `<i class="diamond" style="background:${colour}"></i>`;
     // Every death marker is titled "You died here", so the owner is the only
     // thing that says whose it is.
     const owner = place.Owner ? `<br><span style="color:#a8a8b4">${escaped(place.Owner)}</span>` : '';
     L.marker(at(place.X, place.Z), {
-      icon: L.divIcon({
-        className: 'marker',
-        html: `<i class="diamond" style="background:${colour}"></i>`,
-      }),
+      icon: L.divIcon({ className: 'marker', html: shape }),
     })
-      .bindPopup(`<b>${escaped(place.Title || 'marker')}</b>${owner}<br>${place.X}, ${place.Y}, ${place.Z}`)
+      .bindPopup(`<b>${escaped(place.Title || 'marker')}</b>${owner}<br>` +
+                 `${said(place.X, place.Z)[0]}, ${place.Y}, ${said(place.X, place.Z)[1]}`)
       .addTo(places);
   }
+}
+
+/** Cards on the panel, by the player they stand for. */
+const cards = new Map();
+
+/** Whose view the map is keeping, if anyone's. */
+let following = null;
+
+/**
+ * Keeps the map on one player until somebody drags it.
+ *
+ * Zooming does not stop it: changing how close you are looking is not the same as
+ * choosing to look somewhere else. Dragging is, so that ends it — and so does
+ * clicking the same player again.
+ */
+function follow(uid) {
+  following = following === uid ? null : uid;
+  for (const [id, card] of cards) {
+    card.element.classList.toggle('followed', id === following);
+  }
+  keepUp();
+}
+
+function keepUp() {
+  if (following === null) {
+    return;
+  }
+  const player = players.find(p => String(p.Uid || p.Name) === following);
+  if (player) {
+    map.panTo(at(player.X, player.Z), { animate: true, duration: 0.4 });
+  }
+}
+
+/**
+ * Who is online, down the right hand side.
+ *
+ * Health and food come from the server, which already knows them, so nothing is
+ * asked of anyone to show them. Clicking a card follows that player until the map
+ * is dragged.
+ *
+ * Nothing here is rebuilt. Cards are made once and then written into, so the
+ * panel keeping up with the world never disturbs what is on the screen.
+ */
+function drawWho() {
+  const seen = new Set();
+
+  for (const player of players) {
+    const uid = String(player.Uid || player.Name);
+    seen.add(uid);
+    patchCard(cards.get(uid) || newCard(uid), player);
+  }
+
+  for (const [uid, card] of cards) {
+    if (!seen.has(uid)) {
+      card.element.remove();
+      cards.delete(uid);
+      if (following === uid) following = null;
+    }
+  }
+}
+
+/** A card, built once. What changes on it afterwards is set, not rebuilt. */
+function newCard(uid) {
+  const element = document.createElement('div');
+  element.className = 'card';
+
+  const face = document.createElement('div');
+  face.className = 'face';
+  const about = document.createElement('div');
+  const name = document.createElement('div');
+  name.className = 'name';
+  const hp = bar('hp');
+  const food = bar('food');
+  about.append(name, hp.wrap, food.wrap);
+  element.append(face, about);
+  element.addEventListener('click', () => follow(uid));
+  who.append(element);
+
+  const card = { element, face, name, hp, food, look: null, named: null };
+  cards.set(uid, card);
+  return card;
+}
+
+/**
+ * Brings one card up to date.
+ *
+ * Every field is compared before it is written. The panel shares the two second
+ * beat the map data arrives on, and a player who is walking changes their
+ * position and their food on every one of them — so rebuilding a card whenever
+ * anything about its player moved meant rebuilding all of them, always. Setting a
+ * width does not disturb the screen; replacing an element does.
+ */
+function patchCard(card, player) {
+  if (card.named !== player.Name) {
+    card.named = player.Name;
+    card.name.textContent = player.Name;
+  }
+
+  const look = `${player.Portrait || ''}|${player.Skin}|${player.Hair}|${player.Eyes}|${player.Name}`;
+  if (card.look !== look) {
+    card.look = look;
+    card.face.textContent = '';
+    card.face.append(portrait(player));
+  }
+
+  fill(card.hp, 'health', player.Health, player.MaxHealth);
+  fill(card.food, 'food', player.Saturation, player.MaxSaturation);
+
+  const [x, z] = said(player.X, player.Z);
+  const title = `${player.Name} — ${x}, ${player.Y}, ${z}`;
+  if (card.element.title !== title) {
+    card.element.title = title;
+  }
+}
+
+/**
+ * What goes in a player's card.
+ *
+ * A picture their own client drew of them where there is one, and a face built
+ * from the colours of their skin parts where there is not. The first is the real
+ * seraph, clothes and armour included; the second tells one player from another
+ * and does not pretend to be a likeness.
+ */
+function portrait(player) {
+  // A picture the player's own client drew of them, which is the only place a
+  // seraph's real appearance exists: its skin parts are textures a dedicated
+  // server does not ship, and its clothes and armour are a rendered scene rather
+  // than a list of colours. Everything below this is what to do without one.
+  if (player.Portrait) {
+    const sent = document.createElement('img');
+    sent.src = `/portraits/${encodeURIComponent(player.Portrait)}.png`;
+    sent.alt = '';
+    // A picture that will not load leaves a broken image in the card, which reads
+    // worse than the face this was drawing before anyone sent one.
+    sent.addEventListener('error', () => {
+      const box = sent.parentElement;
+      if (!box) return;
+      sent.remove();
+      box.append(drawnFace(player));
+    }, { once: true });
+    return sent;
+  }
+
+  return drawnFace(player);
+}
+
+/**
+ * A face built from the colours of the parts a player chose.
+ *
+ * What the map showed before a client could send a picture of itself, and what it
+ * still shows for anyone who has not: the names of the parts are all the server
+ * can read, so this arranges them into something that tells one player from
+ * another rather than into a likeness.
+ */
+function drawnFace(player) {
+  const skin = colour(skinColors[player.Skin]);
+  if (!skin) {
+    const initial = document.createElement('span');
+    initial.textContent = (player.Name || '?').trim().charAt(0).toUpperCase() || '?';
+    return initial;
+  }
+
+  const hair = colour(skinColors[player.Hair]) || '#2b2118';
+  const eyes = colour(skinColors[player.Eyes]) || '#3b2d22';
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 40 40');
+  svg.innerHTML =
+    `<rect width="40" height="40" fill="${shade(skin, -0.55)}"/>` +
+    `<ellipse cx="20" cy="24" rx="12" ry="13" fill="${skin}"/>` +
+    `<path d="M8 22a12 12 0 0 1 24 0c0-6-4-9-12-9S8 16 8 22Z" fill="${hair}"/>` +
+    `<ellipse cx="15.5" cy="24" rx="1.9" ry="2.2" fill="${eyes}"/>` +
+    `<ellipse cx="24.5" cy="24" rx="1.9" ry="2.2" fill="${eyes}"/>` +
+    `<path d="M16 30q4 2.5 8 0" stroke="${shade(skin, -0.35)}" stroke-width="1.4" fill="none" stroke-linecap="round"/>`;
+  return svg;
+}
+
+/**
+ * A colour the server sent, or nothing if what it sent cannot be one.
+ *
+ * Black counts as nothing. When the skin parts cannot be read the colours come
+ * back as zero, which is a perfectly valid `#000000` and draws a black face on a
+ * black background — a card that appears to hold nothing at all, rather than one
+ * that has fallen back to an initial.
+ */
+function colour(value) {
+  if (!/^#[0-9a-f]{6}$/i.test(value || '')) {
+    return null;
+  }
+  const level = parseInt(value.slice(1, 3), 16) + parseInt(value.slice(3, 5), 16)
+    + parseInt(value.slice(5, 7), 16);
+  return level > 24 ? value : null;
+}
+
+/** The same colour, darker or lighter, for a background and a mouth line. */
+function shade(hex, by) {
+  const to = by < 0 ? 0 : 255;
+  const mix = Math.abs(by);
+  const parts = [1, 3, 5].map(at => {
+    const channel = parseInt(hex.slice(at, at + 2), 16);
+    return Math.round(channel + (to - channel) * mix).toString(16).padStart(2, '0');
+  });
+  return `#${parts.join('')}`;
+}
+
+/** An empty bar, to be filled in later. */
+function bar(kind) {
+  const wrap = document.createElement('div');
+  wrap.className = `bar ${kind}`;
+  const inner = document.createElement('i');
+  wrap.append(inner);
+  return { wrap, inner, at: null };
+}
+
+/** A reading, written only when it is not the reading already there. */
+function fill(bar, what, value, most) {
+  const share = most > 0 ? Math.max(0, Math.min(1, value / most)) : 0;
+  const width = `${(share * 100).toFixed(1)}%`;
+  if (bar.at === width) {
+    return;
+  }
+  bar.at = width;
+  bar.inner.style.width = width;
+  bar.wrap.title = most > 0 ? `${what} ${Math.round(value)} of ${Math.round(most)}` : '';
+}
+
+function popupFor(player) {
+  const [x, z] = said(player.X, player.Z);
+  return `<b>${escaped(player.Name)}</b><br>${x}, ${player.Y}, ${z}`;
 }
 
 /** Titles and names come from players, so they are text and never markup. */
@@ -276,30 +717,90 @@ function escaped(text) {
   return node.innerHTML;
 }
 
+/** Where the pointer is, when it is over the map. */
+let pointer = null;
+
 function say() {
   if (!terrain) return;
-  const centre = map.getCenter();
+  const where = pointer || map.getCenter();
+  const [x, z] = said(where.lng, where.lat);
   const perBlock = scaleAt(map.getZoom(), NATIVE_ZOOM);
   hud.textContent =
-    `x ${Math.round(centre.lng)}   z ${Math.round(centre.lat)}   ` +
+    `x ${x}   z ${z}   ` +
     `${perBlock.toFixed(2)} px/block   level ${levelFor(Math.round(map.getZoom()), NATIVE_ZOOM)}   ` +
     `${chunks} chunks   ${players.length} online`;
 }
 
 map.on('move zoom', say);
+// Under the pointer when there is one, the middle of the view when there is not.
+map.on('mousemove', event => { pointer = event.latlng; say(); });
+map.on('mouseout', () => { pointer = null; say(); });
+
+// Dragging is choosing to look somewhere else, so it stops following. Zooming is
+// not, so it does not.
+map.on('dragstart', () => {
+  if (following !== null) follow(following);
+});
 map.on('moveend zoomend', writeAddress);
 addEventListener('hashchange', () => {
   const asked = readAddress();
   if (asked) map.setView(at(asked.x, asked.z), asked.zoom);
 });
 
+/**
+ * Which marker pictures exist.
+ *
+ * Asked once at start and again whenever markers arrive naming one that is not
+ * known yet — which is what happens when a mod adding markers is installed while
+ * the map is open.
+ */
+async function pollIcons() {
+  try {
+    icons = new Set(await (await fetch('/icons.json')).json());
+  } catch (error) {
+    /* the service may be restarting */
+  }
+}
+
+/**
+ * What the skin parts look like.
+ *
+ * Fetched once, and again whenever a player names a part that is not in the
+ * table — which is what happens when a mod adding appearances is installed, or
+ * when the colours arrive from an admin after the map was already open.
+ */
+async function pollSkinColors() {
+  try {
+    skinColors = await (await fetch('/skincolors.json')).json() || {};
+  } catch (error) {
+    /* the service may be restarting */
+  }
+}
+
 /** Players move constantly; markers rarely. Both are cheap to fetch. */
 async function pollLive() {
   try {
     const live = await (await fetch('/live.json')).json();
     players = live.Players || [];
+    const places = live.Waypoints || [];
+
+    // A marker naming a picture nobody has heard of means the set has grown.
+    if (places.some(place => place.Icon && !icons.has(String(place.Icon)))) {
+      await pollIcons();
+      // The pictures changed, so what is drawn no longer matches what was drawn.
+      drawnPlaces = null;
+    }
+
+    // The same for a player naming a part whose colour is not known yet.
+    if (players.some(p => p.Skin && !(p.Skin in skinColors))) {
+      await pollSkinColors();
+      for (const card of cards.values()) card.look = null;
+    }
+
     drawPlayers();
-    drawPlaces(live.Waypoints || []);
+    drawWho();
+    keepUp();
+    drawPlaces(places);
     say();
   } catch (error) {
     /* the service may be restarting */
@@ -327,6 +828,7 @@ async function pollWorld() {
     generation = info.generation;
     chunks = info.chunks;
     levels = info.levels ?? 0;
+    spawn = { x: info.spawnX ?? 0, z: info.spawnZ ?? 0 };
     Object.assign(bounds, info);
 
     // Growing and changing are not the same thing. A world that has grown needs
@@ -341,7 +843,11 @@ async function pollWorld() {
   }
 }
 
+recall();
+buildSettings();
+for (const setting of Object.values(settings)) setting.apply(setting.on);
+
 setInterval(pollLive, 2000);
 setInterval(pollWorld, 5000);
-pollWorld().then(pollLive);
+pollWorld().then(pollIcons).then(pollSkinColors).then(pollLive);
 </script>

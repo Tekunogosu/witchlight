@@ -5,6 +5,254 @@ two **must match on minor version**: minor is the compatibility generation, move
 whenever the file format or the socket protocol changes. Patch is free to differ,
 and covers anything that changes only one half.
 
+## 0.15.0
+
+### Players look like themselves
+
+A player's card shows a picture their own client drew of their seraph — skin,
+hair, clothes, armour, whatever they are wearing — in place of the face this used
+to assemble out of three colours. `/portraits/{name}.png` serves them, filed under
+a name the mod derives from a player uid, which is base64 and carries characters a
+path cannot.
+
+The drawn face is still there for anyone who has not sent a picture, and a picture
+that will not load falls back to it rather than leaving a broken image in the card.
+
+Portraits are held for a minute rather than an hour: a player who sends a new one
+keeps the name they had, so an address that never changes must not be cached as
+though it did.
+
+### Fixed
+
+One rule decides whether a name in a URL is only ever a name, rather than one copy
+of it per kind of stored file.
+
+## 0.14.0
+
+### It says where it is, so the mod can tell people
+
+The addresses the map answers on are written to `service.json` beside the rest of
+the export as soon as it binds. Working out what `0.0.0.0` actually means is this
+program's question and it had already answered it for its own log; the mod needed
+the same answer and had no way to ask. The address on the network comes first,
+because that is the one worth giving somebody else.
+
+`announce` and `announce_url` are new, and like `autostart` this program does not
+read them: they say whether the mod tells a joining player where the map is, and
+what to tell them. `announce_url` is empty by default, meaning the address worked
+out here — which is right on a machine a player can reach directly and wrong for a
+server on the open internet, where the map is reached at a name, through a proxy,
+on a port this never sees. Only an operator knows that address.
+
+The startup lines now put the address on the network first and mark loopback as
+what it is, rather than listing loopback first and annotating the other.
+
+**Both halves must be upgraded together.** The settings file gained two keys, and
+a 0.13 service refuses a file it does not recognise every field of. An existing
+file is brought up to date, values kept, with:
+
+```sh
+mapstique -c <file> --save-config -p
+```
+
+## 0.13.0
+
+### The server mod can run this
+
+The map service rides along inside the server mod's archive and is started by it,
+so installing the mod installs the map. It stays a separate program — it knows
+pixels, the mod knows the game, and a map worth keeping outlives any one game
+server — but it is no longer a second thing to fetch, configure and remember to
+start.
+
+Settings move with it. Started by the mod, the file is `mapstique.conf` in the
+game's `ModConfig` folder, named on the command line, so everything about one
+server's map sits with that server rather than in one shared file in a home
+directory. Run by hand, `~/.config/mapstique/config.toml` is unchanged.
+
+`autostart` is new, and is the one setting here that this program does not read:
+it says whether the mod starts the service unasked. Turn it off to run
+`mapstique serve` yourself, which is what a map that should stay up while the game
+server is down wants.
+
+Everything the service prints goes to `mapstique-service.log` in the game's own
+`Logs` folder, so it can be tailed while it runs and is not interleaved with a
+game server's log.
+
+**Both halves must be upgraded together.** The settings file gained a key, and a
+0.12 service refuses a file it does not recognise every field of.
+
+## 0.12.1
+
+### Fixed
+
+The map was blank at the zoom it opens on, until an admin joined the game.
+
+A world that grows past a power of two gains a coarsest level. The levels above
+zero are rebuilt by walking up from whatever region changed, so exactly one tile
+was built at the new level — the one above the region that had just arrived — and
+every other tile there had nothing beneath it that had changed, so nothing ever
+asked for it. That level is the one a viewer opens on, so the map read as empty.
+
+Restarting did not fix it: the start-up scan asked only whether a region's level 1
+tile was current, which it was. An admin joining did fix it, by accident — their
+client supplies a palette, a new palette recolours every tile, and rebuilding
+every tile filled the level in.
+
+One function now answers what the levels owe the world, comparing a region
+against every level above it rather than only the first, and it is asked both at
+start and whenever the world turns out to need a level the pyramid does not have.
+
+## 0.12.0
+
+### Faces are drawn from a table of colours
+
+A player's appearance arrives as the names of the parts they chose — `skin4`,
+`mossgreen`, `azure` — and `/skincolors.json` says what each name looks like. A
+name with no colour falls back to that player's initial.
+
+The table is fetched once and again whenever a player names a part not in it,
+which is what happens when a mod adds appearances or when an admin supplies the
+colours after the map was already open.
+
+## 0.11.3
+
+### Fixed
+
+The generation was bumped twice for one export: once when the watcher reloaded the
+changed regions, again when the builder finished the levels above. The generation
+versions every tile URL, so that was the same pixels fetched under two names — and
+on a dense world a tile is a third of a megabyte. Whether the second fetch
+happened depended on where the five second poll fell, which is why it looked
+intermittent.
+
+The builder now announces the whole export at once, including the level 0 tiles
+the watcher reloaded.
+
+## 0.11.2
+
+### Fixed
+
+The food bar is green, as it is in the game, rather than amber.
+
+## 0.11.1
+
+### Says when the mod is older than it is
+
+A map counting from absolute zero rather than from spawn looks like a bug in the
+map, and nothing on either side looks wrong — so a missing `world.json` is now
+said at start, naming the reason.
+
+## 0.11.0
+
+### Coordinates the game would recognise
+
+Vintage Story shows every coordinate a player sees relative to world spawn, while
+the world is a million blocks across with spawn near the middle. This map showed
+absolute positions — not wrong, but agreeing with nothing a player can compare
+them against, so a marker the map called `511900` was `-100` on their screen. The
+mod writes where spawn is and the map counts from there. Absolute is a setting,
+since that is what region files and tile URLs use.
+
+The corner also reports wherever the pointer is, falling back to the middle of the
+view when it leaves.
+
+### Following a player
+
+Clicking a card keeps the map on that player. Zooming does not stop it — looking
+closer is not choosing to look elsewhere — but dragging does.
+
+### Nothing on screen is rebuilt because data arrived
+
+Cards, player markers and map markers are built once and afterwards written into.
+Everything on the live feed shares a two second beat and a walking player changes
+position and food on every one, so anything that rebuilt on change rebuilt
+constantly: forty markers and thirteen cards destroyed and recreated twice a
+minute. That was the flicker.
+
+### Fixed
+
+- A player whose skin colours could not be read drew as a black face on a black
+  background instead of falling back to their initial: the colours arrive as zero,
+  which is a perfectly good `#000000`, so the card looked empty rather than plain.
+- A long player name pushed its card and bars out past their own border.
+
+## 0.10.0
+
+### Who is online
+
+A card each for the players on the server: a face, their name, and how much health
+and food they have. Both readings come from the server, which already knows them,
+so nothing is asked of any client. The list scrolls when there are more players
+than fit.
+
+The face is drawn from the colours that player chose — skin, hair and eyes, read
+from their applied skin parts. It is not a likeness and does not pretend to be:
+the game keeps no portrait of anyone, its character screen renders the live entity
+into a panel and there is nothing to read back. The colours are enough to tell one
+player from another.
+
+### A settings panel
+
+A cogwheel, and toggles for what to show. Kept in the browser rather than on the
+server: these are one person's preferences about one screen, and everybody looking
+at the same map is entitled to a different answer.
+
+## 0.9.2
+
+### Fixed
+
+Markers were destroyed and rebuilt on every live poll — forty elements twice a
+minute, each with a picture to re-resolve. Markers that have not changed are now
+left alone entirely, and a player who moved is moved rather than replaced.
+
+This is also why a popup vanished a moment after being opened: it was attached to
+an element that no longer existed.
+
+## 0.9.1
+
+### Marker pictures
+
+Waypoints are drawn with the game's own icons, tinted with the colour their owner
+chose. A name with no picture falls back to a plain shape, and the set is
+refetched when a marker names one that is not known — so a marker mod installed
+while the map is open is picked up without a reload.
+
+### Fixed
+
+A tile the service had not built answered `404`, which the viewer had nothing to
+put in place of, so the browser drew a broken image. It now draws nothing.
+
+## 0.9.0
+
+### A view has an address
+
+`#x,z,px-per-block` in the address bar, the same three numbers the corner shows,
+so a link says what it points at. It follows panning and zooming, and opening one
+lands where it says rather than fitting the world first.
+
+Built to make the zoom levels testable from outside the page, which they were not
+before; that it is also the feature every map has is a happy coincidence.
+
+## 0.8.2
+
+### Fixed
+
+Zooming past eight pixels per block went black. A tile layer defaults to a maximum
+zoom of eighteen and tests the map's own zoom against it *before* clamping to the
+finest level, so past that every tile was dropped — at exactly the magnification
+the level system exists to provide. The layer now states the range it is used at.
+
+## 0.8.1
+
+### Fixed
+
+The map tore itself down whenever the world grew. One pixel per block sat at
+whatever zoom the world happened to need, so a player exploring far enough added a
+level and everything shifted underneath: the tile layer was rebuilt and the view
+snapped back to fit, on nearly every export. One pixel per block is now pinned to
+a fixed zoom, and growth only changes how far out the view may go.
+
 ## 0.8.0
 
 **Clears the map on upgrade.** Regions changed size and there is no reader for the

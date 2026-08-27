@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, SystemTime};
 
-use image::{ImageFormat, RgbImage};
+use image::RgbImage;
 use tiny_http::{Header, Method, Request, Response, Server};
 
 use crate::columns::{Region, World, columns_dir, region_coords, region_files};
@@ -90,7 +90,9 @@ pub fn serve(
     palette: Palette,
     api: &ApiSocket,
     threads: usize,
+    cache_mb: usize,
 ) -> Result<()> {
+    let cache_bytes = cache_mb.max(1) * 1024 * 1024;
     let columns = columns_dir(data);
     let state = Arc::new(State {
         world: RwLock::new(World::load(data)?),
@@ -102,7 +104,7 @@ pub fn serve(
         generation: AtomicU64::new(1),
         history: Mutex::new(VecDeque::new()),
         stale: Mutex::new(HashSet::new()),
-        cache: Mutex::new(HashMap::new()),
+        cache: Mutex::new(Cache::new(cache_bytes)),
         data: data.to_path_buf(),
         columns,
     });
@@ -123,12 +125,25 @@ pub fn serve(
             std::io::Error::other(error.to_string()),
         )
     })?;
-    for address in reachable_at(bind) {
-        println!("mapstique: serving on {address}");
+    let addresses = reachable_at(bind);
+    for address in &addresses {
+        let note = if only_here(address) { "  (this machine only)" } else { "" };
+        println!("mapstique: serving on {address}{note}");
     }
+    publish_addresses(data, bind, &addresses);
 
     let threads = workers(threads);
     println!("mapstique: rendering on {threads} threads");
+
+    // Said out loud, because the alternative is a map whose coordinates quietly
+    // disagree with every number the player can read off their own screen — and
+    // nothing on either side would look wrong.
+    if !data.join("world.json").exists() {
+        println!(
+            "mapstique: no world.json — coordinates will be absolute rather than \
+             counted from spawn, which means the server mod is older than this build"
+        );
+    }
 
     // Levels built from a region format this build no longer reads would show
     // terrain that has since been cleared, so they go.
@@ -136,24 +151,17 @@ pub fn serve(
         println!("mapstique: the stored levels were built from an older format and have been cleared");
     }
 
-    // What is left is kept. Only regions written since their level was built get
-    // rebuilt, so a run whose levels are already current starts with nothing to
-    // do rather than redrawing a world that has not moved.
-    if let Ok(mut stale) = state.stale.lock()
-        && let Ok(world) = state.world.read()
-    {
-        let behind = world
-            .regions
-            .iter()
-            .filter(|(x, z)| {
-                !pyramid::is_current(data, &state.columns.join(format!("r.{x}.{z}.msqr")), *x, *z)
-            })
-            .copied()
-            .collect::<Vec<_>>();
+    // What is left is kept. Only regions with a level above them missing or older
+    // than the region itself get rebuilt, so a run whose levels are already
+    // current starts with nothing to do rather than redrawing a world that has
+    // not moved.
+    let levels = state.levels();
+    if let (Ok(mut stale), Ok(regions)) = (state.stale.lock(), state.regions.lock()) {
+        let behind = pyramid::behind(data, &regions, levels);
         println!(
             "mapstique: {} of {} regions need their levels built",
             behind.len(),
-            world.regions.len()
+            regions.len()
         );
         stale.extend(behind);
     }
@@ -208,11 +216,30 @@ fn route(request: &mut Request, state: &State) -> Response<Cursor<Vec<u8>>> {
         // Straight through: the mod knows what a waypoint is, and this knows it
         // is a JSON array to hand to a browser. That is the whole contract.
         json(&state.live.body())
+    } else if path == "/skincolors.json" {
+        // Straight through: the mod knows what a skin part is, and this knows it
+        // is a table of names to colours for a browser.
+        match std::fs::read_to_string(state.data.join("skincolors.json")) {
+            Ok(body) => json(&body),
+            Err(_) => json("{}"),
+        }
+    } else if path == "/icons.json" {
+        json(&state.icons())
+    } else if let Some(name) = icon_name(path) {
+        match std::fs::read(state.data.join("icons").join(format!("{name}.svg"))) {
+            Ok(bytes) => svg(bytes),
+            Err(_) => text(404, "no icon by that name"),
+        }
+    } else if let Some(name) = portrait_name(path) {
+        match std::fs::read(state.data.join("portraits").join(format!("{name}.png"))) {
+            Ok(bytes) => png(bytes),
+            Err(_) => text(404, "nobody by that name has sent a picture"),
+        }
     } else if path == "/info.json" {
         json(&state.info(since_of(&url)))
     } else if let Some((level, tx, tz)) = tile_coords(path) {
         match state.tile(level, tx, tz) {
-            Ok(bytes) => png(bytes),
+            Ok(bytes) => tile_response(bytes),
             // A tile nobody has built is missing, not broken. Saying so lets a
             // viewer draw around it rather than treat the map as failing, and
             // keeps a real failure worth noticing.
@@ -299,7 +326,77 @@ struct State {
     /// Level 0 tiles whose levels above are out of date. Drained by the builder,
     /// so many changes in one window cost one rebuild rather than many.
     stale: Mutex<HashSet<(i32, i32)>>,
-    cache: Mutex<HashMap<(u32, i32, i32), Vec<u8>>>,
+    cache: Mutex<Cache>,
+}
+
+/// Encoded tiles, kept until the room runs out.
+///
+/// This used to be a map that only ever grew: nothing left it but a tile that
+/// changed, so a service left running while people explored held every tile
+/// anyone had ever looked at, at every level, at about a hundred kilobytes each.
+/// That is a leak with a slow fuse rather than a tuning problem.
+struct Cache {
+    held: HashMap<(u32, i32, i32), (Vec<u8>, u64)>,
+    bytes: usize,
+    budget: usize,
+    clock: u64,
+}
+
+impl Cache {
+    fn new(budget: usize) -> Self {
+        Self { held: HashMap::new(), bytes: 0, budget, clock: 0 }
+    }
+
+    fn get(&mut self, at: &(u32, i32, i32)) -> Option<Vec<u8>> {
+        self.clock += 1;
+        let clock = self.clock;
+        let (bytes, used) = self.held.get_mut(at)?;
+        *used = clock;
+        Some(bytes.clone())
+    }
+
+    fn insert(&mut self, at: (u32, i32, i32), bytes: Vec<u8>) {
+        self.clock += 1;
+        self.bytes += bytes.len();
+        if let Some((old, _)) = self.held.insert(at, (bytes, self.clock)) {
+            self.bytes -= old.len();
+        }
+        self.evict();
+    }
+
+    /// Forgets everything, for a palette that has recoloured every tile there is.
+    fn clear(&mut self) {
+        self.held.clear();
+        self.bytes = 0;
+    }
+
+    fn remove(&mut self, at: &(u32, i32, i32)) {
+        if let Some((old, _)) = self.held.remove(at) {
+            self.bytes -= old.len();
+        }
+    }
+
+    /// Drops the tiles nobody has asked for in longest, until there is room.
+    ///
+    /// Least recently used rather than oldest: a map has a few squares everyone
+    /// looks at and a long tail nobody returns to, and evicting by age alone
+    /// would throw away the ones being used.
+    fn evict(&mut self) {
+        if self.bytes <= self.budget {
+            return;
+        }
+
+        let mut by_age: Vec<((u32, i32, i32), u64)> =
+            self.held.iter().map(|(at, (_, used))| (*at, *used)).collect();
+        by_age.sort_unstable_by_key(|(_, used)| *used);
+
+        for (at, _) in by_age {
+            if self.bytes <= self.budget {
+                break;
+            }
+            self.remove(&at);
+        }
+    }
 }
 
 impl State {
@@ -424,20 +521,30 @@ impl State {
             }
         }
 
-        // The levels above are the builder's work, on its own slower clock, so
-        // that a region changing repeatedly costs one rebuild rather than many.
+        // Handed to the builder, which announces the change once it has rebuilt
+        // the levels above as well.
+        //
+        // Announcing it here too would announce it twice: the builder follows two
+        // seconds later and bumps the generation again, and since the generation
+        // versions every tile URL, that is the same pixels fetched under two
+        // different names. On a dense world a tile is a third of a megabyte, so
+        // the second fetch is not free and the swap is visible.
         if let Ok(mut stale) = self.stale.lock() {
             for (_, x, z) in &repaint {
                 stale.insert((*x, *z));
             }
         }
 
+        // Not announced here. The builder follows within seconds and announces the
+        // whole export at once, including these tiles — and since the generation
+        // versions every tile URL, announcing twice means the same pixels fetched
+        // under two names. On a dense world a tile is a third of a megabyte.
+        //
         // Coverage is a pass over every column in the world, which is worth it
         // when the palette changes because that changes every tile. A region
         // arriving changes one square, so it is reported by count alone.
-        let generation = self.bump(Some(repaint));
         println!(
-            "mapstique: {} regions reloaded — {} chunks (generation {generation})",
+            "mapstique: {} regions reloaded — {} chunks",
             touched.len(),
             self.chunks()
         );
@@ -494,12 +601,66 @@ impl State {
         Some(tiles)
     }
 
+    /// Where the world counts from, as the mod last wrote it.
+    ///
+    /// Read on demand rather than held: it is asked for every few seconds by one
+    /// page, the file is a line long, and holding it would mean noticing when it
+    /// changed for the sake of a number that changes when a world does.
+    fn spawn(&self) -> (i32, i32) {
+        let Ok(text) = std::fs::read_to_string(self.data.join("world.json")) else {
+            return (0, 0);
+        };
+
+        let number = |key: &str| -> i32 {
+            text.split(&format!("\"{key}\":"))
+                .nth(1)
+                .and_then(|rest| {
+                    let digits: String = rest
+                        .trim_start()
+                        .chars()
+                        .take_while(|c| c.is_ascii_digit() || *c == '-')
+                        .collect();
+                    digits.parse().ok()
+                })
+                .unwrap_or(0)
+        };
+
+        (number("SpawnX"), number("SpawnZ"))
+    }
+
+    /// Which marker icons exist, so the viewer draws a marker it can and a plain
+    /// shape for one it cannot rather than a hole where a picture should be.
+    fn icons(&self) -> String {
+        let Ok(entries) = std::fs::read_dir(self.data.join("icons")) else {
+            return "[]".to_owned();
+        };
+
+        let mut names: Vec<String> = entries
+            .flatten()
+            .filter_map(|entry| {
+                let path = entry.path();
+                if path.extension()? != "svg" {
+                    return None;
+                }
+                Some(path.file_stem()?.to_str()?.to_owned())
+            })
+            .filter(|name| is_stored_name(name))
+            .collect();
+        names.sort();
+
+        let quoted: Vec<String> = names.iter().map(|name| format!("\"{name}\"")).collect();
+        format!("[{}]", quoted.join(","))
+    }
+
     /// The state of the map, and — when the caller says which generation it last
     /// drew — which tiles it needs to fetch again.
     fn info(&self, since: Option<u64>) -> String {
         let (min_x, min_z, max_x, max_z) = self.bounds();
+        // Where the game counts from, written by the mod. Absent until it has.
+        let (spawn_x, spawn_z) = self.spawn();
+
         let mut body = format!(
-            r#"{{"minX":{min_x},"minZ":{min_z},"maxX":{max_x},"maxZ":{max_z},"tile":{TILE},"levels":{},"chunks":{},"generation":{}"#,
+            r#"{{"minX":{min_x},"minZ":{min_z},"maxX":{max_x},"maxZ":{max_z},"tile":{TILE},"spawnX":{spawn_x},"spawnZ":{spawn_z},"levels":{},"chunks":{},"generation":{}"#,
             self.levels(),
             self.chunks(),
             self.generation.load(Ordering::Relaxed)
@@ -538,10 +699,10 @@ impl State {
     }
 
     fn tile(&self, level: u32, tx: i32, tz: i32) -> Result<Vec<u8>> {
-        if let Ok(cache) = self.cache.lock()
+        if let Ok(mut cache) = self.cache.lock()
             && let Some(bytes) = cache.get(&(level, tx, tz))
         {
-            return Ok(bytes.clone());
+            return Ok(bytes);
         }
 
         let bytes = if level == 0 {
@@ -556,13 +717,7 @@ impl State {
             let Some(image) = pyramid::read(&self.data, level, tx, tz) else {
                 return Err(Error::Empty(format!("level {level} tile ({tx}, {tz}) is not built yet")));
             };
-            let mut encoded = Vec::new();
-            image
-                .write_to(&mut Cursor::new(&mut encoded), ImageFormat::Png)
-                .map_err(|error| {
-                    Error::io("encoding a tile", std::io::Error::other(error.to_string()))
-                })?;
-            encoded
+            pyramid::encode(&image)?
         };
 
         if let Ok(mut cache) = self.cache.lock() {
@@ -607,13 +762,32 @@ impl State {
         let mut changed: HashSet<(i32, i32)> = std::mem::take(&mut stale);
         drop(stale);
 
+        let levels = self.levels();
+
+        // A world that has grown past a power of two gains a coarsest level that
+        // has never been built. Walking up from what changed builds exactly one
+        // tile there and leaves the rest of the level missing — and that level is
+        // the one a viewer opens on, so the map reads as empty until something
+        // else marks every region stale. The whole pyramid is measured against the
+        // world whenever it is shorter than the world needs, which is once per
+        // doubling and never in the steady state.
+        if pyramid::levels_built(&self.data) < levels
+            && let Ok(regions) = self.regions.lock()
+        {
+            let behind = pyramid::behind(&self.data, &regions, levels);
+            println!(
+                "mapstique: the world now needs {levels} levels — {} regions to rebuild",
+                behind.len()
+            );
+            changed.extend(behind);
+        }
+
         let mapped: HashSet<(i32, i32)> = match self.world.read() {
             Ok(world) => world.regions.iter().copied().collect(),
             Err(_) => return,
         };
 
         let mut repainted: Vec<(u32, i32, i32)> = changed.iter().map(|&(x, z)| (0, x, z)).collect();
-        let levels = self.levels();
 
         for level in 1..=levels {
             let parents: HashSet<(i32, i32)> = changed
@@ -650,6 +824,9 @@ impl State {
             }
         }
 
+        // One announcement for the whole export: the level 0 tiles the watcher
+        // reloaded are in this list too, so a viewer fetches each changed tile
+        // once rather than once per level of the pyramid that touched it.
         let generation = self.bump(Some(repainted.clone()));
         println!(
             "mapstique: {} tiles rebuilt across {levels} levels (generation {generation})",
@@ -757,11 +934,46 @@ fn reachable_at(bind: &str) -> Vec<String> {
         return vec![format!("http://{bind}")];
     }
 
-    let mut addresses = vec![format!("http://127.0.0.1:{port}")];
+    // The one on the network first: it is the address worth giving somebody
+    // else, and loopback only ever works for whoever is sitting at the machine.
+    // The order is the whole of what says which is which, since the mod hands
+    // players the first of them.
+    let mut addresses = Vec::new();
     if let Some(local) = local_address() {
-        addresses.push(format!("http://{local}:{port}  (on your network)"));
+        addresses.push(format!("http://{local}:{port}"));
     }
+    addresses.push(format!("http://127.0.0.1:{port}"));
     addresses
+}
+
+/// Whether an address only works for whoever is sitting at this machine.
+fn only_here(address: &str) -> bool {
+    address.contains("//127.0.0.1:") || address.contains("//[::1]:") || address.contains("//localhost:")
+}
+
+/// Publishes where this can be reached, for the half that can tell people.
+///
+/// Written rather than answered over the socket because the mod is not the only
+/// thing that wants it and it is not always the one that started this: a file
+/// beside the map is readable by whoever is looking, and is how the two halves
+/// already talk about everything else.
+///
+/// Beside itself and then into place, so a reader never sees half of it.
+fn publish_addresses(data: &Path, bind: &str, addresses: &[String]) {
+    let body = serde_json::json!({
+        "Urls": addresses,
+        "Bind": bind,
+        "Version": env!("CARGO_PKG_VERSION"),
+    });
+
+    let path = data.join("service.json");
+    let temporary = path.with_extension("part");
+    if std::fs::write(&temporary, body.to_string())
+        .and_then(|()| std::fs::rename(&temporary, &path))
+        .is_err()
+    {
+        eprintln!("mapstique: could not write {}", path.display());
+    }
 }
 
 /// This machine's address on the network it routes through.
@@ -802,6 +1014,39 @@ fn since_of(url: &str) -> Option<u64> {
         .find_map(|pair| pair.strip_prefix("since=")?.parse().ok())
 }
 
+/// `/icons/{name}.svg`, where the name is a marker icon.
+///
+/// The name reaches here from a waypoint, which got it from whatever mods are
+/// installed, and is about to become a path. Only the characters that cannot
+/// mean anything but themselves are allowed through — no separators, no dots,
+/// so nothing outside the icons directory can be named.
+fn icon_name(url: &str) -> Option<&str> {
+    stored_name(url, "/icons/", ".svg")
+}
+
+/// The name a player's picture is filed under, from `/portraits/{name}.png`.
+fn portrait_name(url: &str) -> Option<&str> {
+    stored_name(url, "/portraits/", ".png")
+}
+
+/// The name in a URL, when it is only ever a name.
+///
+/// One reader for every kind of stored file, because the rule is not about icons
+/// or portraits but about what may be joined onto a directory and handed back: a
+/// second copy of it is a second chance to get it wrong.
+fn stored_name<'a>(url: &'a str, prefix: &str, suffix: &str) -> Option<&'a str> {
+    let name = url.strip_prefix(prefix)?.strip_suffix(suffix)?;
+    is_stored_name(name).then_some(name)
+}
+
+fn is_stored_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
+}
+
 /// `/tiles/{level}/{x}/{z}.png`. Level 0 is one block per pixel; each level above
 /// covers twice as much world. Coordinates may be negative.
 fn tile_coords(url: &str) -> Option<(u32, i32, i32)> {
@@ -813,14 +1058,23 @@ fn tile_coords(url: &str) -> Option<(u32, i32, i32)> {
 
 fn render_tile(renderer: &Renderer<'_>, tx: i32, tz: i32) -> Result<Vec<u8>> {
     let image = renderer.render(tx * TILE as i32, tz * TILE as i32, TILE);
-    let mut bytes = Vec::new();
-    image
-        .write_to(&mut Cursor::new(&mut bytes), ImageFormat::Png)
-        .map_err(|error| Error::io("encoding a tile", std::io::Error::other(error.to_string())))?;
-    Ok(bytes)
+    pyramid::encode(&image)
 }
 
-fn png(bytes: Vec<u8>) -> Response<Cursor<Vec<u8>>> {
+/// A marker icon. Rarely changed, but a mod being added can change the set, so
+/// this is kept for an hour rather than forever.
+fn svg(bytes: Vec<u8>) -> Response<Cursor<Vec<u8>>> {
+    let mut response = Response::from_data(bytes);
+    if let Ok(header) = Header::from_bytes(&b"Content-Type"[..], &b"image/svg+xml"[..]) {
+        response.add_header(header);
+    }
+    if let Ok(header) = Header::from_bytes(&b"Cache-Control"[..], &b"public, max-age=3600"[..]) {
+        response.add_header(header);
+    }
+    response
+}
+
+fn tile_response(bytes: Vec<u8>) -> Response<Cursor<Vec<u8>>> {
     let mut response = Response::from_data(bytes);
     if let Ok(header) = Header::from_bytes(&b"Content-Type"[..], &b"image/png"[..]) {
         response.add_header(header);
@@ -859,6 +1113,23 @@ fn typed(body: &str, content_type: &str) -> Response<Cursor<Vec<u8>>> {
 /// One `Cache-Control` and one only: two of them is not a stronger instruction,
 /// it is an ambiguous one, and a browser takes the first — so an `immutable`
 /// added after a `no-store` is an asset that is never cached and looks cached.
+/// A player's picture.
+///
+/// Held for a minute and no longer. Its name is derived from who the player is
+/// rather than from what the picture holds, so somebody who sends a new one keeps
+/// the name they had — and an address that never changes with a long life on it is
+/// a picture nobody sees replaced.
+fn png(bytes: Vec<u8>) -> Response<Cursor<Vec<u8>>> {
+    let mut response = Response::from_data(bytes);
+    if let Ok(header) = Header::from_bytes(&b"Content-Type"[..], &b"image/png"[..]) {
+        response.add_header(header);
+    }
+    if let Ok(header) = Header::from_bytes(&b"Cache-Control"[..], &b"public, max-age=60"[..]) {
+        response.add_header(header);
+    }
+    response
+}
+
 fn cached(body: &str, content_type: &str, keep: &str) -> Response<Cursor<Vec<u8>>> {
     let mut response = Response::from_data(body.as_bytes().to_vec());
     if let Ok(header) = Header::from_bytes(&b"Content-Type"[..], content_type.as_bytes()) {
@@ -887,4 +1158,143 @@ fn viewer(min_x: i32, min_z: i32, max_x: i32, max_z: i32) -> String {
         .replace("__MIN_Z__", &min_z.to_string())
         .replace("__MAX_X__", &max_x.to_string())
         .replace("__MAX_Z__", &max_z.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tile(bytes: usize) -> Vec<u8> {
+        vec![7u8; bytes]
+    }
+
+    #[test]
+    fn an_icon_name_is_only_ever_a_name() {
+        // These arrive from whatever mods a server runs and become a path.
+        for good in ["circle", "gravestone", "star1", "skull_and_crossbones", "my-mod_icon2"] {
+            assert!(is_stored_name(good), "{good} should be allowed");
+            assert_eq!(icon_name(&format!("/icons/{good}.svg")), Some(good));
+        }
+
+        for bad in [
+            "../palette",
+            "..",
+            "a/b",
+            "Gravestone",
+            "grave stone",
+            "",
+            "with.dot",
+            "%2e%2e",
+            "under\\score\\back",
+        ] {
+            assert!(!is_stored_name(bad), "{bad} must not be allowed");
+        }
+
+        assert!(!is_stored_name(&"a".repeat(65)), "a name has to end somewhere");
+        assert_eq!(icon_name("/icons/circle.png"), None, "only svg");
+        assert_eq!(icon_name("/tiles/0/0/0.png"), None, "not a tile");
+    }
+
+    /// A player's picture is filed under a name derived from their uid, and a uid
+    /// is base64 — it carries `/` and `+`, which is a path and not a name. The mod
+    /// writes it in hex for exactly that reason, and nothing that arrives here is
+    /// trusted to have done so.
+    #[test]
+    fn a_portrait_name_is_only_ever_a_name() {
+        let hex = "3070564246376c42722b697159483442";
+        assert_eq!(portrait_name(&format!("/portraits/{hex}.png")), Some(hex));
+
+        for bad in [
+            "/portraits/../../etc/passwd.png",
+            "/portraits/a/b.png",
+            "/portraits/A0FF.png",
+            "/portraits/.png",
+        ] {
+            assert_eq!(portrait_name(bad), None, "{bad} must not be allowed");
+        }
+
+        assert_eq!(portrait_name("/portraits/abc.svg"), None, "only png");
+        assert_eq!(portrait_name("/icons/abc.png"), None, "not an icon");
+    }
+
+    #[test]
+    fn a_tile_comes_back_out_the_way_it_went_in() {
+        let mut cache = Cache::new(1024);
+        cache.insert((0, 1, 2), tile(10));
+        assert_eq!(cache.get(&(0, 1, 2)), Some(tile(10)));
+        assert_eq!(cache.get(&(0, 9, 9)), None, "one that was never put in");
+    }
+
+    #[test]
+    fn levels_are_separate_tiles() {
+        let mut cache = Cache::new(1024);
+        cache.insert((0, 1, 1), tile(10));
+        cache.insert((3, 1, 1), tile(20));
+        assert_eq!(cache.get(&(0, 1, 1)).map(|t| t.len()), Some(10));
+        assert_eq!(cache.get(&(3, 1, 1)).map(|t| t.len()), Some(20));
+    }
+
+    #[test]
+    fn it_stays_inside_its_budget() {
+        let mut cache = Cache::new(100);
+        for at in 0..50 {
+            cache.insert((0, at, 0), tile(30));
+            assert!(
+                cache.bytes <= 100,
+                "held {} bytes after {} tiles, budget is 100",
+                cache.bytes,
+                at + 1
+            );
+        }
+        assert!(cache.held.len() < 50, "something must have been dropped");
+    }
+
+    #[test]
+    fn what_is_dropped_is_what_nobody_asked_for() {
+        // Room for three. The first is used again, so the second should go before
+        // it — dropping by age alone would take the one still being looked at.
+        let mut cache = Cache::new(30);
+        cache.insert((0, 1, 0), tile(10));
+        cache.insert((0, 2, 0), tile(10));
+        cache.insert((0, 3, 0), tile(10));
+
+        assert!(cache.get(&(0, 1, 0)).is_some(), "used again, so most recent");
+
+        cache.insert((0, 4, 0), tile(10));
+        assert!(cache.get(&(0, 1, 0)).is_some(), "kept, because it was used");
+        assert!(cache.get(&(0, 2, 0)).is_none(), "dropped, because it was not");
+        assert!(cache.get(&(0, 3, 0)).is_some());
+        assert!(cache.get(&(0, 4, 0)).is_some());
+    }
+
+    #[test]
+    fn replacing_a_tile_does_not_count_it_twice() {
+        let mut cache = Cache::new(1000);
+        cache.insert((0, 1, 0), tile(100));
+        cache.insert((0, 1, 0), tile(40));
+        assert_eq!(cache.bytes, 40, "the tile it replaced must stop counting");
+        assert_eq!(cache.held.len(), 1);
+    }
+
+    #[test]
+    fn removing_and_clearing_give_the_room_back() {
+        let mut cache = Cache::new(1000);
+        cache.insert((0, 1, 0), tile(100));
+        cache.insert((0, 2, 0), tile(100));
+        cache.remove(&(0, 1, 0));
+        assert_eq!(cache.bytes, 100);
+        cache.clear();
+        assert_eq!(cache.bytes, 0);
+        assert!(cache.held.is_empty());
+    }
+
+    #[test]
+    fn a_tile_larger_than_the_whole_budget_does_not_wedge_it() {
+        let mut cache = Cache::new(50);
+        cache.insert((0, 1, 0), tile(500));
+        // Nothing is left to evict, so it is over budget with one tile — but it
+        // must not spin trying, and the next insert must still work.
+        cache.insert((0, 2, 0), tile(10));
+        assert!(cache.held.contains_key(&(0, 2, 0)));
+    }
 }

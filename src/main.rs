@@ -172,7 +172,7 @@ fn run() -> Result<()> {
         }
         Command::Serve => {
             let api = server::ApiSocket::resolve(&config.api_socket, &exports);
-            server::serve(&config.bind, &exports, palette, &api, config.threads)
+            server::serve(&config.bind, &exports, palette, &api, config.threads, config.tile_cache_mb)
         }
     }
 }

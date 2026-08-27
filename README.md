@@ -22,6 +22,15 @@ check noticing. `cargo test` shells out to `node`, and says so if it is missing.
 
 ## Running
 
+The usual way is not to. The [server mod](../../mapstique-csharp) carries this
+binary inside its archive and starts it once the world is ready, so installing the
+mod installs the map — its settings are then `mapstique.conf` in the game's
+`ModConfig` folder and everything it prints goes to `Logs/mapstique-service.log`.
+Set `autostart = false` there to run it yourself instead, which is what a map that
+should stay up while the game server is down wants.
+
+Run by hand it looks like this:
+
 ```sh
 mapstique                                   # serve, using the saved settings
 mapstique -d /srv/vs/data                   # point it at a server's --dataPath
@@ -30,12 +39,25 @@ mapstique render --out map.png              # one PNG of everything exported
 ```
 
 Settings live in `~/.config/mapstique/config.toml`, written with the defaults on a
-first run:
+first run — or wherever `-c` names, which is how the server mod points this at its
+own `ModConfig/mapstique.conf`:
 
 ```toml
 vs_data = "/home/vintagestory/data"   # the server's --dataPath
 bind = "0.0.0.0:8080"                 # every interface; 127.0.0.1 for this machine only
+autostart = true                      # whether the server mod starts this itself
+announce = true                       # whether it tells joining players where the map is
+announce_url = ""                     # and what to tell them; empty means work it out
 ```
+
+`autostart`, `announce` and `announce_url` are the settings here that this program
+never reads. They say who starts the map and who is told about it, which are
+questions about the pair rather than about either half, so they sit with everything
+else about the map instead of in a file of their own.
+
+Set `announce_url` on any server a player cannot reach directly. Left empty, the
+address given out is the one this machine can see for itself, which is right on a
+LAN and wrong behind a proxy, a domain or NAT.
 
 Flags win over the file and stay one-off unless `-S` is given, so a quick look at
 another world does not rewrite your setup. `-p` prints the resolved settings.
@@ -47,7 +69,10 @@ printed on start.
 
 It binds every interface by default, so the map is reachable from the rest of your
 network as soon as it starts. On start it prints the addresses it can actually be
-reached at, since `0.0.0.0` is not something anyone can type into a browser.
+reached at, since `0.0.0.0` is not something anyone can type into a browser, and
+writes them to `service.json` beside the export — the address on the network first,
+because that is the one worth giving somebody else. That file is how the server mod
+knows what to put in its own log and what to tell a player who joins.
 
 Reaching it from the open internet is a further step: put it behind a reverse
 proxy that terminates TLS. The service has no authentication, and everything it
@@ -156,7 +181,10 @@ immutable and cached for a year, while the page and both feeds are `no-store`.
 | `/` | the viewer: drag to pan, scroll to zoom, `F` to fit |
 | `/tiles/{x}/{z}.png` | one tile, versioned by `?v=` |
 | `/info.json` | bounds, chunk count, generation |
-| `/live.json` | players and markers, from memory |
+| `/live.json` | players and markers, from memory. A player carries `Portrait`, the name of their picture, where they have sent one |
+| `/icons.json`, `/icons/{name}.svg` | the pictures markers are drawn with |
+| `/skincolors.json` | what each skin part variant looks like |
+| `/portraits/{name}.png` | a picture a player's own client drew of their seraph |
 
 The page polls `/info.json` every 5 seconds and `/live.json` every 2. It asks with
 `?since=` and gets back the tiles that actually changed, so a server where someone

@@ -1,6 +1,6 @@
 [package]
 name = "mapstique"
-version = "0.9.0"
+version = "0.15.0"
 edition = "2024"
 description = "Renders and serves a browsable map from Vintage Story world exports"
 license = "MIT OR Apache-2.0"
