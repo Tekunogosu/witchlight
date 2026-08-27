@@ -183,7 +183,6 @@ immutable and cached for a year, while the page and both feeds are `no-store`.
 | `/info.json` | bounds, chunk count, generation |
 | `/live.json` | players and markers, from memory. A player carries `Portrait`, the name of their picture, where they have sent one |
 | `/icons.json`, `/icons/{name}.svg` | the pictures markers are drawn with |
-| `/skincolors.json` | what each skin part variant looks like |
 | `/portraits/{name}.png` | a picture a player's own client drew of their seraph |
 
 The page polls `/info.json` every 5 seconds and `/live.json` every 2. It asks with

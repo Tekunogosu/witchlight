@@ -216,13 +216,6 @@ fn route(request: &mut Request, state: &State) -> Response<Cursor<Vec<u8>>> {
         // Straight through: the mod knows what a waypoint is, and this knows it
         // is a JSON array to hand to a browser. That is the whole contract.
         json(&state.live.body())
-    } else if path == "/skincolors.json" {
-        // Straight through: the mod knows what a skin part is, and this knows it
-        // is a table of names to colours for a browser.
-        match std::fs::read_to_string(state.data.join("skincolors.json")) {
-            Ok(body) => json(&body),
-            Err(_) => json("{}"),
-        }
     } else if path == "/icons.json" {
         json(&state.icons())
     } else if let Some(name) = icon_name(path) {

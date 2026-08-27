@@ -5,6 +5,22 @@ two **must match on minor version**: minor is the compatibility generation, move
 whenever the file format or the socket protocol changes. Patch is free to differ,
 and covers anything that changes only one half.
 
+## 0.16.0
+
+### A player is their portrait, or their initial
+
+The face assembled from three colours is gone, and so is `/skincolors.json` and
+everything that fed it. A card shows the picture a player's own client drew of
+them, and where there is none it shows their initial — which is what the map shows
+now rather than only until somebody runs the command.
+
+There was never anything worth drawing in between. What a seraph looks like exists
+only on the machine rendering it; everything a server can read about an appearance
+amounts to less than a letter does.
+
+**Both halves must be upgraded together.** The mod no longer sends skin part
+colours and this no longer serves them.
+
 ## 0.15.0
 
 ### Players look like themselves
