@@ -150,10 +150,16 @@ impl ColorMap {
     }
 }
 
+/// Where the palette lives inside the export directory.
+#[must_use]
+pub fn path_in(exports: &Path) -> std::path::PathBuf {
+    exports.join("palette.json")
+}
+
 impl Palette {
     /// Loads `palette.json` and the colour maps beside it.
     pub fn load(dir: &Path) -> Result<Self> {
-        let path = dir.join("palette.json");
+        let path = path_in(dir);
         let text = std::fs::read_to_string(&path)
             .map_err(|source| Error::io(format!("reading {}", path.display()), source))?;
         let raw: RawPalette = serde_json::from_str(&text)

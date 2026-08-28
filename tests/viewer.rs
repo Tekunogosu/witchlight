@@ -6,7 +6,7 @@
 //! rounding is where the mistakes live, and both of the ones made here were found
 //! by running it rather than by looking at it.
 //!
-//! The functions are lifted out of `src/viewer.html` at run time rather than
+//! The functions are lifted out of `src/viewer/*.js` at run time rather than
 //! copied, so this tests what is actually served.
 
 use std::path::PathBuf;

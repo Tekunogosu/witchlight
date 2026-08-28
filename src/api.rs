@@ -17,10 +17,11 @@
 //! with nothing and neither needs configuring — which is what the hashed socket
 //! name used to buy.
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use tiny_http::Request;
+
+use crate::files;
 
 /// What the mod must present to post. Sixteen bytes as hex.
 const TOKEN_BYTES: usize = 16;
@@ -74,10 +75,7 @@ impl Api {
         });
 
         let path = connection_path(exports);
-        let temporary = path.with_extension("part");
-        if let Err(error) = write_private(&temporary, &body.to_string())
-            .and_then(|()| std::fs::rename(&temporary, &path))
-        {
+        if let Err(error) = files::replace_private(&path, body.to_string().as_bytes()) {
             eprintln!("witchlight: could not write {}: {error}", path.display());
         }
     }
@@ -126,25 +124,6 @@ fn strip_bearer(header: &str) -> Option<&str> {
         return None;
     }
     Some(header[BEARER.len()..].trim())
-}
-
-/// Writes a file only its owner may read, where that is a thing the system has.
-///
-/// The token is the whole of what stands between the write endpoint and anything
-/// else on the machine, so it is not left at whatever the umask happened to be.
-/// Windows has no mode bits and the file inherits the directory's permissions,
-/// which is the same answer a unix socket in a private directory would have given.
-fn write_private(path: &Path, body: &str) -> std::io::Result<()> {
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        options.mode(0o600);
-    }
-
-    options.open(path)?.write_all(body.as_bytes())
 }
 
 #[cfg(test)]

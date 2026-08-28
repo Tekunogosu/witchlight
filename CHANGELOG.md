@@ -5,6 +5,114 @@ two **must match on minor version**: minor is the compatibility generation, move
 whenever the file format or the socket protocol changes. Patch is free to differ,
 and covers anything that changes only one half.
 
+## 0.21.1
+
+**The page started eleven things it never waited on, and a failure in any of them
+was silent.** A browser does not wait for a handler, so an async function wired to
+a click, a clock or a keystroke hands back a promise nobody is holding: a throw
+inside one is a rejection in a console nobody has open, while the page carries on
+as though the work had happened. Saving a marker, deleting a preset, keeping your
+settings, both pollers, the block search and the block lookup were all started
+this way. They now go through one function that says which work failed and in
+what words, and a test fails on the next call added without it.
+
+**Both pollers counted the beat whether or not the last one had been answered.**
+`setInterval` does not wait, so a service slower than the gap was asked again
+while it was still answering, and the asking only outran it further — worst on
+the two-second live poll, which is the one under load. The gap is now between one
+answer and the next question.
+
+**Nine names were hidden underneath the ones the rest of the page uses.** The
+scripts share one scope, so a `const said` inside a helper stands in front of the
+function that words a position, and a parameter called `at` stands in front of
+the one that makes a map position. Every one of them was harmless where it sat
+and a `TypeError` waiting for whoever next reached for the real name inside that
+function. The page is also strict now, which makes a mistyped name an error
+rather than a new global; a test checks both, alongside the one already guarding
+two top-level bindings of a single name.
+
+**A right click on the map wiped the name you were typing into the form it had
+just opened.** The block under the pointer is looked up after the form is up, and
+the answer reopened the form to apply whatever preset matches that block — over
+the top of anything typed in the meantime. What was typed is now put back.
+
+**A slow block search could land on top of a later one.** The list under the box
+is answered by the service, and an earlier question answered late drew the blocks
+for a word that was no longer there. An answer to a question the box has stopped
+asking is now dropped.
+
+**A window near the right edge was lost when the browser was narrowed.** The
+clamp that keeps a bar reachable ran when a window was dragged and never when the
+screen changed size under it, so the only way back was reloading the page — which
+is the exact failure the clamp exists to prevent.
+
+**The block search could not be used from the keyboard at all.** It announces
+itself as a combobox with a list under it, and the list answered only to the
+pointer: no arrows, nothing saying which row was under the keyboard, and a
+stylesheet rule for a highlighted row that nothing ever set. The arrows now walk
+it in both directions and wrap at both ends, Enter takes the row they are on and
+leaves a hand-typed pattern alone, and the box says which row it is on so a
+screen reader can follow. The focus stays in the box throughout, which is what
+keeps the next keystroke going to the search.
+
+Three files now hold what they are named for. `blocks.js` had grown the marker
+form's wiring and the colour feed alongside the block search; the wiring is in
+`compose.js` with the rest of the form, the colours sit beside the icons in
+`poll.js` doing the identical job, and the hover machinery that keeps a marker's
+details up moved from the form to `players.js`, which is what draws the markers
+it belongs to. Marker titles are also escaped against quotes rather than only
+against angle brackets.
+
+## 0.21.0
+
+**Six of the interface's colours were defined as themselves.** `--accent`,
+`--warn` and three of the surface greys each read `var(--accent): var(--accent)`,
+which is invalid at computed-value time — so every one of the thirty-odd rules
+using them inherited whatever was above it instead. What is focused, what is
+being followed, what a refusal says and every raised panel had no colour of their
+own. They are real values again, each measured against the surface it sits on.
+
+**The page is three kinds of file rather than one of three thousand lines.**
+`viewer/page.html` is what the map is, `viewer/style.css` is what it looks like,
+and `viewer/*.js` is what it does — eleven scripts, each about one subject,
+joined at compile time and served as one asset. Nothing about the page changed;
+it is now possible to read. The scripts and the stylesheet are versioned by the
+build and cached forever, so a browser fetches them once per release instead of
+carrying them inside every page load.
+
+**A block-name or palette file caught half-written was never read again.** Both
+were written straight over the top of themselves by the mod, so the service could
+read one mid-write; it then recorded the file as seen and moved on, and on a
+server whose mod set had settled nothing would ever move that timestamp again.
+The mod now writes every file beside itself and renames it into place, and the
+service puts a file it could not read back to unseen so the next second tries.
+
+**An edit that cleared a marker's name hung the form.** A marker with no name is
+called "Marker" by the time it comes back, and an edit is known to have landed by
+the marker reading as what was asked for — so the form waited out its full twenty
+seconds and then reported a failure that had not happened. The form asks for the
+name it will get.
+
+**A tile could deadlock against an export.** Drawing the finest level held a read
+lock on the world and then asked the world how many levels it had, and a second
+read lock taken while holding one may wait forever behind a writer that arrived
+in between — which on that lock is the watcher, every time the mod exports.
+
+**Reloading a region cost a pass over every chunk in the world**, twice, because
+a region's chunks were found by asking each chunk which region it was in. They
+are named by arithmetic now: a region is a fixed square of chunk coordinates, and
+the world's own bounds are a walk over a few hundred regions rather than over
+millions of columns.
+
+**One owner for every repeated question.** Writing a file beside itself and
+renaming it into place was spelled out at five call sites and is now one; so are
+reading a query, building a response, naming a stored file, and reading a region
+header. `Wanted` and `Edit` were the same nine fields written twice and are one
+type. `server.rs` was 1,931 lines doing five jobs and is 196 doing one — the rest
+went to `routes`, `state`, `watch`, `feeds`, `apiport`, `http`, `urls`, `cache`,
+`net` and `files`. There is a test that fails if a utility ever reaches back up
+into the map service, which is the whole of what keeps them reusable.
+
 ## 0.20.2
 
 **A marker opened by hovering comes down on its own**, a couple of seconds after

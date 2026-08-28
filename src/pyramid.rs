@@ -33,6 +33,11 @@ use image::{ExtendedColorType, ImageEncoder, RgbImage};
 
 use crate::color::Rgb;
 use crate::error::{Error, Result};
+use crate::files;
+
+/// Blocks per tile, and pixels per tile at the finest level: one pixel is one
+/// block. Equal to a region, so a region that changes is exactly one tile.
+pub const TILE: u32 = 512;
 
 /// Tiles per directory along each axis. A thousand files to a directory.
 const BUCKET: i32 = 5;
@@ -142,16 +147,7 @@ pub fn read(exports: &Path, level: u32, x: i32, z: i32) -> Option<RgbImage> {
 /// Writes a tile, beside itself and then into place so a reader never sees half.
 pub fn write(exports: &Path, level: u32, x: i32, z: i32, image: &RgbImage) -> Result<()> {
     let target = path(exports, level, x, z);
-    if let Some(parent) = target.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|error| Error::io(format!("creating {}", parent.display()), error))?;
-    }
-
-    let temporary = target.with_extension("part");
-    let encoded = encode(image)?;
-
-    std::fs::write(&temporary, &encoded)
-        .and_then(|()| std::fs::rename(&temporary, &target))
+    files::replace(&target, &encode(image)?)
         .map_err(|error| Error::io(format!("writing {}", target.display()), error))
 }
 
@@ -206,8 +202,7 @@ pub fn reset_unless_built_from(exports: &Path, version: u16) -> bool {
 
     let cleared = tiles_dir(exports).exists();
     let _ = std::fs::remove_dir_all(tiles_dir(exports));
-    let _ = std::fs::create_dir_all(tiles_dir(exports));
-    let _ = std::fs::write(stamp(exports), want);
+    let _ = files::replace(&stamp(exports), want.as_bytes());
     cleared
 }
 
@@ -275,8 +270,7 @@ pub fn record_palette(exports: &Path, fingerprint: &str) {
     if fingerprint.is_empty() {
         return;
     }
-    let _ = std::fs::create_dir_all(tiles_dir(exports));
-    let _ = std::fs::write(painted_by(exports), fingerprint);
+    let _ = files::replace(&painted_by(exports), fingerprint.as_bytes());
 }
 
 /// Which regions have a stored tile above them that is missing, or older than the
@@ -303,7 +297,7 @@ pub fn behind(
         .filter(|&(&(x, z), &exported)| {
             (1..=levels).any(|level| {
                 let (ax, az) = ancestor(level, x, z);
-                written(&path(exports, level, ax, az)).is_none_or(|built| built < exported)
+                files::modified(&path(exports, level, ax, az)).is_none_or(|built| built < exported)
             })
         })
         .map(|(at, _)| *at)
@@ -324,24 +318,35 @@ pub fn levels_built(exports: &Path) -> u32 {
         .unwrap_or(0)
 }
 
-/// When a file was last written, or nothing where there is no such file.
-fn written(path: &Path) -> Option<SystemTime> {
-    std::fs::metadata(path).ok()?.modified().ok()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     const BLANK: Rgb = Rgb::new(0, 0, 0);
 
-    /// A directory of this test's own, emptied first so a previous run cannot
-    /// answer for this one.
-    fn scratch(name: &str) -> PathBuf {
-        let at = std::env::temp_dir().join(format!("witchlight-pyramid-{name}"));
-        let _ = std::fs::remove_dir_all(&at);
-        std::fs::create_dir_all(&at).expect("a scratch directory");
-        at
+    /// An export directory of one test's own, emptied first so a previous run
+    /// cannot answer for this one, and taken away again afterwards.
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new(name: &str) -> Self {
+            let at = std::env::temp_dir().join(format!("witchlight-pyramid-{name}"));
+            let _ = std::fs::remove_dir_all(&at);
+            std::fs::create_dir_all(&at).expect("a scratch directory");
+            Self(at)
+        }
+
+        /// Writes a tile at `level` and returns when it was written.
+        fn build(&self, level: u32, x: i32, z: i32) -> SystemTime {
+            write(&self.0, level, x, z, &flat(2, 0)).expect("a tile");
+            files::modified(&path(&self.0, level, x, z)).expect("a timestamp")
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
     }
 
     /// Each quarter a flat value, so which quarter a child came from is readable
@@ -355,18 +360,18 @@ mod tests {
 
     #[test]
     fn a_tile_with_no_level_above_it_cannot_be_grown() {
-        let at = scratch("nothing-above");
-        assert!(from_above(&at, 0, 5, 5, 8, 3).is_none());
+        let at = Scratch::new("nothing-above");
+        assert!(from_above(&at.0, 0, 5, 5, 8, 3).is_none());
     }
 
     #[test]
     fn a_missing_tile_is_grown_from_its_parents_own_quarter() {
-        let at = scratch("own-quarter");
-        write(&at, 1, 3, 3, &quarters(8)).expect("the parent stores");
+        let at = Scratch::new("own-quarter");
+        write(&at.0, 1, 3, 3, &quarters(8)).expect("the parent stores");
 
         // Level 1 tile (3, 3) covers level 0 tiles (6, 7) in both axes.
         for (x, z, want) in [(6, 6, 0u8), (7, 6, 1), (6, 7, 2), (7, 7, 3)] {
-            let grown = from_above(&at, 0, x, z, 8, 3).expect("the parent serves");
+            let grown = from_above(&at.0, 0, x, z, 8, 3).expect("the parent serves");
             assert_eq!(grown.dimensions(), (8, 8));
             assert!(
                 grown.pixels().all(|pixel| pixel.0[0] == want),
@@ -379,14 +384,14 @@ mod tests {
     fn a_gap_of_more_than_one_level_is_walked_past() {
         // Nothing at level 1, so the answer has to come from level 2 — and from
         // the sixteenth of it this tile actually covers.
-        let at = scratch("gap");
+        let at = Scratch::new("gap");
         let grandparent = tile(8, |x, z| [u8::try_from(z * 8 + x).unwrap(), 0, 0]);
-        write(&at, 2, 1, 1, &grandparent).expect("the grandparent stores");
+        write(&at.0, 2, 1, 1, &grandparent).expect("the grandparent stores");
 
         // Level 2 tile (1, 1) covers level 0 tiles (4..=7); (5, 6) is one across
         // and two down inside it, so the 2x2 patch at (2, 4), each pixel grown
         // fourfold.
-        let grown = from_above(&at, 0, 5, 6, 8, 3).expect("the grandparent serves");
+        let grown = from_above(&at.0, 0, 5, 6, 8, 3).expect("the grandparent serves");
         assert_eq!(grown.get_pixel(0, 0).0[0], grandparent.get_pixel(2, 4).0[0]);
         assert_eq!(grown.get_pixel(7, 7).0[0], grandparent.get_pixel(3, 5).0[0]);
     }
@@ -395,12 +400,12 @@ mod tests {
     fn a_negative_tile_takes_the_right_quarter_too() {
         // The quarter comes from subtracting the ancestor's origin, which is the
         // step that goes wrong when a coordinate is negative.
-        let at = scratch("negative");
-        write(&at, 1, -1, -1, &quarters(8)).expect("the parent stores");
+        let at = Scratch::new("negative");
+        write(&at.0, 1, -1, -1, &quarters(8)).expect("the parent stores");
 
         // Level 1 tile (-1, -1) covers level 0 tiles (-2, -1) in both axes.
         for (x, z, want) in [(-2, -2, 0u8), (-1, -2, 1), (-2, -1, 2), (-1, -1, 3)] {
-            let grown = from_above(&at, 0, x, z, 8, 3).expect("the parent serves");
+            let grown = from_above(&at.0, 0, x, z, 8, 3).expect("the parent serves");
             assert_eq!(grown.get_pixel(0, 0).0[0], want, "level 0 ({x}, {z})");
         }
     }
@@ -552,30 +557,6 @@ mod tests {
         assert_eq!(ancestor(1, -3, -3), (-2, -2));
     }
 
-    /// A scratch export directory that cleans up after itself.
-    struct Scratch(PathBuf);
-
-    impl Scratch {
-        fn new(name: &str) -> Self {
-            let at = std::env::temp_dir().join(format!("witchlight-test-{name}"));
-            let _ = std::fs::remove_dir_all(&at);
-            std::fs::create_dir_all(&at).expect("a scratch directory");
-            Self(at)
-        }
-
-        /// Writes a tile at `level` and returns when it was written.
-        fn build(&self, level: u32, x: i32, z: i32) -> SystemTime {
-            write(&self.0, level, x, z, &flat(2, 0)).expect("a tile");
-            written(&path(&self.0, level, x, z)).expect("a timestamp")
-        }
-    }
-
-    impl Drop for Scratch {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
     /// A region exported far enough in the past that anything built now is newer.
     fn exported_before(when: SystemTime) -> SystemTime {
         when - std::time::Duration::from_secs(60)
@@ -583,23 +564,23 @@ mod tests {
 
     #[test]
     fn a_region_whose_levels_are_all_current_is_not_behind() {
-        let scratch = Scratch::new("current");
-        let built = scratch.build(1, 0, 0);
-        scratch.build(2, 0, 0);
-        scratch.build(3, 0, 0);
+        let at = Scratch::new("current");
+        let built = at.build(1, 0, 0);
+        at.build(2, 0, 0);
+        at.build(3, 0, 0);
 
         let regions = HashMap::from([((0, 0), exported_before(built))]);
-        assert!(behind(&scratch.0, &regions, 3).is_empty());
+        assert!(behind(&at.0, &regions, 3).is_empty());
     }
 
     #[test]
     fn a_region_written_since_its_level_was_built_is_behind() {
-        let scratch = Scratch::new("stale");
-        let built = scratch.build(1, 0, 0);
-        scratch.build(2, 0, 0);
+        let at = Scratch::new("stale");
+        let built = at.build(1, 0, 0);
+        at.build(2, 0, 0);
 
         let regions = HashMap::from([((0, 0), built + std::time::Duration::from_secs(60))]);
-        assert_eq!(behind(&scratch.0, &regions, 2), vec![(0, 0)]);
+        assert_eq!(behind(&at.0, &regions, 2), vec![(0, 0)]);
     }
 
     /// The bug this exists for.
@@ -612,14 +593,14 @@ mod tests {
     /// current, and the map is still empty.
     #[test]
     fn a_level_that_has_never_been_built_leaves_its_regions_behind() {
-        let scratch = Scratch::new("grown");
-        let built = scratch.build(1, 0, 0);
-        scratch.build(2, 0, 0);
+        let at = Scratch::new("grown");
+        let built = at.build(1, 0, 0);
+        at.build(2, 0, 0);
         let regions = HashMap::from([((0, 0), exported_before(built))]);
 
-        assert!(behind(&scratch.0, &regions, 2).is_empty(), "two levels is current");
+        assert!(behind(&at.0, &regions, 2).is_empty(), "two levels is current");
         assert_eq!(
-            behind(&scratch.0, &regions, 3),
+            behind(&at.0, &regions, 3),
             vec![(0, 0)],
             "a third level exists nowhere on disk"
         );
@@ -627,21 +608,21 @@ mod tests {
 
     #[test]
     fn the_pyramid_is_as_tall_as_the_levels_it_has_written() {
-        let scratch = Scratch::new("height");
-        assert_eq!(levels_built(&scratch.0), 0, "nothing built yet");
+        let at = Scratch::new("height");
+        assert_eq!(levels_built(&at.0), 0, "nothing built yet");
 
-        scratch.build(1, 0, 0);
-        assert_eq!(levels_built(&scratch.0), 1);
+        at.build(1, 0, 0);
+        assert_eq!(levels_built(&at.0), 1);
 
-        scratch.build(3, 0, 0);
-        assert_eq!(levels_built(&scratch.0), 3, "the tallest, not the count");
+        at.build(3, 0, 0);
+        assert_eq!(levels_built(&at.0), 3, "the tallest, not the count");
     }
 
     #[test]
     fn the_stamp_is_not_mistaken_for_a_level() {
-        let scratch = Scratch::new("stamp");
-        reset_unless_built_from(&scratch.0, 4);
-        assert_eq!(levels_built(&scratch.0), 0, "built-by is not a number");
+        let at = Scratch::new("stamp");
+        reset_unless_built_from(&at.0, 4);
+        assert_eq!(levels_built(&at.0), 0, "built-by is not a number");
     }
 
     #[test]

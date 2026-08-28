@@ -5,19 +5,31 @@
 //! needs the game installed.
 
 mod api;
+mod apiport;
 mod auth;
+mod cache;
 mod color;
 mod columns;
 mod config;
 mod error;
+mod facts;
+mod feeds;
+mod files;
+mod http;
 mod live;
+mod net;
 mod palette;
 mod pending;
 mod preferences;
 mod pyramid;
 mod random;
 mod render;
+mod routes;
 mod server;
+mod state;
+mod urls;
+mod viewer;
+mod watch;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -136,7 +148,7 @@ fn run() -> Result<()> {
         println!(
             "witchlight: {} chunks in {} regions, {}x{} blocks",
             world.chunks.len(),
-            world.regions.len(),
+            world.region_count(),
             max_x - min_x,
             max_z - min_z
         );
@@ -175,18 +187,15 @@ fn run() -> Result<()> {
             println!("wrote {}", out.display());
             Ok(())
         }
-        Command::Serve => {
-            let api = api::Api::resolve(&config.api_bind, &config.api_token);
-            server::serve(
-                &config.bind,
-                &exports,
-                palette,
-                &api,
-                config.threads,
-                config.tile_cache_mb,
-                config.marker_rules(),
-            )
-        }
+        Command::Serve => server::serve(
+            &config.bind,
+            &exports,
+            palette,
+            api::Api::resolve(&config.api_bind, &config.api_token),
+            config.threads,
+            config.tile_cache_mb,
+            config.marker_rules(),
+        ),
     }
 }
 

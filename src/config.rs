@@ -210,10 +210,12 @@ impl Config {
     #[must_use]
     pub fn exports(&self) -> PathBuf {
         let nested = self.vs_data.join("witchlight");
-        if nested.join("palette.json").exists() {
+        // The palette is what says a directory is an export rather than a data
+        // path, and where it lives is the palette's own business.
+        if crate::palette::path_in(&nested).exists() {
             return nested;
         }
-        if self.vs_data.join("palette.json").exists() {
+        if crate::palette::path_in(&self.vs_data).exists() {
             return self.vs_data.clone();
         }
         nested

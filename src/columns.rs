@@ -41,10 +41,15 @@ const RECORD_HEADER_BYTES: usize = 10;
 /// Chunks along a region's edge. One rendered tile at the finest level.
 pub const REGION_CHUNKS: i32 = 16;
 
-/// Which region a chunk belongs to. Negative coordinates floor, as they must.
-#[must_use]
-pub fn region_of(chunk_x: i32, chunk_z: i32) -> (i32, i32) {
-    (chunk_x.div_euclid(REGION_CHUNKS), chunk_z.div_euclid(REGION_CHUNKS))
+/// Which chunks a region holds.
+///
+/// The direction this program needs. A region is a fixed square of chunk
+/// coordinates, so which chunks belong to one is arithmetic — where asking every
+/// chunk in the world whose region it is means a pass over the whole map to
+/// answer a question about one square of it.
+pub fn chunks_of((rx, rz): (i32, i32)) -> impl Iterator<Item = (i32, i32)> {
+    (0..REGION_CHUNKS)
+        .flat_map(move |dz| (0..REGION_CHUNKS).map(move |dx| (rx * REGION_CHUNKS + dx, rz * REGION_CHUNKS + dz)))
 }
 
 /// Where the regions live inside the export directory.
@@ -162,13 +167,41 @@ impl Region {
     }
 }
 
+/// How far a region's exported chunks actually reach.
+///
+/// Held per region so that the world's own bounds are a walk over a few hundred
+/// regions rather than over every chunk in the world. That walk used to happen
+/// twice for every region loaded, which on a large world is millions of
+/// comparisons per export for two numbers that move when somebody explores.
+#[derive(Debug, Clone, Copy)]
+struct Extent {
+    min: (i32, i32),
+    max: (i32, i32),
+}
+
+impl Extent {
+    fn of(chunks: &HashMap<(i32, i32), Chunk>) -> Option<Self> {
+        let mut extent: Option<Self> = None;
+        for &(cx, cz) in chunks.keys() {
+            extent = Some(match extent {
+                None => Self { min: (cx, cz), max: (cx, cz) },
+                Some(held) => Self {
+                    min: (held.min.0.min(cx), held.min.1.min(cz)),
+                    max: (held.max.0.max(cx), held.max.1.max(cz)),
+                },
+            });
+        }
+        extent
+    }
+}
+
 /// Every exported chunk, addressed by chunk coordinates.
 pub struct World {
     pub edge: usize,
     pub chunks: HashMap<(i32, i32), Chunk>,
-    pub regions: Vec<(i32, i32)>,
-    min: (i32, i32),
-    max: (i32, i32),
+    /// Which regions are loaded, and how far each one's chunks reach. A region
+    /// whose file held no records reaches nowhere, which is `None`.
+    regions: HashMap<(i32, i32), Option<Extent>>,
 }
 
 impl World {
@@ -184,9 +217,7 @@ impl World {
         let mut world = Self {
             edge: 0,
             chunks: HashMap::new(),
-            regions: Vec::new(),
-            min: (i32::MAX, i32::MAX),
-            max: (i32::MIN, i32::MIN),
+            regions: HashMap::new(),
         };
 
         for path in region_files(&dir)? {
@@ -212,28 +243,35 @@ impl World {
             self.edge = region.edge;
         }
         self.forget(region.at);
-        if !self.regions.contains(&region.at) {
-            self.regions.push(region.at);
-        }
+
+        self.regions.insert(region.at, Extent::of(&region.chunks));
         self.chunks.extend(region.chunks);
-        self.rebound();
     }
 
     /// Drops a region's chunks, for a region file that has gone away.
+    ///
+    /// The chunks are named rather than searched for. A region is a fixed square
+    /// of chunk coordinates, so which ones belong to it is arithmetic — where
+    /// asking every chunk in the world whose region it is means a pass over the
+    /// whole map for one square of it.
     pub fn forget(&mut self, at: (i32, i32)) {
-        self.chunks.retain(|&(cx, cz), _| region_of(cx, cz) != at);
-        self.regions.retain(|held| *held != at);
-        self.rebound();
+        if self.regions.remove(&at).is_none() {
+            return;
+        }
+        for chunk in chunks_of(at) {
+            self.chunks.remove(&chunk);
+        }
     }
 
-    fn rebound(&mut self) {
-        let (mut min, mut max) = ((i32::MAX, i32::MAX), (i32::MIN, i32::MIN));
-        for &(cx, cz) in self.chunks.keys() {
-            min = (min.0.min(cx), min.1.min(cz));
-            max = (max.0.max(cx), max.1.max(cz));
-        }
-        self.min = min;
-        self.max = max;
+    /// Every region that has been loaded.
+    pub fn regions(&self) -> impl Iterator<Item = (i32, i32)> + '_ {
+        self.regions.keys().copied()
+    }
+
+    /// How many there are.
+    #[must_use]
+    pub fn region_count(&self) -> usize {
+        self.regions.len()
     }
 
     /// The column at a world block position, if that chunk was exported.
@@ -251,15 +289,26 @@ impl World {
     /// World bounds in blocks: the area worth drawing.
     #[must_use]
     pub fn bounds(&self) -> (i32, i32, i32, i32) {
-        if self.chunks.is_empty() {
-            return (0, 0, 0, 0);
+        let mut whole: Option<Extent> = None;
+        for extent in self.regions.values().flatten() {
+            whole = Some(match whole {
+                None => *extent,
+                Some(held) => Extent {
+                    min: (held.min.0.min(extent.min.0), held.min.1.min(extent.min.1)),
+                    max: (held.max.0.max(extent.max.0), held.max.1.max(extent.max.1)),
+                },
+            });
         }
+
+        let Some(whole) = whole.filter(|_| !self.chunks.is_empty()) else {
+            return (0, 0, 0, 0);
+        };
         let edge = self.edge as i32;
         (
-            self.min.0 * edge,
-            self.min.1 * edge,
-            (self.max.0 + 1) * edge,
-            (self.max.1 + 1) * edge,
+            whole.min.0 * edge,
+            whole.min.1 * edge,
+            (whole.max.0 + 1) * edge,
+            (whole.max.1 + 1) * edge,
         )
     }
 }
@@ -298,6 +347,112 @@ mod tests {
 
     fn column(temperature: u8, rainfall: u8) -> Column {
         Column { block: 0, height: 0, temperature, rainfall, season: 0 }
+    }
+
+    /// A region holding one chunk at a named place inside it.
+    fn region(at: (i32, i32), chunk: (i32, i32)) -> Region {
+        Region {
+            at,
+            edge: 2,
+            chunks: HashMap::from([(chunk, Chunk { columns: vec![column(0, 0); 4] })]),
+        }
+    }
+
+    /// The claim the viewer's chunk grid rests on.
+    ///
+    /// The grid's coarsest zoom is `log2(8 / chunk edge)` levels out from the
+    /// finest, and it is worked out once when the layer is built. An edge of zero
+    /// makes that infinite, and since the layer is never rebuilt the grid would
+    /// then be gone for as long as the page stayed open. The viewer is safe
+    /// because it builds nothing until the bounds are worth drawing — which is
+    /// this pairing, and it lives here rather than in the page that depends on it.
+    #[test]
+    fn a_world_worth_drawing_always_knows_its_chunk_edge() {
+        let mut world = World {
+            edge: 0,
+            chunks: HashMap::new(),
+            regions: HashMap::new(),
+        };
+        assert_eq!(world.edge, 0);
+        assert_eq!(world.bounds(), (0, 0, 0, 0));
+
+        world.apply(region((0, 0), (0, 0)));
+        let (min_x, min_z, max_x, max_z) = world.bounds();
+        assert!(world.edge > 0, "a world with terrain in it knows how wide a chunk is");
+        assert!(
+            max_x > min_x && max_z > min_z,
+            "and reports bounds the viewer will draw on"
+        );
+
+        // The other direction: nothing exported is degenerate bounds, which is
+        // what stops the page building a grid it could not fix afterwards.
+        world.forget((0, 0));
+        assert_eq!(world.bounds(), (0, 0, 0, 0));
+    }
+
+    /// The claim `World::forget` rests on.
+    ///
+    /// It names a region's chunks by arithmetic rather than asking every chunk in
+    /// the world which region it is in, so the square it walks has to be exactly
+    /// the set that floors back to that region — one chunk missed is terrain that
+    /// stays on the map after its file has gone, and one too many is a neighbour's
+    /// terrain taken with it.
+    #[test]
+    fn a_regions_chunks_are_exactly_the_ones_that_floor_back_to_it() {
+        // The definition, written out rather than borrowed: negative coordinates
+        // floor, which is where this arithmetic goes wrong if it goes wrong.
+        let holding =
+            |x: i32, z: i32| (x.div_euclid(REGION_CHUNKS), z.div_euclid(REGION_CHUNKS));
+
+        for at in [(0, 0), (3, -2), (-1, -1)] {
+            let held: Vec<_> = chunks_of(at).collect();
+            assert_eq!(held.len() as i32, REGION_CHUNKS * REGION_CHUNKS);
+            for &(x, z) in &held {
+                assert_eq!(holding(x, z), at, "chunk ({x}, {z})");
+            }
+
+            // And the chunks just outside the square belong to a neighbour.
+            let (x, z) = (at.0 * REGION_CHUNKS, at.1 * REGION_CHUNKS);
+            for outside in [(x - 1, z), (x, z - 1), (x + REGION_CHUNKS, z), (x, z + REGION_CHUNKS)] {
+                assert!(!held.contains(&outside), "{outside:?} is not this region's");
+                assert_ne!(holding(outside.0, outside.1), at);
+            }
+        }
+    }
+
+    #[test]
+    fn a_region_that_goes_away_takes_its_chunks_and_no_others() {
+        let mut world = World::load(Path::new("/nonexistent")).expect("an empty world");
+        world.apply(region((0, 0), (1, 1)));
+        world.apply(region((1, 0), (REGION_CHUNKS, 0)));
+        assert_eq!(world.chunks.len(), 2);
+        assert_eq!(world.region_count(), 2);
+
+        world.forget((0, 0));
+        assert_eq!(world.region_count(), 1);
+        assert!(world.chunks.contains_key(&(REGION_CHUNKS, 0)), "its neighbour stays");
+        assert!(!world.chunks.contains_key(&(1, 1)), "and its own chunk goes");
+
+        // A region nobody loaded is not an error and takes nothing with it.
+        world.forget((9, 9));
+        assert_eq!(world.chunks.len(), 1);
+    }
+
+    #[test]
+    fn the_worlds_bounds_are_the_chunks_that_exist_rather_than_the_squares_holding_them() {
+        let mut world = World::load(Path::new("/nonexistent")).expect("an empty world");
+        assert_eq!(world.bounds(), (0, 0, 0, 0), "nothing exported yet");
+
+        // One chunk, two blocks to a chunk edge: the map is that chunk alone and
+        // not the sixteen-chunk square its file covers.
+        world.apply(region((0, 0), (1, 1)));
+        assert_eq!(world.bounds(), (2, 2, 4, 4));
+
+        world.apply(region((-1, -1), (-1, -1)));
+        assert_eq!(world.bounds(), (-2, -2, 4, 4));
+
+        world.forget((-1, -1));
+        assert_eq!(world.bounds(), (2, 2, 4, 4), "and they come back in when one goes");
     }
 
     /// The packing is the game's, not this program's, and the game's own

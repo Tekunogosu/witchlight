@@ -34,6 +34,27 @@ const SESSION_GOOD_FOR: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 /// The cookie a session travels in.
 pub const COOKIE: &str = "witchlight_session";
 
+/// The `Set-Cookie` that seats a browser.
+///
+/// `HttpOnly` because no script on the page has any use for the word, and
+/// `SameSite=Lax` because the only thing that should arrive carrying it is
+/// somebody following a link to this map themselves.
+///
+/// Not `Secure`: this is served over plain HTTP on a LAN as often as not, and a
+/// cookie a browser refuses to send is a login that silently never works. An
+/// operator putting the map on the internet puts TLS in front of it, and that is
+/// the same place the flag belongs.
+#[must_use]
+pub fn seat(session: &str) -> String {
+    format!("{COOKIE}={session}; Path=/; Max-Age={}; HttpOnly; SameSite=Lax", SESSION_GOOD_FOR.as_secs())
+}
+
+/// The `Set-Cookie` that takes it away again. What a logout leaves behind.
+#[must_use]
+pub fn unseat() -> String {
+    format!("{COOKIE}=; Path=/; Max-Age=0; SameSite=Lax")
+}
+
 /// A player, as the game knows them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Who {
@@ -183,6 +204,19 @@ mod tests {
         sessions.forget(&format!("{COOKIE}={first}"));
         assert!(sessions.who(&format!("{COOKIE}={first}")).is_none());
         assert!(sessions.who(&format!("{COOKIE}={second}")).is_some(), "the phone stays logged in");
+    }
+
+    #[test]
+    fn a_seat_lasts_as_long_as_the_session_behind_it() {
+        // A cookie that outlives its session logs somebody out without saying so;
+        // one that dies first throws away a session still being kept.
+        let seated = seat("abc");
+        assert!(seated.contains(&format!("Max-Age={}", SESSION_GOOD_FOR.as_secs())));
+        assert_eq!(cookie(&seated, COOKIE), Some("abc"));
+        assert!(seated.contains("HttpOnly"), "no script has any use for the word");
+
+        assert!(unseat().contains("Max-Age=0"));
+        assert_eq!(cookie(&unseat(), COOKIE), Some(""));
     }
 
     #[test]

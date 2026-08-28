@@ -16,10 +16,12 @@ node tests/viewer.mjs          # just the viewer's, with its output
 ```
 
 The viewer is JavaScript and is tested as JavaScript. `tests/viewer.mjs` lifts the
-functions out of `src/viewer.html` by name and runs them, rather than keeping a
+functions out of `src/viewer/*.js` by name and runs them, rather than keeping a
 second copy to check — a copy passes happily while the page it stands for is
 broken, which is how the clamp was once removed from `draw` without a single
-check noticing. `cargo test` shells out to `node`, and says so if it is missing.
+check noticing. It reads the file list out of `src/viewer.rs`, so a script added
+to the page is a script the tests see. `cargo test` shells out to `node`, and says
+so if it is missing.
 
 `zoom-sweep.py` is the one that needs a map and a browser, so it is not part of
 `cargo test`. It drives chromium across the zoom range and counts the colours that
@@ -230,12 +232,35 @@ it stops being drawn below eight pixels to a chunk — past that a grid stops be
 a grid and becomes a wash. It is deliberately not clipped to the explored area:
 seeing where that stops, squarely, is half of what a grid is for.
 
+## How it is laid out
+
+One subject to a file, and a utility never sits inside the system that first
+needed it. Reading order, roughly outside in:
+
+| | |
+|---|---|
+| `main.rs` | the command line, and what each subcommand does |
+| `config.rs` | the settings file, and the flags laid over it |
+| `server.rs` | bringing the map up: read what is there, bind, hand out threads |
+| `routes.rs` | what the public port answers, and to what |
+| `apiport.rs` `api.rs` | the private channel the mod posts on, and where it is published |
+| `state.rs` | what the request threads share |
+| `watch.rs` | noticing that the mod has written something |
+| `feeds.rs` | the JSON the page asks for |
+| `viewer.rs` `viewer/` | the page: markup, style, and eleven scripts joined in order |
+| `columns.rs` `pyramid.rs` `render.rs` `palette.rs` `color.rs` | the map itself, from region file to pixel |
+| `live.rs` `pending.rs` `preferences.rs` `auth.rs` `facts.rs` | what the two halves say to each other |
+| `http.rs` `urls.rs` `cache.rs` `net.rs` `files.rs` `random.rs` `error.rs` | utilities, which know nothing about maps |
+
+Nothing in the last row imports anything above it. That is the whole of what
+keeps them reusable, and it is worth checking before adding to one.
+
 ## Rough edges
 
-- **Zoom is browser-side.** Tiles render at one pixel per block and are scaled in
-  the viewer; a real pyramid with downsampled levels would be sharper zoomed out.
-- **The tile cache is unbounded.** It grows with the area anyone has looked at.
-  Reloads only drop the tiles a changed region touches, so it is otherwise kept.
 - **No authentication on the map port.** Anything that can reach it sees
-  everything. The API channel is separate and takes writes, so it answers only on
-  loopback and only to a caller carrying the token from `api.json`.
+  everything, apart from markers their owners kept private — those are filtered
+  before the page is answered, since a browser cannot be asked to hide what it
+  has been handed. The API channel is separate and takes writes, so it answers
+  only on loopback and only to a caller carrying the token from `api.json`.
+- **Sessions live in memory.** A restart of the service costs everyone one click
+  of one login link, and the map keeps nothing about anybody it was not asked to.

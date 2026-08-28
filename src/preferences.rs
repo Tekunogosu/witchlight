@@ -149,12 +149,7 @@ impl Preferences {
             return false;
         }
 
-        // Beside itself and then into place, so a reader never sees half of it.
-        let temporary = self.path.with_extension("part");
-        if std::fs::write(&temporary, &body)
-            .and_then(|()| std::fs::rename(&temporary, &self.path))
-            .is_err()
-        {
+        if crate::files::replace(&self.path, body.as_bytes()).is_err() {
             eprintln!("witchlight: could not write {}", self.path.display());
         }
         true

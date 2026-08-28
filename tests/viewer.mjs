@@ -1,4 +1,4 @@
-// The viewer's zoom arithmetic, exercised against src/viewer.html itself.
+// The viewer's zoom arithmetic, exercised against the scripts themselves.
 //
 // Leaflet counts zoom upward as detail grows. The stored levels are numbered from
 // the finest downward, because that is the numbering a world can grow under
@@ -13,14 +13,27 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const source = readFileSync(join(here, '..', 'src', 'viewer.html'), 'utf8');
-const server = readFileSync(join(here, '..', 'src', 'server.rs'), 'utf8');
-const pending = readFileSync(join(here, '..', 'src', 'pending.rs'), 'utf8');
+const viewer = join(here, '..', 'src', 'viewer');
+const read = name => readFileSync(join(here, '..', 'src', name), 'utf8');
+
+// The scripts as the page runs them: one scope, in the order `viewer.rs` joins
+// them. Read from that list rather than from a copy of it, so a file added to
+// the page is a file these tests see without anyone remembering to say so.
+const order = [...read('viewer.rs').matchAll(/include_str!\("viewer\/(\w+\.js)"\)/g)]
+  .map(found => found[1]);
+if (order.length === 0) throw new Error('viewer.rs no longer lists the page scripts');
+const source = order.map(name => readFileSync(join(viewer, name), 'utf8')).join('\n');
+
+const page = readFileSync(join(viewer, 'page.html'), 'utf8');
+const style = readFileSync(join(viewer, 'style.css'), 'utf8');
+const pyramid = read('pyramid.rs');
+const pending = read('pending.rs');
+const preferences = read('preferences.rs');
 
 /** Lifts one function out of the viewer, brace-matched, so nothing is duplicated. */
 function lift(name) {
   const at = source.indexOf(`function ${name}(`);
-  if (at < 0) throw new Error(`viewer.html no longer has a function called ${name}`);
+  if (at < 0) throw new Error(`the viewer no longer has a function called ${name}`);
   let depth = 0;
   for (let i = source.indexOf('{', at); i < source.length; i++) {
     if (source[i] === '{') depth++;
@@ -32,7 +45,7 @@ function lift(name) {
 /** Lifts one arrow-function constant, up to the semicolon that ends it. */
 function liftConst(name) {
   const at = source.indexOf(`const ${name} = (`);
-  if (at < 0) throw new Error(`viewer.html no longer has a constant called ${name}`);
+  if (at < 0) throw new Error(`the viewer no longer has a constant called ${name}`);
   const end = source.indexOf(';', at);
   if (end < 0) throw new Error(`${name} is not terminated`);
   return source.slice(at, end + 1);
@@ -44,7 +57,7 @@ function constant(text, pattern, what) {
   return Number(match[1]);
 }
 
-const TILE = constant(server, /const TILE: u32 = (\d+)/, 'TILE in server.rs');
+const TILE = constant(pyramid, /pub const TILE: u32 = (\d+)/, 'TILE in pyramid.rs');
 const BEYOND = constant(source, /const ZOOM_IN_BEYOND_NATIVE = (\d+)/, 'ZOOM_IN_BEYOND_NATIVE');
 const NATIVE = constant(source, /const NATIVE_ZOOM = (\d+)/, 'NATIVE_ZOOM');
 
@@ -101,6 +114,11 @@ const windows = new Function(`
 // they can check it by eye, so there is no escaping and no other metacharacter.
 const { fits } = new Function(`${lift('fits')} return { fits };`)();
 
+// Walking the block list with the arrows. Both ends wrap, and from nowhere the
+// two directions must not both land on the first row — which is what makes the
+// up arrow useless on a list of a screenful when the wanted block is at the end.
+const { nextRow } = new Function(`${lift('nextRow')} return { nextRow };`)();
+
 // A marker's details, put up by a hover and taken down again. Wrong in either
 // direction is a bug somebody lives with: a box that never closes covers the map,
 // and one that closes while being read cannot be read at all.
@@ -128,8 +146,11 @@ const hovering = new Function(`
 const rest = ms => new Promise(done => setTimeout(done, ms));
 
 let failed = 0;
-const check = (name, ok) => {
+const check = (name, ok, said) => {
   console.log(`${ok ? '  ok   ' : '  FAIL '}${name}`);
+  // What a check found, where naming the offenders is the difference between a
+  // failure somebody can act on and one they have to go looking for.
+  if (!ok && said) console.log(`       ${said}`);
   if (!ok) failed++;
 };
 
@@ -315,6 +336,76 @@ check(`the form sends ${sent.length} fields and the service reads ${reads.length
   sent.length === reads.length && sent.length > 0);
 check(`and they are the same words: ${sent.join(' ')}`, sent.join() === reads.join());
 
+console.log('\nevery element the scripts reach for is on the page');
+// The page is markup in one file and behaviour in another, so an element renamed
+// in one and not the other is `null.textContent` on the first line that touches
+// it — which on a page that builds itself is a blank map and one line in a
+// console nobody has open.
+const inMarkup = new Set([...page.matchAll(/id="([\w-]+)"/g)].map(found => found[1]));
+const madeInJs = new Set([...source.matchAll(/\.id = '([\w-]+)'/g)].map(found => found[1]));
+const asked = [...new Set([...source.matchAll(/getElementById\('([\w-]+)'\)/g)].map(f => f[1]))];
+
+check(`the scripts name ${asked.length} elements`, asked.length > 0);
+for (const id of asked) {
+  check(`  #${id} exists`, inMarkup.has(id) || madeInJs.has(id));
+}
+
+console.log('\nthe page asks for the files that carry the rest of it');
+check('the style', /href="\/viewer\.css\?v=/.test(page));
+check('the scripts', /src="\/viewer\.js\?v=/.test(page));
+check('leaflet, before them', page.indexOf('/leaflet.js') < page.indexOf('/viewer.js'));
+check('and the values they open on', /window\.witchlight = \{/.test(page));
+
+console.log('\nno colour in the stylesheet is defined as itself');
+// Six were. A custom property that names itself is invalid at computed-value
+// time, so every rule using it silently inherited instead — which cost this page
+// its accent, its warning colour and three of its five surfaces, with nothing
+// anywhere reporting a thing.
+const defined = [...style.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)];
+const named = new Set(defined.map(found => found[1]));
+for (const [, name, value] of defined) {
+  check(`  ${name} is a colour and not a reference to itself`, !value.includes(`var(${name})`));
+}
+const used = new Set([...style.matchAll(/var\((--[\w-]+)/g)].map(found => found[1]));
+for (const name of used) {
+  check(`  ${name} is defined somewhere`, named.has(name));
+}
+
+console.log('\na preset is kept in the words the service reads');
+// The same trap as the marker form, one route along: serde fills a field it was
+// not sent with that field's default, so a preset the page spells differently is
+// kept with no name, no colour and a pattern that matches nothing — and neither
+// end says a word about it.
+const keptFields = source.slice(source.indexOf('const kept = {'),
+                                source.indexOf('};', source.indexOf('const kept = {')));
+const keeps = [...keptFields.matchAll(/^\s*([A-Z]\w*):/gm)].map(found => found[1]).sort();
+
+const preset = preferences.slice(preferences.indexOf('pub struct Preset {'),
+                                 preferences.indexOf('}', preferences.indexOf('pub struct Preset {')));
+const holds = [...preset.matchAll(/^\s*pub (\w+):/gm)]
+  .map(found => found[1].split('_').map(part => part[0].toUpperCase() + part.slice(1)).join(''))
+  .sort();
+
+check(`the form keeps ${keeps.length} fields and the service holds ${holds.length}`,
+  keeps.length === holds.length && keeps.length > 0);
+check(`and they are the same words: ${keeps.join(' ')}`, keeps.join() === holds.join());
+
+// What a person has set for themselves, read by the page and written by it.
+const person = preferences.slice(preferences.indexOf('pub struct Person {'),
+                                 preferences.indexOf('}', preferences.indexOf('pub struct Person {')));
+for (const [field, of] of [...person.matchAll(/^\s*pub (\w+):/gm)].map(f => [f[1], 'Person'])) {
+  const cased = field.split('_').map(part => part[0].toUpperCase() + part.slice(1)).join('');
+  check(`the page reads ${of}.${cased} by that name`, source.includes(`mine.${cased}`));
+}
+
+console.log('\nan unnamed marker is asked for by the name it will come back under');
+// An edit is known to have landed by the marker reading as what was asked for.
+// A blank name asked for one the game renames on arrival, so the form waited out
+// its whole patience and then reported a failure that had not happened.
+check('the form names it rather than leaving it blank',
+  /Title: markerName\.value\.trim\(\) \|\| UNNAMED/.test(source));
+check("and the name is the one the game server gives", /const UNNAMED = 'Marker';/.test(source));
+
 console.log('\nthe marker window cannot be dragged out of reach');
 const SCREEN = [1000, 800];
 const put = (x, y) => windows(x, y, ...SCREEN);
@@ -395,6 +486,82 @@ console.log("\na marker's details come down on their own");
   await rest(LINGER * 3);
   check('one opened by clicking stays open', !hovering.closed.includes('road'));
   check('and nothing is left waiting to fire', !hovering.isWaiting());
+}
+
+console.log('\nthe arrows walk the blocks a search found');
+check('down from nowhere takes the first', nextRow(-1, 1, 5) === 0);
+check('and up from nowhere takes the last', nextRow(-1, -1, 5) === 4);
+check('down walks forward', nextRow(0, 1, 5) === 1);
+check('and off the end comes back to the first', nextRow(4, 1, 5) === 0);
+check('up walks back', nextRow(3, -1, 5) === 2);
+check('and off the front comes back to the last', nextRow(0, -1, 5) === 4);
+// A list of one is every row at once, and an empty one has nowhere to be.
+check('one row is where both arrows land', nextRow(-1, 1, 1) === 0 && nextRow(0, 1, 1) === 0);
+check('and an empty list is on no row at all',
+  nextRow(-1, 1, 0) === -1 && nextRow(2, -1, 0) === -1);
+
+console.log('\nnothing the page starts is left to fail in silence');
+// A browser does not wait for a handler, so an async function wired to a click
+// or a clock hands back a promise nobody is holding: a throw inside one is a
+// rejection in a console nobody has open, while the page carries on as though
+// the work had happened. Every one of them goes through `started`, which is the
+// one place that says what a failure looks like.
+{
+  const asyncs = [...source.matchAll(/^async function (\w+)\(/gm)].map(found => found[1]);
+  const loose = [];
+  for (const name of asyncs) {
+    for (const call of source.matchAll(new RegExp(`(.{0,16})\\b${name}\\(`, 'g'))) {
+      const before = call[1];
+      if (/function $/.test(before)) continue;
+      if (/(?:await |started\()$/.test(before)) continue;
+      loose.push(`${name} after "${before.trim()}"`);
+    }
+  }
+  check(`${asyncs.length} functions answer later, every call awaited or started`,
+    loose.length === 0, loose.join('; '));
+  // `setInterval` counts the beat whether or not the last one was answered, so a
+  // service slower than the gap is asked again while it is still answering.
+  check('and nothing polls on a bare interval', !/setInterval\(/.test(source));
+}
+
+console.log('\nthe page is one strict script');
+// Without the directive a mistyped name is a new global rather than an error,
+// which is the whole class of bug the shadowing checks above cannot see.
+check('it opens with the directive', /^(?:\/\/[^\n]*\n|\s)*'use strict';/.test(source));
+check('and the whole of it parses under one', (() => {
+  try { new Function(source); return true; } catch { return false; }
+})());
+
+console.log('\nnothing hides a name the rest of the page uses');
+// The check above catches two top-level bindings of one name. This catches the
+// other half: a local or a parameter standing in front of one, which is how a
+// `const said` in a helper turned the function that words a position into a
+// string, and would have thrown the first time anyone called it there.
+{
+  const top = new Set([...source.matchAll(/^(?:async )?function (\w+)\(/gm)].map(f => f[1]));
+  for (const found of source.matchAll(/^(?:const|let) (\w+)/gm)) top.add(found[1]);
+
+  const hiding = new Map();
+  const hides = (name, how) => {
+    if (top.has(name)) hiding.set(name, `${name} (${how})`);
+  };
+  for (const found of source.matchAll(/\n[ \t]+(?:const|let|var) (\w+)/g)) hides(found[1], 'a local');
+  for (const found of source.matchAll(/for \((?:const|let) (\w+) of/g)) hides(found[1], 'a loop name');
+  for (const found of source.matchAll(/catch \((\w+)\)/g)) hides(found[1], 'a caught error');
+
+  const lists = [
+    ...[...source.matchAll(/function\s*\w*\s*\(([^)]*)\)/g)].map(f => f[1]),
+    ...[...source.matchAll(/\(([^()]*)\)\s*=>/g)].map(f => f[1]),
+    ...[...source.matchAll(/(?:^|[^\w.])(\w+)\s*=>/g)].map(f => f[1]),
+  ];
+  for (const list of lists) {
+    for (const part of list.split(',')) {
+      const name = part.trim().replace(/[=:][\s\S]*$/, '').replace(/^\.\.\./, '').trim();
+      if (/^[A-Za-z_$][\w$]*$/.test(name)) hides(name, 'a parameter');
+    }
+  }
+  check(`${top.size} names at the top level, none hidden underneath`,
+    hiding.size === 0, [...hiding.values()].join(', '));
 }
 
 console.log(failed === 0 ? '\nall checks passed' : `\n${failed} FAILED`);

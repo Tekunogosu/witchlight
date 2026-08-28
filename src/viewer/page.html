@@ -1,0 +1,102 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Witchlight</title>
+<link rel="stylesheet" href="/leaflet.css">
+<link rel="stylesheet" href="/viewer.css?v=__VERSION__">
+<div id="map"></div>
+<div id="who"></div>
+<div id="corner"></div>
+<div id="settings"><h2>Show</h2></div>
+<div id="compose" class="window">
+  <div class="bar">
+    <h2 id="compose-title">New marker</h2>
+    <button class="shut" type="button" title="Close" aria-label="Close">×</button>
+  </div>
+  <div class="field"><span>Name</span>
+    <input id="marker-name" type="text" maxlength="128" placeholder="what is here">
+  </div>
+  <div class="field">
+    <div id="colours" class="swatches"></div>
+  </div>
+  <div class="field">
+    <div id="pictures" class="swatches"></div>
+  </div>
+  <div class="field finding" id="pattern-field"><span>Block it starts from</span>
+    <input id="marker-pattern" type="text" autocomplete="off"
+           placeholder="type to find a block, or a pattern with *"
+           role="combobox" aria-expanded="false" aria-autocomplete="list"
+           aria-controls="block-found">
+    <div id="block-found" role="listbox" aria-label="Blocks found"></div>
+  </div>
+  <div class="field" id="place-field"><span id="place-said">Coords</span>
+    <div class="place">
+      <input id="marker-x" type="number" aria-label="Marker x" placeholder="x">
+      <input id="marker-y" type="number" aria-label="Marker y" placeholder="y">
+      <input id="marker-z" type="number" aria-label="Marker z" placeholder="z">
+      <button id="marker-pick" class="tool" type="button"
+              title="Pick the spot on the map" aria-label="Pick the spot on the map"
+              aria-pressed="false">⌖</button>
+    </div>
+  </div>
+  <label class="line" id="remember-line">
+    <input id="marker-remember" type="checkbox">
+    <span>Set as preset for <b id="remember-what">this</b></span>
+  </label>
+  <p id="said"></p>
+  <div class="deed">
+    <button id="marker-cancel" type="button">Cancel</button>
+    <label class="keep"><input id="marker-private" type="checkbox">Private</label>
+    <button id="marker-save" class="go" type="button">Save</button>
+  </div>
+</div>
+
+<div id="presets" class="window">
+  <div class="bar">
+    <h2>Presets</h2>
+    <button class="shut" type="button" title="Close" aria-label="Close">×</button>
+  </div>
+  <p class="note">What a marker starts as, by what you clicked. Pick one to change
+     it.</p>
+  <div id="preset-list"></div>
+  <p id="preset-said"></p>
+  <div class="deed">
+    <button id="preset-new" class="go" type="button">Create</button>
+  </div>
+</div>
+
+<div id="profile" class="window">
+  <div class="bar">
+    <span id="profile-face" class="face"></span>
+    <h2 id="profile-name">Not signed in</h2>
+    <button class="shut" type="button" title="Close" aria-label="Close">×</button>
+  </div>
+  <label class="line"><input id="want-presets" type="checkbox">New markers become presets by default</label>
+  <label class="line"><input id="want-private" type="checkbox">New markers are private by default</label>
+  <p id="want-said" class="note"></p>
+  <div class="field"><span>Size</span>
+    <label class="slide">Player list<input id="scale-people" type="range" min="0.7" max="1.8" step="0.05"></label>
+    <label class="slide">Windows<input id="scale-panel" type="range" min="0.7" max="1.8" step="0.05"></label>
+    <label class="slide">Map buttons<input id="scale-tools" type="range" min="0.7" max="1.8" step="0.05"></label>
+  </div>
+  <p id="profile-said"></p>
+  <div class="deed">
+    <a id="sign-out" href="/logout">Sign out</a>
+    <button id="profile-revert" type="button">Cancel</button>
+    <button id="profile-save" class="go" type="button">Save</button>
+  </div>
+</div>
+<div id="version">v__VERSION__</div>
+<div id="hud"><div id="where">loading…</div><div id="what"></div></div>
+<script>
+// What the server knew at the moment it served this page, so the first paint is
+// already in the right place rather than jumping once `/info.json` answers.
+// The only thing substituted into the page; everything else it needs is a file
+// of its own, served whole and cached under this build's number.
+window.witchlight = {
+  tile: __TILE__,
+  bounds: { minX: __MIN_X__, minZ: __MIN_Z__, maxX: __MAX_X__, maxZ: __MAX_Z__ },
+};
+</script>
+<script src="/leaflet.js"></script>
+<script src="/viewer.js?v=__VERSION__"></script>
