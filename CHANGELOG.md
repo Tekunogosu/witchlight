@@ -1,9 +1,80 @@
-# mapstique
+# witchlight
 
 The map service. It pairs with the [server mod](../../mapstique-csharp), and the
 two **must match on minor version**: minor is the compatibility generation, moved
 whenever the file format or the socket protocol changes. Patch is free to differ,
 and covers anything that changes only one half.
+
+## Unreleased
+
+### A new portrait shows without a reload
+
+A player who sends a new picture keeps the name they had — it is derived from who
+they are, not from what the picture holds — so nothing downstream could tell that
+anything had happened. The card compared one name against the same name, decided
+nothing had changed, and left the picture alone; the browser, handed an address it
+had seen before, was entitled to do the same. The map went on showing the old face
+until somebody reloaded the page.
+
+A live player now carries `PortraitAt`, when their picture was written, and the map
+asks for `/portraits/{name}.png?v={PortraitAt}`. The address is what the card
+compares and what the browser fetches, so a redrawn player changes both. It lands
+on the next live poll, a couple of seconds later.
+
+The time moves only when bytes were actually written, so a character taken apart
+and put back the same way costs no refetch.
+
+### The project is called Witchlight
+
+Every mapstique here is now witchlight — the crate, the binary, the settings
+directory, the socket, the page title, and everything it prints. Nothing about what
+it renders or serves changed, which is why the version did not move.
+
+Settings live in `~/.config/witchlight/config.toml` and exports are read from the
+`witchlight` folder inside the game's data directory. Both are new paths rather
+than renamed ones, so a first run after this writes fresh defaults and the map
+rebuilds as the server exports; the old `mapstique` folder and config are left
+where they are and want removing by hand.
+
+The region format is untouched — `MSQR` and `.msqr` never carried the old name, and
+changing them would have been a format change rather than a rename.
+
+The viewer keeps its settings under `witchlight.settings`, so the panel comes back
+at its defaults once.
+
+## 0.16.1
+
+### A tool for reading one block
+
+The 🔍 below the zoom control turns the pointer into a picker. It outlines the
+block under it — at one pixel per block the pointer covers whatever it is over, so
+being shown which block the map means is most of the tool — and says in the corner
+what is there: the block's code, the surface height, and the climate the column
+was generated with. `/block.json?x=&z=` is where it comes from.
+
+The pointer stays an arrow while the tool is armed. A crosshair centres on what it
+names and so sits on top of it, which is the one thing a tool for looking at a
+single block must not do.
+
+The reading is the renderer's own. How a column resolves against the palette had
+been decided in two places that happened to agree; it is now decided in one, so
+the map cannot name a block it did not draw. A column nobody has exported says
+that rather than naming something that is not there.
+
+### A chunk grid
+
+Off until switched on, beside the other things the settings panel shows. It
+outlines the chunks the export names, faint enough to read the terrain through,
+and stops being drawn below eight pixels to a chunk. It is not clipped to the
+explored area — where the explored area stops is one of the things it is for.
+
+### Fixed
+
+`/info.json` says the chunk edge, which the viewer had no way to learn and the
+region format has carried all along.
+
+The routes table promised an `F` key that fits the map to the world. There has
+never been one.
 
 ## 0.16.0
 
@@ -68,7 +139,7 @@ a 0.13 service refuses a file it does not recognise every field of. An existing
 file is brought up to date, values kept, with:
 
 ```sh
-mapstique -c <file> --save-config -p
+witchlight -c <file> --save-config -p
 ```
 
 ## 0.13.0
@@ -81,17 +152,17 @@ pixels, the mod knows the game, and a map worth keeping outlives any one game
 server — but it is no longer a second thing to fetch, configure and remember to
 start.
 
-Settings move with it. Started by the mod, the file is `mapstique.conf` in the
+Settings move with it. Started by the mod, the file is `witchlight.conf` in the
 game's `ModConfig` folder, named on the command line, so everything about one
 server's map sits with that server rather than in one shared file in a home
-directory. Run by hand, `~/.config/mapstique/config.toml` is unchanged.
+directory. Run by hand, `~/.config/witchlight/config.toml` is unchanged.
 
 `autostart` is new, and is the one setting here that this program does not read:
 it says whether the mod starts the service unasked. Turn it off to run
-`mapstique serve` yourself, which is what a map that should stay up while the game
+`witchlight serve` yourself, which is what a map that should stay up while the game
 server is down wants.
 
-Everything the service prints goes to `mapstique-service.log` in the game's own
+Everything the service prints goes to `witchlight-service.log` in the game's own
 `Logs` folder, so it can be tailed while it runs and is not interleaved with a
 game server's log.
 
@@ -388,7 +459,7 @@ second, and holds its gate across the reload.
 
 ### Whole-map renders use every core
 
-`mapstique render` draws a row at a time in parallel — every pixel is decided from
+`witchlight render` draws a row at a time in parallel — every pixel is decided from
 the world and the palette alone, so rows are independent. A 6,144 by 6,144 world
 went from 3.79s to 1.54s, and the output is byte for byte what one core produces.
 
@@ -417,7 +488,7 @@ longer blinks through the background colour on every export.
 
 ### Players and markers arrive over a socket
 
-The mod posts to an **API socket** — by default `/tmp/mapstique-{hash of the
+The mod posts to an **API socket** — by default `/tmp/witchlight-{hash of the
 export path}.sock`, which both halves derive for themselves — instead of writing
 `live.json` every two seconds. Players are held in memory and **expire after 30
 seconds**, so a game server that stops leaves no dots behind. Markers are written
@@ -433,5 +504,5 @@ map is the product and live data is a garnish.
 
 - Reading `live.json`. It briefly stayed as a fallback and disguised a mod posting
   no markers as a map that merely had none.
-- Reading the single-file `columns.msqc`. While Mapstique is alpha a format change
+- Reading the single-file `columns.msqc`. While Witchlight is alpha a format change
   clears the map rather than upgrading it, and the mod does the clearing.

@@ -5,8 +5,8 @@
 //! edit.
 //!
 //! Which file depends on who started this. Run by hand it is
-//! `~/.config/mapstique/config.toml`; started by the server mod it is
-//! `mapstique.conf` in the game's `ModConfig` folder, which the mod names with
+//! `~/.config/witchlight/config.toml`; started by the server mod it is
+//! `witchlight.conf` in the game's `ModConfig` folder, which the mod names with
 //! `--config` so that everything about one server's map sits with that server.
 
 use std::path::{Path, PathBuf};
@@ -19,7 +19,7 @@ use crate::error::{Error, Result};
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     /// The Vintage Story data directory — the server's `--dataPath`. Exports are
-    /// read from the `mapstique` folder inside it.
+    /// read from the `witchlight` folder inside it.
     pub vs_data: PathBuf,
 
     /// Address to listen on. All interfaces by default, so the map is reachable
@@ -45,7 +45,7 @@ pub struct Config {
     ///
     /// Read by the mod rather than by anything here — it is a setting about who
     /// runs the map, and the only sensible place for it is beside everything else
-    /// about the map. Turn it off to run `mapstique serve` yourself, which is what
+    /// about the map. Turn it off to run `witchlight serve` yourself, which is what
     /// a map that should outlive the game server wants.
     pub autostart: bool,
 
@@ -87,12 +87,12 @@ fn default_vs_data() -> PathBuf {
         .join("VintagestoryData")
 }
 
-/// `~/.config/mapstique/config.toml`.
+/// `~/.config/witchlight/config.toml`.
 #[must_use]
 pub fn default_path() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("mapstique")
+        .join("witchlight")
         .join("config.toml")
 }
 
@@ -122,12 +122,12 @@ impl Config {
 
     /// Where the mod's exports actually are.
     ///
-    /// The mod writes into `<vs data>/mapstique`, which is what `vs_data` points
+    /// The mod writes into `<vs data>/witchlight`, which is what `vs_data` points
     /// at. A directory that holds the exports directly is accepted too, so a set
     /// of files copied off a server with `scp` works without a second flag.
     #[must_use]
     pub fn exports(&self) -> PathBuf {
-        let nested = self.vs_data.join("mapstique");
+        let nested = self.vs_data.join("witchlight");
         if nested.join("palette.json").exists() {
             return nested;
         }
@@ -141,16 +141,16 @@ impl Config {
     pub fn to_template(&self) -> String {
         let body = toml::to_string_pretty(self).unwrap_or_else(|error| format!("# {error}\n"));
         format!(
-            "# mapstique configuration\n\
+            "# witchlight configuration\n\
              # vs_data is the server's --dataPath; exports are read from the\n\
-             # `mapstique` folder inside it.\n\
+             # `witchlight` folder inside it.\n\
              # api_socket is where the mod posts live data. Empty means a unix\n\
              # socket in /tmp named after this folder, which is where the mod\n\
              # looks; a host:port is accepted instead.\n\
              # threads is how many requests are answered at once; 0 decides.\n\
              # tile_cache_mb is how much memory rendered tiles may hold.\n\
              # autostart is whether the server mod runs this service itself.\n\
-             # Turn it off to run `mapstique serve` by hand, which is what a map\n\
+             # Turn it off to run `witchlight serve` by hand, which is what a map\n\
              # that should outlive the game server wants.\n\
              # announce is whether the mod tells a player where the map is when\n\
              # they join. announce_url is what to tell them: empty means the\n\

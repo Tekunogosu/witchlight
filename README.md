@@ -1,4 +1,4 @@
-# mapstique
+# witchlight
 
 Renders and serves a browsable map of a Vintage Story world.
 
@@ -24,23 +24,23 @@ check noticing. `cargo test` shells out to `node`, and says so if it is missing.
 
 The usual way is not to. The [server mod](../../mapstique-csharp) carries this
 binary inside its archive and starts it once the world is ready, so installing the
-mod installs the map — its settings are then `mapstique.conf` in the game's
-`ModConfig` folder and everything it prints goes to `Logs/mapstique-service.log`.
+mod installs the map — its settings are then `witchlight.conf` in the game's
+`ModConfig` folder and everything it prints goes to `Logs/witchlight-service.log`.
 Set `autostart = false` there to run it yourself instead, which is what a map that
 should stay up while the game server is down wants.
 
 Run by hand it looks like this:
 
 ```sh
-mapstique                                   # serve, using the saved settings
-mapstique -d /srv/vs/data                   # point it at a server's --dataPath
-mapstique -d /srv/vs/data -S                # ...and remember that
-mapstique render --out map.png              # one PNG of everything exported
+witchlight                                   # serve, using the saved settings
+witchlight -d /srv/vs/data                   # point it at a server's --dataPath
+witchlight -d /srv/vs/data -S                # ...and remember that
+witchlight render --out map.png              # one PNG of everything exported
 ```
 
-Settings live in `~/.config/mapstique/config.toml`, written with the defaults on a
+Settings live in `~/.config/witchlight/config.toml`, written with the defaults on a
 first run — or wherever `-c` names, which is how the server mod points this at its
-own `ModConfig/mapstique.conf`:
+own `ModConfig/witchlight.conf`:
 
 ```toml
 vs_data = "/home/vintagestory/data"   # the server's --dataPath
@@ -62,7 +62,7 @@ LAN and wrong behind a proxy, a domain or NAT.
 Flags win over the file and stay one-off unless `-S` is given, so a quick look at
 another world does not rewrite your setup. `-p` prints the resolved settings.
 
-`vs_data` is the game's data directory and exports are read from the `mapstique`
+`vs_data` is the game's data directory and exports are read from the `witchlight`
 folder inside it. A directory holding `palette.json` directly is accepted too, so
 files copied off a server with `scp` need no second flag. Whichever it picks is
 printed on start.
@@ -82,12 +82,12 @@ readable by anyone who can reach the port.
 ## What it tells you
 
 ```
-mapstique 0.2.0
-mapstique: reading /srv/vs/data/mapstique
-mapstique: 635 chunks, 864x1024 blocks
-mapstique: palette from client, 45418 blocks, 26 colour maps (game 1.22.7)
-mapstique: surface 96% painted, 4% nothing to draw, 0% unknown blocks
-mapstique: serving on http://192.168.1.158:8080  (on your network)
+witchlight 0.2.0
+witchlight: reading /srv/vs/data/witchlight
+witchlight: 635 chunks, 864x1024 blocks
+witchlight: palette from client, 45418 blocks, 26 colour maps (game 1.22.7)
+witchlight: surface 96% painted, 4% nothing to draw, 0% unknown blocks
+witchlight: serving on http://192.168.1.158:8080  (on your network)
 ```
 
 The version comes first on every run, because `--version` only helps if you think
@@ -101,8 +101,8 @@ it. Below 25% painted it says so explicitly on stderr.
 Reloads are narrated the same way, so a palette arriving mid-session is visible:
 
 ```
-mapstique: palette reloaded from disk — 45418 blocks, source client (generation 7, tiles dropped)
-mapstique: surface 96% painted, 4% nothing to draw, 0% unknown blocks
+witchlight: palette reloaded from disk — 45418 blocks, source client (generation 7, tiles dropped)
+witchlight: surface 96% painted, 4% nothing to draw, 0% unknown blocks
 ```
 
 ## What it reads
@@ -125,7 +125,7 @@ documented in `src/columns.rs`; the compression runs between five and eight time
 on real exports. Chunks accumulate across exports, so the map keeps everything the
 server has ever had loaded.
 
-The format still moves while Mapstique is alpha. A region this build cannot read
+The format still moves while Witchlight is alpha. A region this build cannot read
 is skipped and said so on stderr, and the mod clears a map it cannot read on start
 rather than upgrading it — so an upgrade costs the explored area, which comes back
 as players move through it.
@@ -178,12 +178,13 @@ immutable and cached for a year, while the page and both feeds are `no-store`.
 
 | Route | |
 |---|---|
-| `/` | the viewer: drag to pan, scroll to zoom, `F` to fit |
+| `/` | the viewer: drag to pan, scroll to zoom |
 | `/tiles/{x}/{z}.png` | one tile, versioned by `?v=` |
-| `/info.json` | bounds, chunk count, generation |
-| `/live.json` | players and markers, from memory. A player carries `Portrait`, the name of their picture, where they have sent one |
+| `/info.json` | bounds, chunk edge, chunk count, generation |
+| `/block.json?x=&z=` | what is at one block: its code, its surface height, its climate |
+| `/live.json` | players and markers, from memory. A player carries `Portrait`, the name of their picture, and `PortraitAt`, when it was drawn, where they have sent one |
 | `/icons.json`, `/icons/{name}.svg` | the pictures markers are drawn with |
-| `/portraits/{name}.png` | a picture a player's own client drew of their seraph |
+| `/portraits/{name}.png` | a picture a player's own client drew of their seraph. Ask with `?v={PortraitAt}`: the name is the player's and does not change when the picture does |
 
 The page polls `/info.json` every 5 seconds and `/live.json` every 2. It asks with
 `?since=` and gets back the tiles that actually changed, so a server where someone
@@ -200,6 +201,22 @@ the owner is the only thing that says whose it is.
 from a CDN, so the service stays one file that works offline and tells nobody who
 is looking at the map. See `src/vendor/README.md` for the exact release it came
 from and how to move version.
+
+The **picker** — the 🔍 below the zoom control — reads one block rather than
+looking at all of them. It leaves the pointer an arrow, since a crosshair centres
+on the block it is naming and so covers it. It outlines the block instead, which
+at one pixel per block is the whole point of the tool, and asks `/block.json` what
+is there:
+the block's code, the height a player standing on it would read, and the climate
+that column was generated with. A column nobody has exported says so instead of
+naming a block that is not there. The reading is the same one the renderer made
+for that pixel, so the words and the colour underneath them always agree.
+
+The **chunk grid** outlines the chunks the export names, which the game puts at 32
+blocks. It is off until switched on, faint enough to read the terrain through, and
+it stops being drawn below eight pixels to a chunk — past that a grid stops being
+a grid and becomes a wash. It is deliberately not clipped to the explored area:
+seeing where that stops, squarely, is half of what a grid is for.
 
 ## Rough edges
 

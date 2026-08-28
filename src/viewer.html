@@ -1,7 +1,7 @@
 <!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Mapstique</title>
+<title>Witchlight</title>
 <link rel="stylesheet" href="/leaflet.css">
 <style>
   html, body { margin: 0; height: 100%; overflow: hidden;
@@ -9,8 +9,15 @@
                font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; }
   #map { position: absolute; inset: 0; background: #14141a; }
   .leaflet-container { background: #14141a; outline: none; }
-  /* One pixel is one block, so a magnified tile must stay blocks and not blur. */
-  .leaflet-tile { image-rendering: pixelated; }
+  /* One pixel is one block, so a magnified terrain tile must stay blocks and not
+     blur. Only the terrain: the grid's lines are drawn at the size they are
+     wanted and pixelating them thickens them into a lattice. */
+  .terrain .leaflet-tile { image-rendering: pixelated; }
+  /* An arrow, not a crosshair. A crosshair centres on what it is naming and so
+     covers it, which for a tool whose whole job is looking at one block is the
+     one thing it must not do; an arrow's tip is the point and its body lies
+     away from it. Against the map's usual grab hand it still reads as a mode. */
+  .leaflet-container.picking { cursor: default; }
   #who { position: absolute; right: 12px; top: 12px; z-index: 500; width: 216px;
          max-height: calc(100% - 24px); overflow-y: auto;
          display: flex; flex-direction: column; gap: 6px; }
@@ -58,6 +65,10 @@
   #hud { position: absolute; left: 12px; bottom: 12px; z-index: 500;
          padding: 7px 11px; background: #000000cc; border: 1px solid #33333f;
          border-radius: 4px; pointer-events: none; white-space: pre; }
+  /* What the picker is on, under where the pointer is. Nothing to say is no
+     line at all, rather than a gap that moves the corner about. */
+  #what { color: #8a8a96; margin-top: 5px; }
+  #what:empty { display: none; }
   .player, .marker { background: none; border: none; }
   .pin { display: block; width: 10px; height: 10px; margin: -5px 0 0 -5px;
          border: 2px solid #000000cc; border-radius: 50%; background: #4dd2ff; }
@@ -82,13 +93,21 @@
   .leaflet-popup-content b { color: #e8e8ee; }
   .leaflet-bar a { background: #1c1c24; color: #cfcfd6; border-bottom-color: #33333f; }
   .leaflet-bar a:hover { background: #26262f; color: #fff; }
+  /* Centred by the grid rather than by a line height, which is what the cog in
+     the other corner does and the only thing that centres a glyph reliably. */
+  .leaflet-bar a.tool { display: grid; place-items: center; font-size: 15px;
+                        line-height: 1; }
+  /* A tool that is on has to look on. A ring rather than a colour: the mark is
+     an emoji and paints itself, so `color` says nothing about it. */
+  .leaflet-bar a.tool.armed { background: #0d1a22;
+                              box-shadow: inset 0 0 0 2px #4dd2ff; }
   .leaflet-control-attribution { display: none; }
 </style>
 <div id="map"></div>
 <div id="who"></div>
 <div id="settings"><h2>Show</h2></div>
 <div id="cog" title="Settings">⚙</div>
-<div id="hud">loading…</div>
+<div id="hud"><div id="where">loading…</div><div id="what"></div></div>
 <script src="/leaflet.js"></script>
 <script>
 const TILE = __TILE__;
@@ -154,15 +173,32 @@ function tileKey(level, x, z, native) {
   return `${x}:${z}:${native - level}`;
 }
 
+/** How few pixels a chunk may be across before its grid is a wash, not a grid. */
+const GRID_MIN_PIXELS = 8;
+
+/**
+ * The coarsest zoom at which the chunk grid is still worth drawing.
+ *
+ * Told to Leaflet as the grid layer's own minimum, so zooming out past it stops
+ * the tiles being asked for rather than drawing sixteen empty canvases per
+ * screen. A chunk edge of 32 puts the floor two levels above the finest.
+ */
+function gridFloor(chunk, native) {
+  return native + Math.log(GRID_MIN_PIXELS / chunk) / Math.LN2;
+}
+
 let generation = 0;
 let levels = 0;
 let chunks = 0;
+/** Blocks along a chunk's edge, which is what the grid is drawn on. */
+let chunkEdge = 0;
 let players = [];
 /** Marker pictures the service has. A name not in here gets a plain shape. */
 let icons = new Set();
 
 
-const hud = document.getElementById('hud');
+const hudWhere = document.getElementById('where');
+const hudWhat = document.getElementById('what');
 const who = document.getElementById('who');
 
 /**
@@ -175,6 +211,7 @@ const who = document.getElementById('who');
 const settings = {
   players: { label: 'Players', on: true, apply: on => layer(people, on) },
   markers: { label: 'Markers', on: true, apply: on => layer(places, on) },
+  grid: { label: 'Chunk grid', on: false, apply: on => layer(grid, on) },
   panel: { label: 'Player list', on: true, apply: on => { who.style.display = on ? '' : 'none'; } },
   absolute: { label: 'Absolute coordinates', on: false, apply: () => say() },
   names: { label: 'Player names', on: true, apply: on => {
@@ -183,6 +220,9 @@ const settings = {
 };
 
 function layer(group, on) {
+  // A layer the map has not built yet — the grid, before anything is exported —
+  // is nothing to show and nothing to hide.
+  if (!group) return;
   if (on) {
     if (!map.hasLayer(group)) map.addLayer(group);
   } else if (map.hasLayer(group)) {
@@ -220,7 +260,7 @@ function remember() {
   try {
     const state = {};
     for (const [key, setting] of Object.entries(settings)) state[key] = setting.on;
-    localStorage.setItem('mapstique.settings', JSON.stringify(state));
+    localStorage.setItem('witchlight.settings', JSON.stringify(state));
   } catch (error) {
     /* private windows and cleared storage are allowed to say no */
   }
@@ -228,7 +268,7 @@ function remember() {
 
 function recall() {
   try {
-    const state = JSON.parse(localStorage.getItem('mapstique.settings') || '{}');
+    const state = JSON.parse(localStorage.getItem('witchlight.settings') || '{}');
     for (const [key, setting] of Object.entries(settings)) {
       if (typeof state[key] === 'boolean') setting.on = state[key];
     }
@@ -287,6 +327,69 @@ const Terrain = L.TileLayer.extend({
   },
 });
 
+/** Soft enough to read the terrain through, strong enough to count squares by. */
+const GRID_COLOUR = '#ffffff26';
+
+/**
+ * Where a tile's chunk lines fall, in pixels across it.
+ *
+ * The tile begins at world block `start` and covers `blocks` of them, so its
+ * lines are the multiples of a chunk edge inside that. A tile draws the line on
+ * its own left edge and not the one on its right, which is what keeps the seam
+ * between two tiles one line rather than two laid on each other.
+ */
+function chunkLines(start, blocks, chunk, scale) {
+  const places = [];
+  for (let block = Math.ceil(start / chunk) * chunk; block < start + blocks; block += chunk) {
+    // Half a pixel, so a one pixel line lands on a pixel rather than across two.
+    places.push(Math.round((block - start) * scale) + 0.5);
+  }
+  return places;
+}
+
+/**
+ * The chunk grid, drawn the way a minimap draws one: faint, square, and only
+ * while a chunk is still large enough on screen to be worth outlining.
+ *
+ * A tile layer rather than an overlay, so it pans and zooms with the terrain by
+ * construction and its lines land on the same pixels the tiles do — an overlay
+ * would have to be repositioned by hand on every frame and would drift on
+ * fractional zoom, which is exactly where a grid being one pixel out shows.
+ */
+const Grid = L.GridLayer.extend({
+  createTile(coords) {
+    const canvas = document.createElement('canvas');
+    const size = this.getTileSize();
+    // Leaflet sizes the element; the canvas is given the device's own pixels so
+    // that a one pixel line is one pixel rather than a smear on a dense screen.
+    const ratio = window.devicePixelRatio || 1;
+    canvas.width = size.x * ratio;
+    canvas.height = size.y * ratio;
+
+    const scale = scaleAt(coords.z, NATIVE_ZOOM);
+    const context = canvas.getContext('2d');
+    context.scale(ratio, ratio);
+    context.strokeStyle = GRID_COLOUR;
+    context.lineWidth = 1;
+    context.beginPath();
+
+    // A tile at this zoom covers this many blocks, so its own left and top edges
+    // are these world coordinates.
+    const blocks = size.x / scale;
+
+    for (const x of chunkLines(coords.x * blocks, blocks, chunkEdge, scale)) {
+      context.moveTo(x, 0);
+      context.lineTo(x, size.y);
+    }
+    for (const z of chunkLines(coords.y * blocks, blocks, chunkEdge, scale)) {
+      context.moveTo(0, z);
+      context.lineTo(size.x, z);
+    }
+    context.stroke();
+    return canvas;
+  },
+});
+
 const map = L.map('map', {
   crs: blockCrs(NATIVE_ZOOM),
   attributionControl: false,
@@ -296,6 +399,13 @@ const map = L.map('map', {
 });
 
 let terrain = null;
+let grid = null;
+
+// Between the terrain and everything drawn on top of it. Leaflet puts tiles at
+// 200 and overlays at 400, and a grid under the terrain is a grid nobody sees.
+map.createPane('grid');
+map.getPane('grid').style.zIndex = 250;
+map.getPane('grid').style.pointerEvents = 'none';
 
 /**
  * Follows the world as it grows.
@@ -309,7 +419,7 @@ function resize() {
   // Nothing exported yet. Every server is here for a moment after a format change
   // clears the map, and a viewer that threw would look like the upgrade failed.
   if (bounds.maxX <= bounds.minX || bounds.maxZ <= bounds.minZ) {
-    hud.textContent = 'waiting for the server to export';
+    hudWhere.textContent = 'waiting for the server to export';
     return;
   }
 
@@ -346,6 +456,21 @@ function resize() {
       updateWhenZooming: false,
       className: 'terrain',
     }).addTo(map);
+
+    // Deliberately unbounded, unlike the terrain: a chunk nobody has been to is
+    // still a chunk, and seeing where the explored area stops squarely is half
+    // of what a grid is for.
+    grid = new Grid({
+      tileSize: TILE,
+      minZoom: gridFloor(chunkEdge, NATIVE_ZOOM),
+      maxZoom: NATIVE_ZOOM + ZOOM_IN_BEYOND_NATIVE,
+      pane: 'grid',
+      className: 'grid',
+      noWrap: true,
+      updateWhenZooming: false,
+    });
+    settings.grid.apply(settings.grid.on);
+
     // A link to a particular view wins over fitting the world, so that opening
     // one lands where it says rather than somewhere else for a moment first.
     const asked = readAddress();
@@ -569,7 +694,7 @@ function patchCard(card, player) {
     card.name.textContent = player.Name;
   }
 
-  const look = `${player.Portrait || ''}|${player.Name}`;
+  const look = `${portraitSrc(player)}|${player.Name}`;
   if (card.look !== look) {
     card.look = look;
     card.face.textContent = '';
@@ -587,6 +712,26 @@ function patchCard(card, player) {
 }
 
 /**
+ * Where a player's picture is, or the empty string where they have sent none.
+ *
+ * The address carries when the picture was drawn, because the name cannot: a
+ * portrait is filed under its player, so a player who sends a new one keeps the
+ * name they had. An address that never changes is one a browser is entitled to go
+ * on using, and a card comparing names alone has no way to notice that the picture
+ * behind one has been replaced — which is why a new portrait used to need the page
+ * reloading before it showed.
+ *
+ * The whole address is the thing to compare, so this is what the card's own
+ * comparison uses too rather than a second reading of the same two fields.
+ */
+function portraitSrc(player) {
+  if (!player.Portrait) {
+    return '';
+  }
+  return `/portraits/${encodeURIComponent(player.Portrait)}.png?v=${player.PortraitAt || 0}`;
+}
+
+/**
  * What goes in a player's card.
  *
  * A picture their own client drew of them where there is one, and their initial
@@ -599,9 +744,10 @@ function portrait(player) {
   // seraph's real appearance exists: its skin parts are textures a dedicated
   // server does not ship, and its clothes and armour are a rendered scene rather
   // than a list of colours.
-  if (player.Portrait) {
+  const src = portraitSrc(player);
+  if (src) {
     const sent = document.createElement('img');
-    sent.src = `/portraits/${encodeURIComponent(player.Portrait)}.png`;
+    sent.src = src;
     sent.alt = '';
     // A picture that will not load leaves a broken image in the card, which reads
     // worse than the letter it stands in for.
@@ -667,21 +813,194 @@ function escaped(text) {
 /** Where the pointer is, when it is over the map. */
 let pointer = null;
 
+
+/**
+ * The picker: a cursor for reading one block, rather than looking at all of them.
+ *
+ * At one pixel per block the pointer covers whatever it is over, so the point of
+ * the tool is not the fetching but the outline — being told which block the map
+ * thinks you mean before it tells you what is on it.
+ */
+let picking = false;
+/** The block the outline is on. */
+let picked = null;
+/** What the service last said, and about which block. */
+let told = null;
+/** One request at a time; a pointer crossing a hundred blocks asks about the one
+ *  it stopped on rather than all hundred. */
+let asking = false;
+
+/** What the tool is marked with. An emoji, so it is a picture on every machine
+ *  without a drawing to keep aligned inside a 26 pixel square. */
+const TOOL_MARK = '🔍';
+
+const Picker = L.Control.extend({
+  options: { position: 'topleft' },
+
+  onAdd() {
+    const bar = L.DomUtil.create('div', 'leaflet-bar');
+    const button = L.DomUtil.create('a', 'tool', bar);
+    button.href = '#';
+    button.title = 'Inspect a block';
+    button.setAttribute('role', 'button');
+    // Named, so that a screen reader and a test can both say which control this
+    // is among the three identical squares in the corner.
+    button.setAttribute('aria-label', 'Inspect a block');
+    button.setAttribute('aria-pressed', 'false');
+    // The label is what a screen reader says; the mark is only for the eye, and
+    // `aria-label` is what stops it being read out as "magnifying glass".
+    button.textContent = TOOL_MARK;
+
+    // Wired the way Leaflet wires its own bar buttons. Without the first line a
+    // double click on the tool zooms the map underneath it and a drag from it
+    // pans; without the last, the keyboard is left on the button and the arrow
+    // keys stop moving the map.
+    L.DomEvent.disableClickPropagation(button);
+    L.DomEvent.on(button, 'click', L.DomEvent.stop);
+    L.DomEvent.on(button, 'click', () => setPicking(!picking));
+    L.DomEvent.on(button, 'click', this._refocusOnMap, this);
+
+    this._button = button;
+    return bar;
+  },
+
+  /** Says out loud which state the tool is in, for the eye and for the reader. */
+  show(on) {
+    if (!this._button) return;
+    this._button.classList.toggle('armed', on);
+    this._button.setAttribute('aria-pressed', String(on));
+  },
+});
+
+const picker = new Picker();
+map.addControl(picker);
+
+/**
+ * The one block the picker is on, outlined so that "under the pointer" is exact.
+ *
+ * A rectangle in world coordinates rather than a box drawn at the pointer: it is
+ * a block that is being named, so it must stay on that block while the map moves
+ * and grow with it as the view zooms in.
+ */
+const outline = L.rectangle([at(0, 0), at(1, 1)], {
+  color: '#4dd2ff', weight: 1, fill: false, interactive: false,
+});
+
+function setPicking(on) {
+  picking = on;
+  picker.show(on);
+  map.getContainer().classList.toggle('picking', on);
+  if (!on) forget();
+  say();
+}
+
+/** Nothing is being pointed at, so nothing is claimed about anything. */
+function forget() {
+  picked = null;
+  told = null;
+  layer(outline, false);
+}
+
+/** Whether what the service last said is about this block. */
+function about(block) {
+  return told !== null && block !== null && told.x === block.x && told.z === block.z;
+}
+
+/**
+ * Moves the outline onto the block under the pointer, and asks about it.
+ *
+ * Only when the block changes: a pointer sliding across a tile crosses hundreds
+ * of them at a coarse zoom, and every one of those is a request nobody reads.
+ */
+function pick(latlng) {
+  if (!picking || !latlng) return;
+
+  const block = { x: Math.floor(latlng.lng), z: Math.floor(latlng.lat) };
+  if (picked && picked.x === block.x && picked.z === block.z) return;
+
+  picked = block;
+  outline.setBounds([at(block.x, block.z), at(block.x + 1, block.z + 1)]);
+  layer(outline, true);
+  say();
+  ask();
+}
+
+/**
+ * Asks the service about whichever block the pointer has come to rest on.
+ *
+ * One request in flight and the rest coalesced into the latest position, so
+ * crossing the map costs one answer rather than a queue of stale ones.
+ */
+async function ask() {
+  if (asking) return;
+  asking = true;
+  try {
+    while (picking && picked && !about(picked)) {
+      told = await lookUp(picked.x, picked.z);
+      say();
+    }
+  } finally {
+    asking = false;
+  }
+}
+
+async function lookUp(x, z) {
+  try {
+    const answer = await fetch(`/block.json?x=${x}&z=${z}`, { cache: 'no-store' });
+    if (!answer.ok) throw new Error(answer.status);
+    return await answer.json();
+  } catch (error) {
+    // Still an answer about that block, or the loop above would ask again as
+    // fast as the service could refuse. The service may simply be restarting.
+    return { x, z, state: 'unreachable' };
+  }
+}
+
+/**
+ * What the picker is on, in words the map can honestly use.
+ *
+ * A column nobody has exported has nothing on it to name, and says that rather
+ * than naming a block that is not there. Everything else is what the renderer
+ * read for that same pixel, so the line and the colour under it agree.
+ */
+function describe() {
+  if (!picked) return '';
+  if (!about(picked)) return 'looking…';
+
+  switch (told.state) {
+    case 'unmapped':
+      return 'nothing exported here';
+    case 'unreachable':
+      return 'the service is not answering';
+    case 'unknown':
+      return `block ${told.block} — not in the palette`;
+    default:
+      return `${shortCode(told.code)}   y ${told.y}   ` +
+             `${Math.round(told.temperature)}°C   ${Math.round(told.rainfall * 100)}% rain`;
+  }
+}
+
+/** A block code as a reader wants it: `game:rock-granite` is just rock-granite. */
+function shortCode(code) {
+  return String(code ?? '').replace(/^game:/, '');
+}
+
 function say() {
   if (!terrain) return;
-  const where = pointer || map.getCenter();
-  const [x, z] = said(where.lng, where.lat);
+  const seen = pointer || map.getCenter();
+  const [x, z] = said(seen.lng, seen.lat);
   const perBlock = scaleAt(map.getZoom(), NATIVE_ZOOM);
-  hud.textContent =
+  hudWhere.textContent =
     `x ${x}   z ${z}   ` +
     `${perBlock.toFixed(2)} px/block   level ${levelFor(Math.round(map.getZoom()), NATIVE_ZOOM)}   ` +
     `${chunks} chunks   ${players.length} online`;
+  hudWhat.textContent = picking ? describe() : '';
 }
 
 map.on('move zoom', say);
 // Under the pointer when there is one, the middle of the view when there is not.
-map.on('mousemove', event => { pointer = event.latlng; say(); });
-map.on('mouseout', () => { pointer = null; say(); });
+map.on('mousemove', event => { pointer = event.latlng; pick(event.latlng); say(); });
+map.on('mouseout', () => { pointer = null; forget(); say(); });
 
 // Dragging is choosing to look somewhere else, so it stops following. Zooming is
 // not, so it does not.
@@ -755,6 +1074,7 @@ async function pollWorld() {
     generation = info.generation;
     chunks = info.chunks;
     levels = info.levels ?? 0;
+    chunkEdge = info.chunk ?? 0;
     spawn = { x: info.spawnX ?? 0, z: info.spawnZ ?? 0 };
     Object.assign(bounds, info);
 
@@ -764,6 +1084,11 @@ async function pollWorld() {
     if (grew) resize();
     if (info.tiles) terrain?.refresh(info.tiles);
     else if (!grew) terrain?.redraw();
+
+    // The block under a resting pointer may be a different block now. What was
+    // said about it was true of the map before this export, so it is asked again.
+    told = null;
+    ask();
     say();
   } catch (error) {
     /* the service may be restarting; try again next time */

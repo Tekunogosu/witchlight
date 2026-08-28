@@ -20,7 +20,7 @@ use crate::pyramid;
 use crate::render::UNMAPPED;
 use crate::error::{Error, Result};
 use crate::palette::Palette;
-use crate::render::Renderer;
+use crate::render::{Renderer, Surface};
 
 /// Blocks per tile, and pixels per tile at the finest level: one pixel is one
 /// block. Equal to a region, so a region that changes is exactly one tile.
@@ -112,9 +112,9 @@ pub fn serve(
     // The map is the product and live data is a garnish, so an API socket that
     // will not bind is said out loud and stepped over rather than taken as fatal.
     if let Err(error) = serve_api(api, Arc::clone(&state.live)) {
-        eprintln!("mapstique: {error}");
+        eprintln!("witchlight: {error}");
         eprintln!(
-            "mapstique: nobody will show on the map. Set `api_socket` to a shorter \
+            "witchlight: nobody will show on the map. Set `api_socket` to a shorter \
              path or to a host:port, on both this and the server mod."
         );
     }
@@ -128,19 +128,19 @@ pub fn serve(
     let addresses = reachable_at(bind);
     for address in &addresses {
         let note = if only_here(address) { "  (this machine only)" } else { "" };
-        println!("mapstique: serving on {address}{note}");
+        println!("witchlight: serving on {address}{note}");
     }
     publish_addresses(data, bind, &addresses);
 
     let threads = workers(threads);
-    println!("mapstique: rendering on {threads} threads");
+    println!("witchlight: rendering on {threads} threads");
 
     // Said out loud, because the alternative is a map whose coordinates quietly
     // disagree with every number the player can read off their own screen — and
     // nothing on either side would look wrong.
     if !data.join("world.json").exists() {
         println!(
-            "mapstique: no world.json — coordinates will be absolute rather than \
+            "witchlight: no world.json — coordinates will be absolute rather than \
              counted from spawn, which means the server mod is older than this build"
         );
     }
@@ -148,7 +148,7 @@ pub fn serve(
     // Levels built from a region format this build no longer reads would show
     // terrain that has since been cleared, so they go.
     if pyramid::reset_unless_built_from(data, crate::columns::VERSION) {
-        println!("mapstique: the stored levels were built from an older format and have been cleared");
+        println!("witchlight: the stored levels were built from an older format and have been cleared");
     }
 
     // What is left is kept. Only regions with a level above them missing or older
@@ -159,7 +159,7 @@ pub fn serve(
     if let (Ok(mut stale), Ok(regions)) = (state.stale.lock(), state.regions.lock()) {
         let behind = pyramid::behind(data, &regions, levels);
         println!(
-            "mapstique: {} of {} regions need their levels built",
+            "witchlight: {} of {} regions need their levels built",
             behind.len(),
             regions.len()
         );
@@ -194,7 +194,7 @@ fn answer(server: &Server, state: &State) {
     while let Ok(mut request) = server.recv() {
         let response = route(&mut request, state);
         if let Err(error) = request.respond(response) {
-            eprintln!("mapstique: response failed: {error}");
+            eprintln!("witchlight: response failed: {error}");
         }
     }
 }
@@ -230,6 +230,12 @@ fn route(request: &mut Request, state: &State) -> Response<Cursor<Vec<u8>>> {
         }
     } else if path == "/info.json" {
         json(&state.info(since_of(&url)))
+    } else if path == "/block.json" {
+        match block_asked(&url).map(|(x, z)| state.block(x, z)) {
+            Some(Some(body)) => json(&body),
+            Some(None) => text(503, "the map is being reloaded"),
+            None => text(400, "name the block with ?x= and ?z="),
+        }
     } else if let Some((level, tx, tz)) = tile_coords(path) {
         match state.tile(level, tx, tz) {
             Ok(bytes) => tile_response(bytes),
@@ -433,7 +439,7 @@ impl State {
 
         let generation = self.bump(None);
         println!(
-            "mapstique: palette reloaded from disk — {named} blocks, source {source} \
+            "witchlight: palette reloaded from disk — {named} blocks, source {source} \
              (generation {generation}, tiles dropped)"
         );
         self.report_coverage();
@@ -537,7 +543,7 @@ impl State {
         // when the palette changes because that changes every tile. A region
         // arriving changes one square, so it is reported by count alone.
         println!(
-            "mapstique: {} regions reloaded — {} chunks",
+            "witchlight: {} regions reloaded — {} chunks",
             touched.len(),
             self.chunks()
         );
@@ -549,7 +555,7 @@ impl State {
             return;
         };
         let coverage = Renderer::new(&world, &palette).coverage();
-        println!("mapstique: surface {}", coverage.summary());
+        println!("witchlight: surface {}", coverage.summary());
     }
 
     /// Records a generation and what it changed, then returns the new number.
@@ -653,7 +659,8 @@ impl State {
         let (spawn_x, spawn_z) = self.spawn();
 
         let mut body = format!(
-            r#"{{"minX":{min_x},"minZ":{min_z},"maxX":{max_x},"maxZ":{max_z},"tile":{TILE},"spawnX":{spawn_x},"spawnZ":{spawn_z},"levels":{},"chunks":{},"generation":{}"#,
+            r#"{{"minX":{min_x},"minZ":{min_z},"maxX":{max_x},"maxZ":{max_z},"tile":{TILE},"spawnX":{spawn_x},"spawnZ":{spawn_z},"chunk":{},"levels":{},"chunks":{},"generation":{}"#,
+            self.chunk_edge(),
             self.levels(),
             self.chunks(),
             self.generation.load(Ordering::Relaxed)
@@ -681,10 +688,32 @@ impl State {
         body
     }
 
+    /// What is at one block, for the viewer's inspector.
+    ///
+    /// The same reading the renderer made for that pixel, so the map never names
+    /// a block it did not draw. `None` while the map is between hands.
+    fn block(&self, x: i32, z: i32) -> Option<String> {
+        let (Ok(world), Ok(palette)) = (self.world.read(), self.palette.read()) else {
+            return None;
+        };
+
+        let surface = Renderer::new(&world, &palette).surface_at(x, z);
+        let body = Block::read(x, z, surface, &palette);
+        // Every field is a number, a fixed word, or a block code out of the
+        // palette, so there is nothing here that can refuse to be JSON.
+        serde_json::to_string(&body).ok()
+    }
+
     fn bounds(&self) -> (i32, i32, i32, i32) {
         self.world
             .read()
             .map_or((0, 0, 0, 0), |world| world.bounds())
+    }
+
+    /// Blocks along a chunk's edge, which is what the viewer draws its grid on.
+    /// Zero until something has been exported.
+    fn chunk_edge(&self) -> usize {
+        self.world.read().map_or(0, |world| world.edge)
     }
 
     fn chunks(&self) -> usize {
@@ -769,7 +798,7 @@ impl State {
         {
             let behind = pyramid::behind(&self.data, &regions, levels);
             println!(
-                "mapstique: the world now needs {levels} levels — {} regions to rebuild",
+                "witchlight: the world now needs {levels} levels — {} regions to rebuild",
                 behind.len()
             );
             changed.extend(behind);
@@ -803,7 +832,7 @@ impl State {
 
                 let parent = pyramid::downsample(&below, TILE, UNMAPPED);
                 if let Err(error) = pyramid::write(&self.data, level, px, pz, &parent) {
-                    eprintln!("mapstique: {error}");
+                    eprintln!("witchlight: {error}");
                 }
                 repainted.push((level, px, pz));
             }
@@ -822,7 +851,7 @@ impl State {
         // once rather than once per level of the pyramid that touched it.
         let generation = self.bump(Some(repainted.clone()));
         println!(
-            "mapstique: {} tiles rebuilt across {levels} levels (generation {generation})",
+            "witchlight: {} tiles rebuilt across {levels} levels (generation {generation})",
             repainted.len()
         );
     }
@@ -868,13 +897,13 @@ fn serve_api(api: &ApiSocket, live: Arc<Live>) -> Result<()> {
         )
     })?;
 
-    println!("mapstique: taking live data on {api}");
+    println!("witchlight: taking live data on {api}");
 
     std::thread::spawn(move || {
         for mut request in server.incoming_requests() {
             let response = posted(&mut request, &live);
             if let Err(error) = request.respond(response) {
-                eprintln!("mapstique: API socket response failed: {error}");
+                eprintln!("witchlight: API socket response failed: {error}");
             }
         }
     });
@@ -965,7 +994,7 @@ fn publish_addresses(data: &Path, bind: &str, addresses: &[String]) {
         .and_then(|()| std::fs::rename(&temporary, &path))
         .is_err()
     {
-        eprintln!("mapstique: could not write {}", path.display());
+        eprintln!("witchlight: could not write {}", path.display());
     }
 }
 
@@ -999,12 +1028,77 @@ fn region_times(dir: &Path) -> HashMap<(i32, i32), SystemTime> {
         .collect()
 }
 
-/// The `since` of a query string, naming the generation a viewer last drew.
-fn since_of(url: &str) -> Option<u64> {
+/// What the map knows about one block, as the viewer's inspector asks for it.
+///
+/// A struct rather than a hand-built string like the other feeds: a block code
+/// comes out of a file this program did not write, and the one place a quote in
+/// it could break the page is not worth a second escaper to guard.
+#[derive(serde::Serialize)]
+struct Block {
+    x: i32,
+    z: i32,
+    /// How the column read against the palette: `painted`, `blank`, `unknown` or
+    /// `unmapped`. The viewer speaks for the first three and stays quiet for the
+    /// last, since there is nothing drawn there to be looking at.
+    state: &'static str,
+    /// The block id this world gave it. Absent where nothing was exported.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    block: Option<u16>,
+    /// Its code — `game:rock-granite`. Absent for a block the palette has never
+    /// heard of, which is the whole of what `unknown` means.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    code: Option<String>,
+    /// The surface height, which is the Y a player standing here would read.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    y: Option<i16>,
+    /// Degrees celsius, and the climate the world was generated with rather than
+    /// today's weather.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f32>,
+    /// Rainfall, from dry at zero to the wettest the game has at one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rainfall: Option<f32>,
+}
+
+impl Block {
+    fn read(x: i32, z: i32, surface: Surface, palette: &Palette) -> Self {
+        let column = surface.column();
+        Self {
+            x,
+            z,
+            state: surface.state(),
+            block: column.map(|column| column.block),
+            code: column.and_then(|column| palette.code_of(column.block).map(ToOwned::to_owned)),
+            y: column.map(|column| column.height),
+            temperature: column.map(|column| column.celsius()),
+            rainfall: column.map(|column| column.wetness()),
+        }
+    }
+}
+
+/// One named value out of a query string.
+///
+/// One reader for all of them, because the rule is not about generations or
+/// coordinates but about how a query says anything at all — and a second copy of
+/// it is a second chance to match `sincerely` where `since` was meant.
+fn param<'a>(url: &'a str, key: &str) -> Option<&'a str> {
     url.split_once('?')?
         .1
         .split('&')
-        .find_map(|pair| pair.strip_prefix("since=")?.parse().ok())
+        .filter_map(|pair| pair.split_once('='))
+        .find_map(|(name, value)| (name == key).then_some(value))
+}
+
+/// The `since` of a query string, naming the generation a viewer last drew.
+fn since_of(url: &str) -> Option<u64> {
+    param(url, "since")?.parse().ok()
+}
+
+/// The block position an inspector is asking about. Both halves or neither: half
+/// a position names nowhere, and defaulting the other half would name somewhere
+/// else entirely.
+fn block_asked(url: &str) -> Option<(i32, i32)> {
+    Some((param(url, "x")?.parse().ok()?, param(url, "z")?.parse().ok()?))
 }
 
 /// `/icons/{name}.svg`, where the name is a marker icon.
@@ -1101,17 +1195,14 @@ fn typed(body: &str, content_type: &str) -> Response<Cursor<Vec<u8>>> {
     cached(body, content_type, "no-store")
 }
 
-/// A response that says how long it may be kept.
-///
-/// One `Cache-Control` and one only: two of them is not a stronger instruction,
-/// it is an ambiguous one, and a browser takes the first — so an `immutable`
-/// added after a `no-store` is an asset that is never cached and looks cached.
 /// A player's picture.
 ///
 /// Held for a minute and no longer. Its name is derived from who the player is
 /// rather than from what the picture holds, so somebody who sends a new one keeps
-/// the name they had — and an address that never changes with a long life on it is
-/// a picture nobody sees replaced.
+/// the name they had, and this path on its own cannot tell the two apart. What the
+/// map asks for carries the time the picture was drawn as a query, which changes
+/// when the picture does; the minute here is what stands behind anyone who asks
+/// for the bare path instead.
 fn png(bytes: Vec<u8>) -> Response<Cursor<Vec<u8>>> {
     let mut response = Response::from_data(bytes);
     if let Ok(header) = Header::from_bytes(&b"Content-Type"[..], &b"image/png"[..]) {
@@ -1123,6 +1214,11 @@ fn png(bytes: Vec<u8>) -> Response<Cursor<Vec<u8>>> {
     response
 }
 
+/// A response that says how long it may be kept.
+///
+/// One `Cache-Control` and one only: two of them is not a stronger instruction,
+/// it is an ambiguous one, and a browser takes the first — so an `immutable`
+/// added after a `no-store` is an asset that is never cached and looks cached.
 fn cached(body: &str, content_type: &str, keep: &str) -> Response<Cursor<Vec<u8>>> {
     let mut response = Response::from_data(body.as_bytes().to_vec());
     if let Ok(header) = Header::from_bytes(&b"Content-Type"[..], content_type.as_bytes()) {
@@ -1208,6 +1304,21 @@ mod tests {
 
         assert_eq!(portrait_name("/portraits/abc.svg"), None, "only png");
         assert_eq!(portrait_name("/icons/abc.png"), None, "not an icon");
+    }
+
+    #[test]
+    fn a_query_value_is_matched_by_its_whole_name() {
+        assert_eq!(since_of("/info.json?since=7"), Some(7));
+        assert_eq!(block_asked("/block.json?x=-412&z=88"), Some((-412, 88)));
+        assert_eq!(block_asked("/block.json?z=88&x=-412"), Some((-412, 88)));
+
+        // A name that merely starts the same is a different name.
+        assert_eq!(param("/info.json?sincerely=7", "since"), None);
+        assert_eq!(param("/block.json?xz=1", "x"), None);
+
+        assert_eq!(since_of("/info.json"), None, "no query at all");
+        assert_eq!(block_asked("/block.json?x=1"), None, "half a position is nowhere");
+        assert_eq!(block_asked("/block.json?x=1&z=here"), None, "z is a number");
     }
 
     #[test]

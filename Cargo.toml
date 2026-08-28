@@ -1,9 +1,9 @@
 [package]
-name = "mapstique"
-version = "0.16.0"
+name = "witchlight"
+version = "0.16.1"
 edition = "2024"
 description = "Renders and serves a browsable map from Vintage Story world exports"
-license = "MIT OR Apache-2.0"
+license = "MIT"
 
 [dependencies]
 image = { version = "0.25.9", default-features = false, features = ["png"] }

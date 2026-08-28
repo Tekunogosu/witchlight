@@ -19,6 +19,11 @@
 //! Season is where the chunk sits in the year. It is per chunk rather than per
 //! column because seasons vary by latitude and not across thirty-two blocks.
 //!
+//! Temperature and rainfall are the game's own packing of a column's climate, so
+//! the colour maps can be sampled with them unchanged. [`Column::celsius`] and
+//! [`Column::wetness`] read them back out for anyone who wants the numbers rather
+//! than the colour.
+//!
 //! Records are fixed size, so a region is one length check and a stride.
 
 use std::collections::HashMap;
@@ -59,6 +64,25 @@ pub struct Column {
     pub season: u8,
 }
 
+impl Column {
+    /// The climate temperature here, in degrees celsius.
+    ///
+    /// The mod packs it with the game's own `Climate.DescaleTemperature`, which
+    /// puts -20 °C at 0 and 40 °C at 255 and clamps outside that; this is that
+    /// inverse. It is the world-generation climate rather than the weather: what
+    /// grows here, not what it is like outside today.
+    #[must_use]
+    pub fn celsius(&self) -> f32 {
+        f32::from(self.temperature) / 4.25 - 20.0
+    }
+
+    /// Rainfall, from bone dry at zero to the wettest the game has at one.
+    #[must_use]
+    pub fn wetness(&self) -> f32 {
+        f32::from(self.rainfall) / 255.0
+    }
+}
+
 pub struct Chunk {
     pub columns: Vec<Column>,
 }
@@ -86,7 +110,7 @@ impl Region {
 
     fn parse(data: &[u8], path: &Path) -> Result<Self> {
         if data.len() < HEADER_BYTES || &data[..4] != MAGIC {
-            return Err(Error::parse(path, "not a Mapstique region"));
+            return Err(Error::parse(path, "not a Witchlight region"));
         }
 
         let version = u16::from_le_bytes([data[4], data[5]]);
@@ -171,7 +195,7 @@ impl World {
             // picks it up.
             match Region::read(&path) {
                 Ok(region) => world.apply(region),
-                Err(error) => eprintln!("mapstique: skipping {}: {error}", path.display()),
+                Err(error) => eprintln!("witchlight: skipping {}: {error}", path.display()),
             }
         }
 
@@ -266,4 +290,36 @@ pub fn region_coords(path: &Path) -> Option<(i32, i32)> {
     let rest = name.strip_prefix("r.")?.strip_suffix(".msqr")?;
     let (x, z) = rest.split_once('.')?;
     Some((x.parse().ok()?, z.parse().ok()?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn column(temperature: u8, rainfall: u8) -> Column {
+        Column { block: 0, height: 0, temperature, rainfall, season: 0 }
+    }
+
+    /// The packing is the game's, not this program's, and the game's own
+    /// documentation for it states a range it does not use — so these rows come
+    /// from calling `Climate.DescaleTemperature` rather than from reading about
+    /// it. A byte covers -20 °C to 40 °C, and nothing outside that survives the
+    /// export at all.
+    #[test]
+    fn a_packed_temperature_reads_back_as_degrees() {
+        for (byte, celsius) in [(0u8, -20.0), (85, 0.0), (170, 20.0), (255, 40.0)] {
+            let read = column(byte, 0).celsius();
+            assert!(
+                (read - celsius).abs() < 0.2,
+                "byte {byte} should be about {celsius} °C, read {read}"
+            );
+        }
+    }
+
+    #[test]
+    fn rainfall_runs_from_dry_to_wettest() {
+        assert!((column(0, 0).wetness() - 0.0).abs() < f32::EPSILON);
+        assert!((column(0, 255).wetness() - 1.0).abs() < f32::EPSILON);
+        assert!((column(0, 128).wetness() - 0.5).abs() < 0.01);
+    }
 }

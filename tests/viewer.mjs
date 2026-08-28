@@ -38,12 +38,18 @@ const TILE = constant(server, /const TILE: u32 = (\d+)/, 'TILE in server.rs');
 const BEYOND = constant(source, /const ZOOM_IN_BEYOND_NATIVE = (\d+)/, 'ZOOM_IN_BEYOND_NATIVE');
 const NATIVE = constant(source, /const NATIVE_ZOOM = (\d+)/, 'NATIVE_ZOOM');
 
-const { scaleAt, levelFor, tileKey, zoomFor } = new Function(`
+const GRID_MIN = constant(source, /const GRID_MIN_PIXELS = (\d+)/, 'GRID_MIN_PIXELS');
+
+const { scaleAt, levelFor, tileKey, zoomFor, gridFloor, chunkLines, portraitSrc } = new Function(`
+  const GRID_MIN_PIXELS = ${GRID_MIN};
   ${lift('scaleAt')}
   ${lift('levelFor')}
   ${lift('tileKey')}
   ${lift('zoomFor')}
-  return { scaleAt, levelFor, tileKey, zoomFor };
+  ${lift('gridFloor')}
+  ${lift('chunkLines')}
+  ${lift('portraitSrc')}
+  return { scaleAt, levelFor, tileKey, zoomFor, gridFloor, chunkLines, portraitSrc };
 `)();
 
 let failed = 0;
@@ -129,6 +135,39 @@ for (let zoom = NATIVE - 11; zoom <= NATIVE + BEYOND; zoom++) {
     Math.abs(zoomFor(scaleAt(zoom, NATIVE), NATIVE) - zoom) < 1e-9);
 }
 
+console.log('\nthe chunk grid stops where a chunk stops being worth outlining');
+// The grid is a tile layer, so this floor is what stops Leaflet asking for a
+// screenful of canvases per pan at a zoom where every one of them comes back
+// blank — and, on the other side of it, what stops the grid becoming the map.
+for (const chunk of [16, 32, 64]) {
+  const floor = gridFloor(chunk, NATIVE);
+  check(`a ${chunk} block chunk floors at zoom ${floor}, which is ${GRID_MIN}px across`,
+    Math.abs(chunk * scaleAt(floor, NATIVE) - GRID_MIN) < 1e-9);
+  check(`  and one level below it is under ${GRID_MIN}px`,
+    chunk * scaleAt(floor - 1, NATIVE) < GRID_MIN);
+  check(`  while the finest level is well above it`, floor < NATIVE);
+}
+
+console.log('\nevery chunk line is drawn once, by the tile it starts');
+// Tiles are drawn side by side and each is a separate canvas, so a line on a
+// shared edge is either drawn twice — half a pixel apart, which reads as a
+// double line — or not at all. Which tile owns it has to be decided once.
+for (const chunk of [16, 32]) {
+  for (const level of [0, 1, 2]) {
+    const scale = Math.pow(2, -level);
+    const blocks = TILE / scale;
+    for (const tile of [-2, -1, 0, 1, 7]) {
+      const lines = chunkLines(tile * blocks, blocks, chunk, scale);
+      check(`level ${level}, chunk ${chunk}, tile ${tile}: ${lines.length} lines`,
+        lines.length === blocks / chunk);
+      check(`  the first is on the tile's own edge`, lines[0] === 0.5);
+      check(`  and the last stops short of the next tile's`, lines[lines.length - 1] < TILE);
+      check(`  spaced ${chunk * scale}px apart`,
+        lines.every((at, i) => Math.abs(at - (0.5 + i * chunk * scale)) < 1e-9));
+    }
+  }
+}
+
 console.log('\nthe layer is told the zoom range the map actually uses');
 // Leaflet's tile layer defaults to a maximum zoom of 18 and checks the map's raw
 // zoom against it before clamping to the finest level. Leaving that default meant
@@ -143,6 +182,26 @@ check('the layer states its own maxZoom rather than inheriting 18',
   stated('maxZoom') === 'NATIVE_ZOOM + ZOOM_IN_BEYOND_NATIVE');
 check('the layer states its own minZoom', stated('minZoom') !== null);
 check(`which covers the map's ceiling of ${NATIVE + BEYOND}`, NATIVE + BEYOND > 18);
+
+console.log('\na redrawn player gets a new address to fetch');
+// A portrait is filed under its player, so the name is the same before and after
+// somebody is redrawn. If the address were the name alone, the card would compare
+// equal to itself and the browser would be entitled to keep the picture it had —
+// which is exactly what made a new portrait need the page reloading.
+const drawnAt = at => portraitSrc({ Portrait: 'a0ff', PortraitAt: at });
+check('a player with no picture has no address', portraitSrc({ Name: 'Bo' }) === '');
+check('an address is under the stored name',
+  drawnAt(1000).startsWith('/portraits/a0ff.png'));
+check('the same picture keeps the same address', drawnAt(1000) === drawnAt(1000));
+check('a picture drawn again does not', drawnAt(1000) !== drawnAt(1001));
+check('a picture with no time still resolves to something fetchable',
+  portraitSrc({ Portrait: 'a0ff' }) === '/portraits/a0ff.png?v=0');
+
+// The card rebuilds its face when this string changes and leaves it alone when it
+// does not, so the address changing is the whole of what makes a new picture show.
+const look = source.slice(source.indexOf('const look = '), source.indexOf('if (card.look !== look)'));
+check('the card compares the address rather than the name behind it',
+  look.includes('portraitSrc(player)') && !look.includes('player.Portrait'));
 
 console.log(failed === 0 ? '\nall checks passed' : `\n${failed} FAILED`);
 process.exit(failed === 0 ? 0 : 1);

@@ -419,7 +419,7 @@ mod tests {
 
     impl Scratch {
         fn new(name: &str) -> Self {
-            let at = std::env::temp_dir().join(format!("mapstique-test-{name}"));
+            let at = std::env::temp_dir().join(format!("witchlight-test-{name}"));
             let _ = std::fs::remove_dir_all(&at);
             std::fs::create_dir_all(&at).expect("a scratch directory");
             Self(at)

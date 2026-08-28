@@ -25,7 +25,7 @@ fn the_viewer_asks_for_no_more_tiles_than_it_can_afford() {
                 "node is needed to run the viewer's tests, and is not on the path.\n\
                  The viewer is JavaScript and is tested as JavaScript; there is no\n\
                  second copy of this arithmetic in Rust to check instead.\n\
-                 Install node, or set MAPSTIQUE_SKIP_VIEWER_TESTS=1 to go without."
+                 Install node, or set WITCHLIGHT_SKIP_VIEWER_TESTS=1 to go without."
             );
         }
         Err(error) => panic!("could not run {}: {error}", script.display()),

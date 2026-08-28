@@ -1,5 +1,5 @@
-//! mapstique — renders and serves a browsable map from a Vintage Story world
-//! export written by the Mapstique server mod.
+//! witchlight — renders and serves a browsable map from a Vintage Story world
+//! export written by the Witchlight server mod.
 //!
 //! The mod knows the game; this knows pixels. Nothing here reads a save file or
 //! needs the game installed.
@@ -26,14 +26,14 @@ use crate::palette::Palette;
 use crate::render::Renderer;
 
 #[derive(Debug, Parser)]
-#[command(name = "mapstique", version, about = "Serve a Vintage Story world map")]
+#[command(name = "witchlight", version, about = "Serve a Vintage Story world map")]
 struct Args {
-    /// Configuration file (default: ~/.config/mapstique/config.toml).
+    /// Configuration file (default: ~/.config/witchlight/config.toml).
     #[arg(short, long, value_name = "FILE")]
     config: Option<PathBuf>,
 
     /// The Vintage Story data directory — the server's --dataPath. Exports are
-    /// read from the `mapstique` folder inside it.
+    /// read from the `witchlight` folder inside it.
     #[arg(short = 'd', long, value_name = "DIR")]
     vs_data: Option<PathBuf>,
 
@@ -78,7 +78,7 @@ fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("mapstique: {error}");
+            eprintln!("witchlight: {error}");
             ExitCode::FAILURE
         }
     }
@@ -92,7 +92,7 @@ fn run() -> Result<()> {
         let existed = config_path.exists();
         config.write(&config_path)?;
         println!(
-            "mapstique: {} settings in {}",
+            "witchlight: {} settings in {}",
             if existed { "replaced" } else { "wrote" },
             config_path.display()
         );
@@ -108,8 +108,8 @@ fn run() -> Result<()> {
     // become permanent. That is what --save-config is for.
     if args.config.is_none() && !config_path.exists() {
         match Config::default().write(&config_path) {
-            Ok(()) => println!("mapstique: wrote default settings to {}", config_path.display()),
-            Err(error) => eprintln!("mapstique: {error}"),
+            Ok(()) => println!("witchlight: wrote default settings to {}", config_path.display()),
+            Err(error) => eprintln!("witchlight: {error}"),
         }
     }
 
@@ -120,16 +120,16 @@ fn run() -> Result<()> {
 
     // Printed first and on every run: the quickest way to tell a deployed binary
     // from the one you meant to deploy.
-    println!("mapstique {}", env!("CARGO_PKG_VERSION"));
-    println!("mapstique: reading {}", exports.display());
+    println!("witchlight {}", env!("CARGO_PKG_VERSION"));
+    println!("witchlight: reading {}", exports.display());
     if world.is_empty() {
         println!(
-            "mapstique: nothing exported yet — the map fills in as the server \
+            "witchlight: nothing exported yet — the map fills in as the server \
              exports, and this page is already serving"
         );
     } else {
         println!(
-            "mapstique: {} chunks in {} regions, {}x{} blocks",
+            "witchlight: {} chunks in {} regions, {}x{} blocks",
             world.chunks.len(),
             world.regions.len(),
             max_x - min_x,
@@ -137,7 +137,7 @@ fn run() -> Result<()> {
         );
     }
     println!(
-        "mapstique: palette from {}, {} blocks, {} colour maps (game {})",
+        "witchlight: palette from {}, {} blocks, {} colour maps (game {})",
         palette.source,
         palette.named,
         palette.color_maps.len(),
@@ -145,12 +145,12 @@ fn run() -> Result<()> {
     );
 
     let coverage = Renderer::new(&world, &palette).coverage();
-    println!("mapstique: surface {}", coverage.summary());
+    println!("witchlight: surface {}", coverage.summary());
     if coverage.is_poor() {
         eprintln!(
-            "mapstique: most of the map has no colour — the palette is probably \
+            "witchlight: most of the map has no colour — the palette is probably \
              the server's own. An admin joining the game supplies a better one; \
-             see `/mapstique status` on the server."
+             see `/witchlight status` on the server."
         );
     }
 

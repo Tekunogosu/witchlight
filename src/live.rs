@@ -74,7 +74,7 @@ impl Live {
             .and_then(|()| std::fs::rename(&temporary, &self.path))
             .is_err()
         {
-            eprintln!("mapstique: could not write {}", self.path.display());
+            eprintln!("witchlight: could not write {}", self.path.display());
         }
 
         *markers = body;
@@ -125,7 +125,7 @@ pub fn markers_path(exports: &Path) -> PathBuf {
 pub fn default_api_socket(exports: &Path) -> PathBuf {
     let full = std::path::absolute(exports).unwrap_or_else(|_| exports.to_path_buf());
     let key = full.to_string_lossy();
-    PathBuf::from(format!("/tmp/mapstique-{:08x}.sock", tag(key.trim_end_matches('/'))))
+    PathBuf::from(format!("/tmp/witchlight-{:08x}.sock", tag(key.trim_end_matches('/'))))
 }
 
 /// FNV-1a, 32 bits. Short, and simple enough that the mod computes the same

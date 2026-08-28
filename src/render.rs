@@ -9,7 +9,7 @@ use image::RgbImage;
 use rayon::prelude::*;
 
 use crate::color::Rgb;
-use crate::columns::World;
+use crate::columns::{Column, World};
 use crate::palette::Palette;
 
 /// Per-position variation for the season tint's second axis, standing in for the
@@ -34,6 +34,47 @@ pub struct Renderer<'a> {
     pub palette: &'a Palette,
 }
 
+/// What is at one column, read once and used everywhere.
+///
+/// The renderer paints this, the coverage report counts it, and the viewer's
+/// inspector says it out loud. Three readings of the same four-way decision is
+/// three chances for the map to name a block it did not draw, so there is one.
+#[derive(Debug, Clone, Copy)]
+pub enum Surface {
+    /// Nothing has been exported here.
+    Unmapped,
+    /// A block the palette has never heard of, drawn loud on purpose.
+    Unknown { column: Column },
+    /// Known to the palette with nothing to draw: air and the other invisibles.
+    Blank { column: Column },
+    /// A colour, before the slope shading.
+    Painted { column: Column, color: Rgb },
+}
+
+impl Surface {
+    /// The column behind it, where anything was exported.
+    #[must_use]
+    pub const fn column(&self) -> Option<Column> {
+        match *self {
+            Self::Unmapped => None,
+            Self::Unknown { column } | Self::Blank { column } | Self::Painted { column, .. } => {
+                Some(column)
+            }
+        }
+    }
+
+    /// One word for how this column read, as the map reports it.
+    #[must_use]
+    pub const fn state(&self) -> &'static str {
+        match self {
+            Self::Unmapped => "unmapped",
+            Self::Unknown { .. } => "unknown",
+            Self::Blank { .. } => "blank",
+            Self::Painted { .. } => "painted",
+        }
+    }
+}
+
 /// How the exported surface actually resolves against the palette.
 ///
 /// The difference between "the map is empty" and "the map is grey" is the
@@ -52,6 +93,19 @@ pub struct Coverage {
 }
 
 impl Coverage {
+    /// Counts one column, however it read. A position with nothing exported is
+    /// not a column and is not counted: coverage walks the chunks that exist.
+    fn count(&mut self, surface: Surface) {
+        let counted = match surface {
+            Surface::Unmapped => return,
+            Surface::Painted { .. } => &mut self.painted,
+            Surface::Blank { .. } => &mut self.blank,
+            Surface::Unknown { .. } => &mut self.unknown,
+        };
+        *counted += 1;
+        self.columns += 1;
+    }
+
     #[must_use]
     pub fn summary(&self) -> String {
         if self.columns == 0 {
@@ -79,17 +133,32 @@ impl<'a> Renderer<'a> {
         Self { world, palette }
     }
 
+    /// What is at one block position.
+    ///
+    /// The whole of the reading: whether anything was exported, whether the
+    /// palette has heard of it, and what colour it comes out before the light.
+    #[must_use]
+    pub fn surface_at(&self, x: i32, z: i32) -> Surface {
+        let Some(column) = self.world.column_at(x, z) else {
+            return Surface::Unmapped;
+        };
+
+        match self.palette.color_of(column.block, &column, variation(x, z)) {
+            Some(color) => Surface::Painted { column, color },
+            None if self.palette.knows(column.block) => Surface::Blank { column },
+            None => Surface::Unknown { column },
+        }
+    }
+
     /// Classifies every exported column, without drawing anything.
     #[must_use]
     pub fn coverage(&self) -> Coverage {
         let mut coverage = Coverage::default();
-        for chunk in self.world.chunks.values() {
-            for column in &chunk.columns {
-                coverage.columns += 1;
-                match self.palette.color_of(column.block, column, 128) {
-                    Some(_) => coverage.painted += 1,
-                    None if self.palette.knows(column.block) => coverage.blank += 1,
-                    None => coverage.unknown += 1,
+        let edge = self.world.edge as i32;
+        for &(chunk_x, chunk_z) in self.world.chunks.keys() {
+            for dz in 0..edge {
+                for dx in 0..edge {
+                    coverage.count(self.surface_at(chunk_x * edge + dx, chunk_z * edge + dz));
                 }
             }
         }
@@ -124,17 +193,11 @@ impl<'a> Renderer<'a> {
     }
 
     fn pixel(&self, x: i32, z: i32) -> Rgb {
-        let Some(column) = self.world.column_at(x, z) else {
-            return UNMAPPED;
-        };
-
-        let base = match self.palette.color_of(column.block, &column, variation(x, z)) {
-            Some(color) => color,
-            None if self.palette.knows(column.block) => return UNMAPPED,
-            None => UNKNOWN_BLOCK,
-        };
-
-        base.scale(self.shade(x, z, column.height))
+        match self.surface_at(x, z) {
+            Surface::Unmapped | Surface::Blank { .. } => UNMAPPED,
+            Surface::Unknown { column } => UNKNOWN_BLOCK.scale(self.shade(x, z, column.height)),
+            Surface::Painted { column, color } => color.scale(self.shade(x, z, column.height)),
+        }
     }
 
     /// Slope shading. Comparing against the north and west neighbours lights the

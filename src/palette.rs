@@ -55,6 +55,13 @@ pub struct Palette {
     pub source: String,
     /// Indexed by block id, which is what the exported columns carry.
     by_id: Vec<Appearance>,
+    /// Every block's code in this world — `game:rock-granite` — indexed the same
+    /// way `by_id` is.
+    ///
+    /// A colour cannot say what it is a colour of, and the map's inspector is
+    /// asked exactly that. Held beside the appearances rather than inside them,
+    /// so the type the renderer copies for every pixel stays small and `Copy`.
+    codes: Vec<Option<Box<str>>>,
     pub color_maps: Vec<ColorMap>,
     pub named: usize,
 }
@@ -107,9 +114,11 @@ impl Palette {
 
         let highest = raw.blocks.values().map(|entry| entry.id).max().unwrap_or(0);
         let mut by_id = vec![Appearance::default(); highest as usize + 1];
+        let mut codes = vec![None; highest as usize + 1];
         // Every entry is marked known, colour or not, so the renderer can tell an
         // invisible block from one this palette has never heard of.
-        for entry in raw.blocks.values() {
+        for (code, entry) in &raw.blocks {
+            codes[entry.id as usize] = Some(Box::from(code.as_str()));
             by_id[entry.id as usize] = Appearance {
                 base: entry
                     .rgb
@@ -128,6 +137,7 @@ impl Palette {
             source: if raw.source.is_empty() { "unknown".to_owned() } else { raw.source },
             named: raw.blocks.len(),
             by_id,
+            codes,
             color_maps,
         })
     }
@@ -136,6 +146,14 @@ impl Palette {
     #[must_use]
     pub fn knows(&self, block: u16) -> bool {
         self.by_id.get(block as usize).is_some_and(|a| a.known)
+    }
+
+    /// What this block is called in this world — `game:rock-granite`. `None` for
+    /// a block the palette has never heard of, which is the same thing `knows`
+    /// says no to.
+    #[must_use]
+    pub fn code_of(&self, block: u16) -> Option<&str> {
+        self.codes.get(block as usize)?.as_deref()
     }
 
     /// The colour of one column, tinted for where and when it is.
