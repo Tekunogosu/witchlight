@@ -1,0 +1,422 @@
+//! Markers asked for on the web, waiting for the game to make them.
+//!
+//! The two halves talk one way. The mod posts to this service and reads what it
+//! answers; nothing here can reach into a game server, which may not even be on
+//! the same machine. So a marker somebody types into the map's form is not sent
+//! to the game — it is held here until the mod collects it, which it does on the
+//! tick that already posts positions.
+//!
+//! What is held is small and short lived, so it is held in memory. A service that
+//! restarts loses whatever had not been collected, which costs one form; writing
+//! every marker to disk on the way past would cost a write per marker to save a
+//! case that already ends in the person seeing their marker did not appear.
+//!
+//! A marker is named here rather than by the game. The browser that asked has to
+//! recognise its own marker among everybody else's when it arrives, and a name
+//! minted at the moment of asking is the only thing both ends can agree on before
+//! the marker exists. The mod makes the waypoint under that same name.
+
+use std::sync::Mutex;
+
+/// How many may wait to be collected.
+///
+/// The mod empties this every couple of seconds, so anything approaching this is
+/// a game server that is not running rather than a busy map. Bounded because the
+/// queue is filled by anyone with a session and drained by something that may
+/// never come back.
+const MOST_WAITING: usize = 64;
+
+/// The most a marker's name may be. Longer is a paragraph, not a name.
+const LONGEST_TITLE: usize = 128;
+
+/// The most an icon's name may be. Longer is not one of the game's.
+const LONGEST_ICON: usize = 64;
+
+/// One marker somebody asked for.
+///
+/// PascalCase on the wire, because the only thing that reads it is a C# mod and
+/// this is the same wire as the rest of what the two halves say to each other.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct Wanted {
+    /// The guid the waypoint will be made under.
+    pub key: String,
+    /// Whose marker it will be, taken from their session and never from the page.
+    pub uid: String,
+    pub title: String,
+    pub icon: String,
+    pub color: String,
+    pub x: i32,
+    pub y: i32,
+    pub z: i32,
+    /// Whether its owner asked to keep it to themselves.
+    pub private: bool,
+}
+
+/// What a browser sent. Every field of it is a claim, and none is taken as read.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct Asked {
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    icon: String,
+    #[serde(default)]
+    color: String,
+    x: i32,
+    y: i32,
+    z: i32,
+    #[serde(default)]
+    private: bool,
+}
+
+impl Wanted {
+    /// What a page asked for, checked, and named.
+    ///
+    /// The owner comes from the session rather than the body: a page that could
+    /// say whose marker it is making is a page that can make a marker for anyone.
+    ///
+    /// The error is what to tell the person, so each says which field was wrong.
+    /// A form that says only "bad request" is a form somebody retypes at random.
+    pub fn asked(uid: &str, body: &str) -> Result<Self, &'static str> {
+        let Ok(asked) = serde_json::from_str::<Asked>(body) else {
+            return Err("expected a marker: a title, an icon, a colour and a place");
+        };
+
+        let title = asked.title.trim();
+        if title.chars().count() > LONGEST_TITLE {
+            return Err("that name is too long");
+        }
+
+        let Some(icon) = stored_name(asked.icon.trim()) else {
+            return Err("that is not one of the marker pictures");
+        };
+
+        let Some(color) = css_colour(asked.color.trim()) else {
+            return Err("a colour is six hex digits behind a hash");
+        };
+
+        Ok(Self {
+            key: guid(),
+            uid: uid.to_owned(),
+            title: title.to_owned(),
+            icon,
+            color,
+            x: asked.x,
+            y: asked.y,
+            z: asked.z,
+            private: asked.private,
+        })
+    }
+}
+
+/// A change to a marker that already exists.
+///
+/// The whole marker rather than the parts that moved: the form holds all of it,
+/// and a patch of only what differs would need the far end to work out what
+/// "differs" meant against a marker somebody else may have moved since.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct Edit {
+    /// The guid of the waypoint to change.
+    pub key: String,
+    /// Who asked. The mod checks this against the waypoint before anything moves.
+    pub uid: String,
+    pub title: String,
+    pub icon: String,
+    pub color: String,
+    pub x: i32,
+    pub y: i32,
+    pub z: i32,
+    pub private: bool,
+}
+
+impl Edit {
+    /// A change a page asked for, checked the same way a new marker is.
+    pub fn asked(uid: &str, key: &str, body: &str) -> Result<Self, &'static str> {
+        let wanted = Wanted::asked(uid, body)?;
+        if !named(key) {
+            return Err("that is not a marker this map made");
+        }
+        Ok(Self {
+            key: key.to_owned(),
+            uid: wanted.uid,
+            title: wanted.title,
+            icon: wanted.icon,
+            color: wanted.color,
+            x: wanted.x,
+            y: wanted.y,
+            z: wanted.z,
+            private: wanted.private,
+        })
+    }
+}
+
+/// Everything waiting, in the shape the mod collects it in.
+#[derive(Debug, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct Collected {
+    pub make: Vec<Wanted>,
+    pub change: Vec<Edit>,
+}
+
+/// Every marker asked for and not yet collected.
+#[derive(Default)]
+pub struct Pending {
+    waiting: Mutex<Collected>,
+}
+
+impl Pending {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Holds one new marker for the mod to collect. False where there is no room,
+    /// which is a game server that has stopped collecting.
+    pub fn want(&self, wanted: Wanted) -> bool {
+        self.hold(|waiting| waiting.make.push(wanted))
+    }
+
+    /// Holds one change. Bounded with the rest: the two share a queue because
+    /// they share the one thing that empties it.
+    pub fn change(&self, edit: Edit) -> bool {
+        self.hold(|waiting| waiting.change.push(edit))
+    }
+
+    /// Room for one more, and the putting of it. The bound is over both lists,
+    /// because what fills them is one page and what empties them is one ask.
+    fn hold(&self, put: impl FnOnce(&mut Collected)) -> bool {
+        let Ok(mut waiting) = self.waiting.lock() else {
+            return false;
+        };
+        if waiting.make.len() + waiting.change.len() >= MOST_WAITING {
+            return false;
+        }
+        put(&mut waiting);
+        true
+    }
+
+    /// Gives the mod everything waiting, and keeps none of it.
+    ///
+    /// Emptied on collection rather than on confirmation. A reply lost on the way
+    /// back loses what was in it, which is one form to fill in again; holding
+    /// each until the mod said it was done would put the same marker on the map
+    /// twice every time an answer went missing.
+    pub fn take(&self) -> Collected {
+        self.waiting.lock().map(|mut waiting| std::mem::take(&mut *waiting)).unwrap_or_default()
+    }
+
+    /// How many are waiting.
+    ///
+    /// Told to the page, so a form whose marker has not appeared can say whether
+    /// the game server has stopped collecting or is merely slow. Those look the
+    /// same from a browser and are not the same problem.
+    #[must_use]
+    pub fn waiting(&self) -> usize {
+        self.waiting.lock().map_or(0, |waiting| waiting.make.len() + waiting.change.len())
+    }
+}
+
+/// A fresh name for a marker, shaped the way the game shapes its own.
+///
+/// The game writes a waypoint's guid with `Guid.NewGuid().ToString()` and this
+/// name is used as one verbatim, so it is spelled the same way. Nothing parses it
+/// today; a name that would not parse is a trap left for whatever does.
+fn guid() -> String {
+    let word = crate::random::word(16);
+    format!(
+        "{}-{}-{}-{}-{}",
+        &word[0..8],
+        &word[8..12],
+        &word[12..16],
+        &word[16..20],
+        &word[20..32]
+    )
+}
+
+/// Whether this is a name this map hands out: a guid, as `Wanted` mints them.
+///
+/// What arrives here reaches the mod as the identity of a waypoint to change, so
+/// it is checked for shape rather than taken as a string. A page cannot name a
+/// waypoint the map never named.
+fn named(key: &str) -> bool {
+    key.len() == 36
+        && key
+            .split('-')
+            .map(str::len)
+            .eq([8, 4, 4, 4, 12])
+        && key.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
+}
+
+/// A colour a browser sent, as the mod will store it. Lowercased, so the same
+/// colour typed two ways is one colour.
+fn css_colour(said: &str) -> Option<String> {
+    let digits = said.strip_prefix('#')?;
+    if digits.len() != 6 || !digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(format!("#{}", digits.to_ascii_lowercase()))
+}
+
+/// An icon name that could be a file this service serves.
+///
+/// The same rule the icon route applies, and for the same reason: a name arriving
+/// from a page reaches a path, and a path is not a thing to be trusting about.
+/// Empty is the game's own default rather than a refusal — a form nobody chose a
+/// picture on is a plain marker, not an error.
+fn stored_name(said: &str) -> Option<String> {
+    if said.is_empty() {
+        return Some("circle".to_owned());
+    }
+    if said.len() > LONGEST_ICON {
+        return None;
+    }
+    said.chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        .then(|| said.to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const BODY: &str = r##"
+        {"Title":"home","Icon":"home","Color":"#C8772E","X":10,"Y":110,"Z":-4,"Private":true}
+    "##;
+
+    #[test]
+    fn a_marker_is_taken_as_the_form_filled_it_in() {
+        let wanted = Wanted::asked("uid-ada", BODY).expect("a whole marker");
+        assert_eq!(wanted.uid, "uid-ada");
+        assert_eq!(wanted.title, "home");
+        assert_eq!(wanted.icon, "home");
+        assert_eq!((wanted.x, wanted.y, wanted.z), (10, 110, -4));
+        assert!(wanted.private);
+
+        // Lowercased on the way in, so what the mod stores and what the page next
+        // reads back are the same six digits.
+        assert_eq!(wanted.color, "#c8772e");
+    }
+
+    #[test]
+    fn the_owner_is_the_session_and_never_the_page() {
+        // A page saying whose marker it is making is a page making one for anyone.
+        let claiming = r##"{"Uid":"uid-bob","OwnerUid":"uid-bob","Color":"#ffffff","X":0,"Y":0,"Z":0}"##;
+        let wanted = Wanted::asked("uid-ada", claiming).expect("a marker");
+        assert_eq!(wanted.uid, "uid-ada");
+    }
+
+    #[test]
+    fn a_marker_with_no_picture_gets_the_game_s_own() {
+        let bare = r##"{"Color":"#ffffff","X":0,"Y":0,"Z":0}"##;
+        assert_eq!(Wanted::asked("uid-ada", bare).expect("a marker").icon, "circle");
+    }
+
+    #[test]
+    fn nothing_that_would_not_draw_is_taken() {
+        for (body, why) in [
+            (r##"{"Color":"#ffffff"}"##, "no place"),
+            (r##"{"Color":"ffffff","X":0,"Y":0,"Z":0}"##, "a colour with no hash"),
+            (r##"{"Color":"#fff","X":0,"Y":0,"Z":0}"##, "a short colour"),
+            (r##"{"Color":"#gggggg","X":0,"Y":0,"Z":0}"##, "a colour that is not hex"),
+            (r##"{"Icon":"../secret","Color":"#ffffff","X":0,"Y":0,"Z":0}"##, "a path"),
+            (r##"{"Icon":"a/b","Color":"#ffffff","X":0,"Y":0,"Z":0}"##, "a slash"),
+            ("not json at all", "not json"),
+        ] {
+            assert!(Wanted::asked("uid-ada", body).is_err(), "{why} must not be taken");
+        }
+    }
+
+    #[test]
+    fn a_name_longer_than_a_name_is_refused() {
+        let long = "n".repeat(LONGEST_TITLE + 1);
+        let body = format!(r##"{{"Title":"{long}","Color":"#ffffff","X":0,"Y":0,"Z":0}}"##);
+        assert!(Wanted::asked("uid-ada", &body).is_err());
+
+        let just = "n".repeat(LONGEST_TITLE);
+        let body = format!(r##"{{"Title":"{just}","Color":"#ffffff","X":0,"Y":0,"Z":0}}"##);
+        assert!(Wanted::asked("uid-ada", &body).is_ok());
+    }
+
+    const KEY: &str = "9e5738f0-303a-673d-a328-f19e0d08e7d1";
+
+    #[test]
+    fn what_is_held_is_given_up_once() {
+        let pending = Pending::new();
+        let wanted = Wanted::asked("uid-ada", BODY).expect("a marker");
+        let edit = Edit::asked("uid-ada", KEY, BODY).expect("a change");
+        assert!(pending.want(wanted.clone()));
+        assert!(pending.change(edit.clone()));
+        assert_eq!(pending.waiting(), 2);
+
+        let taken = pending.take();
+        assert_eq!(taken.make, vec![wanted]);
+        assert_eq!(taken.change, vec![edit]);
+        assert_eq!(pending.waiting(), 0, "collecting empties it");
+        let again = pending.take();
+        assert!(
+            again.make.is_empty() && again.change.is_empty(),
+            "and a second collection finds nothing"
+        );
+    }
+
+    #[test]
+    fn a_change_is_checked_the_way_a_new_marker_is() {
+        let edit = Edit::asked("uid-ada", KEY, BODY).expect("a change");
+        assert_eq!(edit.key, KEY);
+        assert_eq!(edit.uid, "uid-ada");
+        assert_eq!(edit.color, "#c8772e");
+
+        // The same refusals, because it is the same form behind it.
+        let bad = r##"{"Color":"nonsense","X":0,"Y":0,"Z":0}"##;
+        assert!(Edit::asked("uid-ada", KEY, bad).is_err());
+    }
+
+    #[test]
+    fn only_a_name_this_map_hands_out_can_be_changed() {
+        // What arrives here reaches the mod as the identity of a waypoint, so a
+        // page must not be able to name one this map never named.
+        for key in [
+            "",
+            "not-a-guid",
+            "../../etc/passwd",
+            "9e5738f0303a673da328f19e0d08e7d1",
+            "9e5738f0-303a-673d-a328-f19e0d08e7d",
+            "9e5738g0-303a-673d-a328-f19e0d08e7d1",
+        ] {
+            assert!(Edit::asked("uid-ada", key, BODY).is_err(), "{key:?} must not be taken");
+        }
+    }
+
+    #[test]
+    fn a_queue_nobody_is_collecting_does_not_grow_without_end() {
+        let pending = Pending::new();
+        for _ in 0..MOST_WAITING {
+            assert!(pending.want(Wanted::asked("uid-ada", BODY).expect("a marker")));
+        }
+        assert!(
+            !pending.want(Wanted::asked("uid-ada", BODY).expect("a marker")),
+            "a game server that stopped collecting must not fill this process"
+        );
+        assert!(
+            !pending.change(Edit::asked("uid-ada", KEY, BODY).expect("a change")),
+            "and the bound is over both, since one page fills them and one ask empties them"
+        );
+    }
+
+    #[test]
+    fn every_marker_is_named_differently_and_shaped_like_a_guid() {
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..100 {
+            let key = Wanted::asked("uid-ada", BODY).expect("a marker").key;
+            assert_eq!(key.len(), 36, "{key} is not a guid\'s length");
+            assert_eq!(
+                key.split('-').map(str::len).collect::<Vec<_>>(),
+                vec![8, 4, 4, 4, 12],
+                "{key} is not a guid\'s shape"
+            );
+            assert!(seen.insert(key), "a marker\'s name came round twice");
+        }
+    }
+}

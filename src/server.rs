@@ -17,9 +17,12 @@ use crate::api::Api;
 use crate::auth::{Sessions, Who};
 use crate::columns::{Region, World, columns_dir, region_coords, region_files};
 use crate::live::Live;
+use crate::pending::{Edit, Pending, Wanted};
+use crate::preferences::{Person, Preferences};
 use crate::pyramid;
 use crate::render::UNMAPPED;
 use crate::error::{Error, Result};
+use crate::config::MarkerRules;
 use crate::palette::Palette;
 use crate::render::{Renderer, Surface};
 
@@ -49,6 +52,10 @@ const HISTORY: usize = 128;
 /// broken poster from being read into memory without limit.
 const POST_LIMIT: u64 = 8 * 1024 * 1024;
 
+/// How many blocks a search answers with. A list somebody reads down, not a
+/// result set: past a screenful the answer is to type more, not to scroll.
+const MOST_BLOCKS_FOUND: usize = 24;
+
 pub fn serve(
     bind: &str,
     data: &Path,
@@ -56,7 +63,7 @@ pub fn serve(
     api: &Api,
     threads: usize,
     cache_mb: usize,
-    markers_public: bool,
+    rules: MarkerRules,
 ) -> Result<()> {
     let cache_bytes = cache_mb.max(1) * 1024 * 1024;
     let columns = columns_dir(data);
@@ -68,7 +75,11 @@ pub fn serve(
         painted: Mutex::new(modified(&data.join("palette.json"))),
         live: Arc::new(Live::load(data)),
         sessions: Arc::new(Sessions::new()),
-        markers_public,
+        pending: Arc::new(Pending::new()),
+        preferences: Arc::new(Preferences::load(data)),
+        names: RwLock::new(block_names(data)),
+        named: Mutex::new(modified(&data.join("blocknames.json"))),
+        rules,
         generation: AtomicU64::new(1),
         history: Mutex::new(VecDeque::new()),
         stale: Mutex::new(HashSet::new()),
@@ -79,7 +90,13 @@ pub fn serve(
 
     // The map is the product and live data is a garnish, so an API channel that
     // will not bind is said out loud and stepped over rather than taken as fatal.
-    if let Err(error) = serve_api(api, Arc::clone(&state.live), Arc::clone(&state.sessions), data) {
+    if let Err(error) = serve_api(
+        api,
+        Arc::clone(&state.live),
+        Arc::clone(&state.sessions),
+        Arc::clone(&state.pending),
+        data,
+    ) {
         eprintln!("witchlight: {error}");
         eprintln!(
             "witchlight: nobody will show on the map. Set `api_bind` to an address \
@@ -222,11 +239,23 @@ fn route(request: &mut Request, state: &State) -> Response<Cursor<Vec<u8>>> {
     } else if path == "/me.json" {
         json(&state.me(&cookies(request)))
     } else if path == "/live.json" {
-        // Straight through: the mod knows what a waypoint is, and this knows it
-        // is a JSON array to hand to a browser. That is the whole contract.
-        json(&state.live.body())
+        // Whose markers these are depends on who is asking, and the answer is
+        // worked out here rather than sent and filtered on the page: a browser
+        // cannot be asked to hide what it has already been handed.
+        let who = state.sessions.who(&cookies(request));
+        json(&state.live.body(who.as_ref().map(|who| who.uid.as_str())))
+    } else if path == "/markers" {
+        made(request, state)
+    } else if let Some(key) = marker_key(path) {
+        changed(request, state, key)
+    } else if path == "/me/preferences.json" || path == "/me/preferences" {
+        preferences(request, state)
+    } else if path == "/blocks.json" {
+        json(&state.blocks_like(&decoded(param(&url, "q").unwrap_or_default())))
     } else if path == "/icons.json" {
         json(&state.icons())
+    } else if path == "/colors.json" {
+        json(&state.live.colors())
     } else if let Some(name) = icon_name(path) {
         match std::fs::read(state.data.join("icons").join(format!("{name}.svg"))) {
             Ok(bytes) => svg(bytes),
@@ -257,6 +286,134 @@ fn route(request: &mut Request, state: &State) -> Response<Cursor<Vec<u8>>> {
     } else {
         text(404, "not found")
     }
+}
+
+/// What the game calls each block, as the mod last exported it.
+///
+/// Absent or unreadable is no names rather than a failure: everything that asks
+/// falls back to the block's code, which is what the page showed before there
+/// were names at all.
+fn block_names(data: &Path) -> HashMap<String, String> {
+    std::fs::read_to_string(data.join("blocknames.json"))
+        .ok()
+        .and_then(|body| serde_json::from_str(&body).ok())
+        .unwrap_or_default()
+}
+
+/// A marker somebody asked for on the map's own form.
+///
+/// The one thing the public port accepts rather than serves. It is a write, so it
+/// needs to know who is asking, and the session cookie is the whole of that — the
+/// same proof that decides whose private markers a page is sent.
+///
+/// Answers with the name the marker will be made under. Nothing has been made
+/// yet: the game has not heard of it, and will not until the mod next collects.
+/// The page watches its markers for that name to appear, which is the only honest
+/// confirmation there is — a service that said "done" here would be reporting on
+/// something it does not do.
+fn made(request: &mut Request, state: &State) -> Response<Cursor<Vec<u8>>> {
+    if *request.method() != Method::Post {
+        return text(405, "markers are made with a post");
+    }
+
+    let Some(who) = state.sessions.who(&cookies(request)) else {
+        return text(401, "run /witchlight login in the game to make a marker");
+    };
+
+    let mut body = String::new();
+    if request.as_reader().take(POST_LIMIT).read_to_string(&mut body).is_err() {
+        return text(400, "unreadable body");
+    }
+
+    let wanted = match Wanted::asked(&who.uid, &body) {
+        Ok(wanted) => wanted,
+        Err(why) => return text(400, why),
+    };
+
+    let key = wanted.key.clone();
+    if !state.pending.want(wanted) {
+        return text(503, "the game server is not collecting markers");
+    }
+
+    // Accepted, not done. The status says so, and so does the page.
+    json(&format!(r#"{{"Key":"{key}"}}"#)).with_status_code(202)
+}
+
+/// A change to a marker that already exists.
+///
+/// Whether this person may is asked twice and answered by the mod. What is
+/// decided here is only that they are somebody: the service knows who owns what
+/// from a post that is seconds old, so the gate is the half holding the waypoint.
+///
+/// Answers the same way making one does — accepted, not done — because it is the
+/// same queue and the same collection that carries it out.
+fn changed(request: &mut Request, state: &State, key: &str) -> Response<Cursor<Vec<u8>>> {
+    if *request.method() != Method::Put {
+        return text(405, "a marker is changed with a put");
+    }
+
+    let Some(who) = state.sessions.who(&cookies(request)) else {
+        return text(401, "run /witchlight login in the game to change a marker");
+    };
+
+    let mut body = String::new();
+    if request.as_reader().take(POST_LIMIT).read_to_string(&mut body).is_err() {
+        return text(400, "unreadable body");
+    }
+
+    let edit = match Edit::asked(&who.uid, key, &body) {
+        Ok(edit) => edit,
+        Err(why) => return text(400, why),
+    };
+
+    if !state.pending.change(edit) {
+        return text(503, "the game server is not collecting markers");
+    }
+
+    json(&format!(r#"{{"Key":"{key}"}}"#)).with_status_code(202)
+}
+
+/// What one person has set for themselves, and the setting of it.
+///
+/// A whole document either way rather than a field at a time. It is a handful of
+/// presets and two switches — small enough that sending all of it costs nothing,
+/// and a page that holds the lot and puts the lot back needs no merge rules and
+/// no route per field.
+fn preferences(request: &mut Request, state: &State) -> Response<Cursor<Vec<u8>>> {
+    let Some(who) = state.sessions.who(&cookies(request)) else {
+        return text(401, "run /witchlight login in the game to keep settings");
+    };
+
+    match *request.method() {
+        Method::Get => {
+            json(&serde_json::to_string(&state.preferences.of(&who.uid)).unwrap_or_default())
+        }
+        Method::Put => {
+            let mut body = String::new();
+            if request.as_reader().take(POST_LIMIT).read_to_string(&mut body).is_err() {
+                return text(400, "unreadable body");
+            }
+            let Ok(person) = serde_json::from_str::<Person>(&body) else {
+                return text(400, "expected presets and defaults");
+            };
+            if state.preferences.set(&who.uid, person) {
+                json(&serde_json::to_string(&state.preferences.of(&who.uid)).unwrap_or_default())
+            } else {
+                text(500, "those could not be kept")
+            }
+        }
+        _ => text(405, "settings are read with a get and kept with a put"),
+    }
+}
+
+/// The marker a `/markers/{key}` path names.
+///
+/// Only the shape of the path here; whether the key is a name this map ever
+/// handed out is decided where the change is read, beside everything else that
+/// arrived with it.
+fn marker_key(path: &str) -> Option<&str> {
+    let key = path.strip_prefix("/markers/")?;
+    (!key.is_empty() && !key.contains('/') && key != "pending").then_some(key)
 }
 
 /// Watches for a newer export, on its own thread and on its own clock.
@@ -318,9 +475,19 @@ struct State {
     live: Arc<Live>,
     /// Who has followed a login link. Memory only — see [`crate::auth`].
     sessions: Arc<Sessions>,
-    /// Whether a marker nobody has decided about is everyone's. An operator's
-    /// call, read here only to tell the viewer which controls to offer.
-    markers_public: bool,
+    /// Markers asked for on the map and waiting for the mod to collect them.
+    pending: Arc<Pending>,
+    /// What each person has set for themselves — their presets, and where their
+    /// new markers start. Kept against a uid and written to a file of its own.
+    preferences: Arc<Preferences>,
+    /// What the game calls each block, so that marking something can start from
+    /// its name. Empty until the mod has exported one, and reloaded when it does.
+    names: RwLock<HashMap<String, String>>,
+    /// The names file's own timestamp, which is the whole signal that it moved.
+    named: Mutex<Option<SystemTime>>,
+    /// What the operator has said about who markers belong to. Read here only to
+    /// tell the page which controls to offer; the mod is what enforces either.
+    rules: MarkerRules,
     painted: Mutex<Option<SystemTime>>,
     /// The regions directory's own timestamp, which is the cheap gate. The mod
     /// writes a region beside itself and renames it into place — it must, or a
@@ -417,7 +584,31 @@ impl State {
     /// and nothing else.
     fn refresh(&self) {
         self.refresh_palette();
+        self.refresh_names();
         self.refresh_world();
+    }
+
+    /// Rereads the block names when the mod has written them again.
+    ///
+    /// Its own timestamp, the way the palette and the regions have theirs. A mod
+    /// set changing is the only thing that moves this file, so it is checked on
+    /// the same clock as everything else and costs a stat when nothing has.
+    fn refresh_names(&self) {
+        let current = modified(&self.data.join("blocknames.json"));
+        let Ok(mut named) = self.named.lock() else {
+            return;
+        };
+        if current == *named {
+            return;
+        }
+        *named = current;
+
+        let names = block_names(&self.data);
+        let count = names.len();
+        if let Ok(mut held) = self.names.write() {
+            *held = names;
+        }
+        println!("witchlight: block names reloaded from disk — {count} named");
     }
 
     /// Takes a new palette when one appears. Colours change for every tile, so
@@ -735,8 +926,12 @@ impl State {
             return None;
         };
 
+        let Ok(names) = self.names.read() else {
+            return None;
+        };
+
         let surface = Renderer::new(&world, &palette).surface_at(x, z);
-        let body = Block::read(x, z, surface, &palette);
+        let body = Block::read(x, z, surface, &palette, &names);
         // Every field is a number, a fixed word, or a block code out of the
         // palette, so there is nothing here that can refuse to be JSON.
         serde_json::to_string(&body).ok()
@@ -758,14 +953,71 @@ impl State {
     ///
     /// Always answers, and answers the same shape logged in or not: a page that
     /// has to tell an error from a stranger has two ways to draw one state.
+    ///
+    /// `Waiting` is how many markers the game server has not collected. A form
+    /// whose marker has not appeared cannot otherwise tell a game server that has
+    /// stopped from one that is merely slow, and those are not the same problem.
     fn me(&self, cookies: &str) -> String {
         let who = self.sessions.who(cookies);
         serde_json::json!({
             "Name": who.as_ref().map(|who| who.name.clone()),
             "Uid": who.as_ref().map(|who| who.uid.clone()),
-            "MarkersPublic": self.markers_public,
+            "MarkersPublic": self.rules.public,
+            "PublicMarkersEditable": self.rules.public_editable,
+            "Waiting": self.pending.waiting(),
         })
         .to_string()
+    }
+
+    /// Blocks whose code or name reads like what somebody is typing.
+    ///
+    /// A preset is keyed on a block code, and nobody knows what
+    /// `game:smallplants-fern-normal` is called from memory. The whole table is
+    /// eleven thousand entries and several hundred kilobytes, which is not a
+    /// thing to hand a map page on the chance it opens a form — so the page asks
+    /// as it types and this answers with a screenful.
+    ///
+    /// Matched against both the code and the name, because somebody typing
+    /// "fern" and somebody typing "smallplants" are both looking for the same
+    /// block and neither is wrong.
+    fn blocks_like(&self, asked: &str) -> String {
+        let asked = asked.trim().to_ascii_lowercase();
+        if asked.is_empty() {
+            return "[]".to_owned();
+        }
+
+        let Ok(names) = self.names.read() else {
+            return "[]".to_owned();
+        };
+
+        let mut found: Vec<(&str, &str)> = names
+            .iter()
+            .filter(|(code, name)| {
+                code.to_ascii_lowercase().contains(&asked)
+                    || name.to_ascii_lowercase().contains(&asked)
+            })
+            .map(|(code, name)| (code.as_str(), name.as_str()))
+            .collect();
+
+        // What somebody typed, first. A search for "fern" that opens on
+        // `bamboo-fern-shoot` because it sorts earlier is a search that has to be
+        // read through rather than glanced at.
+        found.sort_by_key(|(code, name)| {
+            let short = code.split_once(':').map_or(*code, |(_, rest)| rest);
+            (
+                !short.to_ascii_lowercase().starts_with(&asked),
+                !name.to_ascii_lowercase().starts_with(&asked),
+                name.len(),
+                *code,
+            )
+        });
+        found.truncate(MOST_BLOCKS_FOUND);
+
+        let listed: Vec<_> = found
+            .into_iter()
+            .map(|(code, name)| serde_json::json!({ "Code": code, "Name": name }))
+            .collect();
+        serde_json::to_string(&listed).unwrap_or_else(|_| "[]".to_owned())
     }
 
     fn chunks(&self) -> usize {
@@ -935,7 +1187,13 @@ impl State {
 /// Separate from the map's own port on purpose: that one is meant to be reachable
 /// and this one accepts writes, and anything that could reach a public write
 /// endpoint could put people on the map who are not there.
-fn serve_api(api: &Api, live: Arc<Live>, sessions: Arc<Sessions>, exports: &Path) -> Result<()> {
+fn serve_api(
+    api: &Api,
+    live: Arc<Live>,
+    sessions: Arc<Sessions>,
+    pending: Arc<Pending>,
+    exports: &Path,
+) -> Result<()> {
     // Before the bind rather than after the failure: a file naming a listener
     // that does not exist sends the mod's posts at whatever holds that port now,
     // and the window where that is true should not include this function.
@@ -964,7 +1222,7 @@ fn serve_api(api: &Api, live: Arc<Live>, sessions: Arc<Sessions>, exports: &Path
     let token = Api { bind: api.bind.clone(), token: api.token.clone() };
     std::thread::spawn(move || {
         for mut request in server.incoming_requests() {
-            let response = posted(&mut request, &live, &sessions, &token);
+            let response = posted(&mut request, &live, &sessions, &pending, &token);
             if let Err(error) = request.respond(response) {
                 eprintln!("witchlight: API response failed: {error}");
             }
@@ -975,7 +1233,13 @@ fn serve_api(api: &Api, live: Arc<Live>, sessions: Arc<Sessions>, exports: &Path
 }
 
 /// One post from the mod.
-fn posted(request: &mut Request, live: &Live, sessions: &Sessions, api: &Api) -> Response<Cursor<Vec<u8>>> {
+fn posted(
+    request: &mut Request,
+    live: &Live,
+    sessions: &Sessions,
+    pending: &Pending,
+    api: &Api,
+) -> Response<Cursor<Vec<u8>>> {
     if *request.method() != Method::Post {
         return text(405, "the API channel takes posts only");
     }
@@ -1010,6 +1274,15 @@ fn posted(request: &mut Request, live: &Live, sessions: &Sessions, api: &Api) ->
         return json(&format!(r#"{{"Token":"{}"}}"#, sessions.mint(who)));
     }
 
+    // The markers people asked for on the web, which the mod cannot be sent and
+    // so comes to collect. Emptied by the asking; see `Pending::take`.
+    if path == "/markers/pending" {
+        return json(
+            &serde_json::to_string(&pending.take())
+                .unwrap_or_else(|_| r#"{"Make":[],"Change":[]}"#.to_owned()),
+        );
+    }
+
     let taken = match path {
         "/live/players" => live.set_players(body),
         "/live/markers" => live.set_markers(body),
@@ -1019,7 +1292,7 @@ fn posted(request: &mut Request, live: &Live, sessions: &Sessions, api: &Api) ->
     if taken {
         text(204, "")
     } else {
-        text(400, "expected a JSON array")
+        text(400, "expected what this build posts: an array of players, or markers sorted by who may see them")
     }
 }
 
@@ -1148,6 +1421,11 @@ struct Block {
     /// heard of, which is the whole of what `unknown` means.
     #[serde(skip_serializing_if = "Option::is_none")]
     code: Option<String>,
+    /// What the game calls it — `Granite rock`. Absent where the mod has exported
+    /// no names, or where the language files have none for this block; whatever
+    /// reads this then has the code, which is what it had before there were names.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
     /// The surface height, which is the Y a player standing here would read.
     #[serde(skip_serializing_if = "Option::is_none")]
     y: Option<i16>,
@@ -1161,14 +1439,22 @@ struct Block {
 }
 
 impl Block {
-    fn read(x: i32, z: i32, surface: Surface, palette: &Palette) -> Self {
+    fn read(
+        x: i32,
+        z: i32,
+        surface: Surface,
+        palette: &Palette,
+        names: &HashMap<String, String>,
+    ) -> Self {
         let column = surface.column();
+        let code = column.and_then(|column| palette.code_of(column.block).map(ToOwned::to_owned));
         Self {
             x,
             z,
             state: surface.state(),
             block: column.map(|column| column.block),
-            code: column.and_then(|column| palette.code_of(column.block).map(ToOwned::to_owned)),
+            name: code.as_deref().and_then(|code| names.get(code).cloned()),
+            code,
             y: column.map(|column| column.height),
             temperature: column.map(|column| column.celsius()),
             rainfall: column.map(|column| column.wetness()),
@@ -1187,6 +1473,55 @@ fn param<'a>(url: &'a str, key: &str) -> Option<&'a str> {
         .split('&')
         .filter_map(|pair| pair.split_once('='))
         .find_map(|(name, value)| (name == key).then_some(value))
+}
+
+/// A query value as the person typing it meant it.
+///
+/// Every other value read out of a query here is a number or a word of hex, and
+/// none of them has ever needed this. A search box does: a space arrives as `%20`
+/// and matching against that finds nothing at all, which reads as a search that
+/// simply has no answers rather than one that never asked the question.
+///
+/// A stray `%` that spells nothing is itself. What arrives is somebody typing,
+/// and refusing the whole search over a loose percent sign helps nobody.
+fn decoded(value: &str) -> String {
+    let raw = value.as_bytes();
+    let mut out = Vec::with_capacity(raw.len());
+    let mut at = 0;
+
+    while at < raw.len() {
+        match raw[at] {
+            b'+' => {
+                out.push(b' ');
+                at += 1;
+            }
+            b'%' if at + 2 < raw.len() => match hex(raw[at + 1]).zip(hex(raw[at + 2])) {
+                Some((high, low)) => {
+                    out.push(high * 16 + low);
+                    at += 3;
+                }
+                None => {
+                    out.push(b'%');
+                    at += 1;
+                }
+            },
+            byte => {
+                out.push(byte);
+                at += 1;
+            }
+        }
+    }
+
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn hex(digit: u8) -> Option<u8> {
+    match digit {
+        b'0'..=b'9' => Some(digit - b'0'),
+        b'a'..=b'f' => Some(digit - b'a' + 10),
+        b'A'..=b'F' => Some(digit - b'A' + 10),
+        _ => None,
+    }
 }
 
 /// The `since` of a query string, naming the generation a viewer last drew.
@@ -1468,7 +1803,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn the_page_names_the_build_and_leaves_no_placeholder_behind() {
         let page = viewer(-512, -512, 512, 512);
         assert!(
@@ -1482,6 +1816,21 @@ mod tests {
             !page.contains("__"),
             "a placeholder was left unsubstituted in the page"
         );
+    }
+
+    #[test]
+    fn a_query_value_arrives_as_it_was_typed() {
+        assert_eq!(decoded("granite%20rock"), "granite rock");
+        assert_eq!(decoded("granite+rock"), "granite rock");
+        assert_eq!(decoded("plain"), "plain");
+        assert_eq!(decoded(""), "");
+        assert_eq!(decoded("%C3%A9"), "é", "more than one byte to a letter");
+        assert_eq!(decoded("a%2Fb"), "a/b");
+
+        // Somebody typing a percent sign is not a request to refuse the search.
+        assert_eq!(decoded("100%"), "100%");
+        assert_eq!(decoded("50%z9"), "50%z9");
+        assert_eq!(decoded("%"), "%");
     }
 
     #[test]

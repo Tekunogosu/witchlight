@@ -12,6 +12,8 @@ mod config;
 mod error;
 mod live;
 mod palette;
+mod pending;
+mod preferences;
 mod pyramid;
 mod random;
 mod render;
@@ -182,7 +184,7 @@ fn run() -> Result<()> {
                 &api,
                 config.threads,
                 config.tile_cache_mb,
-                config.markers_public,
+                config.marker_rules(),
             )
         }
     }

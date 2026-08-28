@@ -15,6 +15,20 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 
+/// What the operator has decided about markers.
+///
+/// Two switches always read together, both saying who a marker belongs to when
+/// nobody has said otherwise. They travel as a pair so the half asking never has
+/// one without the other — and because a function taking eight loose arguments is
+/// a function taking a settings file badly.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MarkerRules {
+    /// Whether a marker nobody has decided about is everyone's.
+    pub public: bool,
+    /// Whether a marker anybody can see is a marker anybody can change.
+    pub public_editable: bool,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
@@ -53,6 +67,17 @@ pub struct Config {
     /// the web map shows, and those must be the same answer or the two disagree
     /// about who can see what.
     pub markers_public: bool,
+
+    /// Whether a marker anybody can see is a marker anybody can change.
+    ///
+    /// Off, because being shown something is not being handed it. An operator
+    /// running a map the server keeps together — trader routes, roads nobody
+    /// owns — turns it on, and a public marker becomes everyone's to correct. A
+    /// private marker is never anybody's but its owner's whatever this says.
+    ///
+    /// The mod reads it too, and it is the mod that enforces it: what the page
+    /// makes of this only decides whether an edit is offered.
+    pub markers_public_editable: bool,
 
     /// How many threads render tiles. Zero decides from the machine, capped so
     /// that the game server this usually shares a box with keeps its cores.
@@ -94,6 +119,7 @@ impl Default for Config {
             api_bind: String::new(),
             api_token: String::new(),
             markers_public: false,
+            markers_public_editable: false,
             threads: 0,
             tile_cache_mb: 256,
             autostart: true,
@@ -145,6 +171,12 @@ pub fn default_path() -> PathBuf {
 }
 
 impl Config {
+    /// The marker rules this settings file states.
+    #[must_use]
+    pub fn marker_rules(&self) -> MarkerRules {
+        MarkerRules { public: self.markers_public, public_editable: self.markers_public_editable }
+    }
+
     /// Loads `path`. A missing file is not an error — the defaults are a working
     /// configuration — but a malformed one is.
     pub fn load(path: &Path) -> Result<Self> {
@@ -201,6 +233,9 @@ impl Config {
              # markers_public decides a marker nobody has chosen for: off keeps\n\
              # one to its owner, on shares it with everybody. Read by the mod as\n\
              # well as here, so the in-game map and the web map agree.\n\
+             # markers_public_editable lets anybody change a marker anybody can\n\
+             # see. Off, so a public marker is readable by all and writable by\n\
+             # its owner; on, the server corrects its own map together.\n\
              # threads is how many requests are answered at once; 0 decides.\n\
              # tile_cache_mb is how much memory rendered tiles may hold.\n\
              # autostart is whether the server mod runs this service itself.\n\

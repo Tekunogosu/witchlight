@@ -15,6 +15,7 @@ import { dirname, join } from 'node:path';
 const here = dirname(fileURLToPath(import.meta.url));
 const source = readFileSync(join(here, '..', 'src', 'viewer.html'), 'utf8');
 const server = readFileSync(join(here, '..', 'src', 'server.rs'), 'utf8');
+const pending = readFileSync(join(here, '..', 'src', 'pending.rs'), 'utf8');
 
 /** Lifts one function out of the viewer, brace-matched, so nothing is duplicated. */
 function lift(name) {
@@ -26,6 +27,15 @@ function lift(name) {
     else if (source[i] === '}' && --depth === 0) return source.slice(at, i + 1);
   }
   throw new Error(`${name} is not brace balanced`);
+}
+
+/** Lifts one arrow-function constant, up to the semicolon that ends it. */
+function liftConst(name) {
+  const at = source.indexOf(`const ${name} = (`);
+  if (at < 0) throw new Error(`viewer.html no longer has a constant called ${name}`);
+  const end = source.indexOf(';', at);
+  if (end < 0) throw new Error(`${name} is not terminated`);
+  return source.slice(at, end + 1);
 }
 
 function constant(text, pattern, what) {
@@ -51,6 +61,71 @@ const { scaleAt, levelFor, tileKey, zoomFor, gridFloor, chunkLines, portraitSrc 
   ${lift('portraitSrc')}
   return { scaleAt, levelFor, tileKey, zoomFor, gridFloor, chunkLines, portraitSrc };
 `)();
+
+// The two directions of the same translation: what the page shows a reader, and
+// what a reader's numbers mean. They are used by the marker form in both
+// directions in one round trip, so one drifting from the other puts a marker a
+// spawn away from where it was typed.
+const frames = new Function(`
+  const settings = { absolute: { on: false } };
+  let spawn = { x: 0, z: 0 };
+  ${liftConst('said')}
+  ${liftConst('meant')}
+  return {
+    said, meant,
+    frame: (absolute, at) => { settings.absolute.on = absolute; spawn = at; },
+  };
+`)();
+
+// Keeping the marker window on screen. A bar dragged past an edge cannot be
+// grabbed again, and the only way back is reloading the page, so the clamp being
+// backwards in any one of four directions is a window somebody loses.
+const WINDOW_WIDE = 232;
+const windows = new Function(`
+  const windowsAt = new Map();
+  let innerWidth = 0, innerHeight = 0;
+  const panel = {
+    style: {},
+    getBoundingClientRect: () => ({ width: ${WINDOW_WIDE}, height: 400, left: 0, top: 0 }),
+  };
+  ${lift('settleWindow')}
+  return (left, top, wide, high) => {
+    innerWidth = wide; innerHeight = high;
+    settleWindow(panel, left, top);
+    return { x: parseInt(panel.style.left, 10), y: parseInt(panel.style.top, 10) };
+  };
+`)();
+
+// Which preset a block gets. `*` stands for any run of characters and everything
+// else is itself; the whole point of a pattern somebody types by hand is that
+// they can check it by eye, so there is no escaping and no other metacharacter.
+const { fits } = new Function(`${lift('fits')} return { fits };`)();
+
+// A marker's details, put up by a hover and taken down again. Wrong in either
+// direction is a bug somebody lives with: a box that never closes covers the map,
+// and one that closes while being read cannot be read at all.
+const LINGER = 30;
+const hovering = new Function(`
+  const HOVER_LINGER = ${LINGER};
+  let hovered = null;
+  let hoverTimer = null;
+  const closed = [];
+  ${lift('keepHovered')}
+  ${lift('closeHovered')}
+  ${lift('forgetHovered')}
+  const marker = name => ({ name, closePopup() { closed.push(name); } });
+  return {
+    closed,
+    open: m => { keepHovered(); hovered = m; },
+    leave: () => closeHovered(),
+    reenter: () => keepHovered(),
+    click: () => forgetHovered(),
+    marker,
+    isWaiting: () => hoverTimer !== null,
+  };
+`)();
+
+const rest = ms => new Promise(done => setTimeout(done, ms));
 
 let failed = 0;
 const check = (name, ok) => {
@@ -202,6 +277,125 @@ check('a picture with no time still resolves to something fetchable',
 const look = source.slice(source.indexOf('const look = '), source.indexOf('if (card.look !== look)'));
 check('the card compares the address rather than the name behind it',
   look.includes('portraitSrc(player)') && !look.includes('player.Portrait'));
+
+console.log('\nwhat a reader types means where they meant');
+// The form shows a place the way the corner does and sends it the way the world
+// stores it. A marker typed at the coordinates a player reads off their own
+// screen has to land there, in either frame and wherever spawn is.
+for (const [absolute, at] of [[false, { x: 0, z: 0 }], [false, { x: 512000, z: -318 }],
+                              [true, { x: 512000, z: -318 }]]) {
+  frames.frame(absolute, at);
+  const where = absolute ? 'absolute' : 'from spawn';
+  const round = (x, z) => frames.meant(...frames.said(x, z));
+  check(`${where}, spawn ${at.x},${at.z}: a place survives the round trip`,
+    round(512004, -300).join() === '512004,-300' && round(0, 0).join() === '0,0');
+}
+
+// Absolute coordinates are the world's own, so that frame is the identity and a
+// round trip passing there would pass even if both halves were wrong together.
+frames.frame(false, { x: 512000, z: -318 });
+check('and the frame is a translation rather than nothing at all',
+  frames.said(512000, -318).join() === '0,0');
+
+console.log('\nthe form asks for a marker in the words the service reads');
+// Serde fills a field it was not sent with that field's default, so a name the
+// page spells differently is not an error anywhere — it is a marker that arrives
+// unnamed, or white, or at the origin. Nothing at either end would say so.
+const asks = source.slice(source.indexOf("const marker = {"),
+                          source.indexOf("};", source.indexOf("const marker = {")));
+const sent = [...asks.matchAll(/^\s*([A-Z]\w*):/gm)].map(found => found[1]).sort();
+
+// `Asked` in pending.rs, which is PascalCase on the wire.
+const taken = pending.slice(pending.indexOf('struct Asked {'), pending.indexOf('}', pending.indexOf('struct Asked {')));
+const reads = [...taken.matchAll(/^\s*(\w+): /gm)]
+  .map(found => found[1][0].toUpperCase() + found[1].slice(1))
+  .sort();
+
+check(`the form sends ${sent.length} fields and the service reads ${reads.length}`,
+  sent.length === reads.length && sent.length > 0);
+check(`and they are the same words: ${sent.join(' ')}`, sent.join() === reads.join());
+
+console.log('\nthe marker window cannot be dragged out of reach');
+const SCREEN = [1000, 800];
+const put = (x, y) => windows(x, y, ...SCREEN);
+check('somewhere ordinary is left alone', put(300, 200).x === 300 && put(300, 200).y === 200);
+check('dragged off the left, a grip of it stays on screen',
+  put(-9000, 200).x + WINDOW_WIDE >= 60);
+check('dragged off the right, a grip of it stays on screen',
+  put(9000, 200).x <= SCREEN[0] - 60);
+check('dragged above the top, the bar stays reachable', put(300, -9000).y >= 0);
+check('dragged past the bottom, the bar stays reachable',
+  put(300, 9000).y <= SCREEN[1] - 30);
+// A browser shrunk under a window that was near an edge is the same question
+// asked again, so the same clamp has to answer it on a smaller screen.
+check('and a smaller browser pulls it back in',
+  windows(940, 770, 400, 300).x <= 340 && windows(940, 770, 400, 300).y <= 270);
+
+console.log('\nnothing in the page is declared twice');
+// A second `function foo()` at the top level silently replaces the first, and
+// every existing call then reaches the wrong one. That is how the settings
+// stopped being written to storage: a later `remember(marker)` for presets took
+// over the name of `remember()` for the browser's own settings, and nothing —
+// not the parser, not a lint, not the page — said a word.
+const declared = [...source.matchAll(/^(?:async )?function (\w+)\(/gm)].map(found => found[1]);
+const twice = declared.filter((name, at) => declared.indexOf(name) !== at);
+check(`${declared.length} top-level functions, none sharing a name`,
+  twice.length === 0 || !console.log(`       clashing: ${[...new Set(twice)].join(', ')}`));
+
+const consts = [...source.matchAll(/^(?:const|let) (\w+) =/gm)].map(found => found[1]);
+const both = consts.filter(name => declared.includes(name));
+check('and none shadowed by a top-level binding',
+  both.length === 0 || !console.log(`       clashing: ${[...new Set(both)].join(', ')}`));
+
+console.log('\na preset matches the blocks its pattern names');
+const COPPER = 'game:ore-bountiful-nativecopper-basalt';
+check('an exact code matches itself', fits(COPPER, COPPER));
+check('and nothing else', !fits(COPPER, 'game:ore-bountiful-nativecopper-chalk'));
+check('a widened pattern reaches every rock',
+  fits('game:ore-*-nativecopper-*', COPPER)
+  && fits('game:ore-*-nativecopper-*', 'game:ore-poor-nativecopper-granite'));
+check('and still not another metal',
+  !fits('game:ore-*-nativecopper-*', 'game:ore-poor-cassiterite-granite'));
+check('a trailing star is a prefix', fits('game:rock-*', 'game:rock-granite'));
+check('a leading star is a suffix', fits('*-basalt', COPPER));
+check('a star on both sides is a contains', fits('*nativecopper*', COPPER));
+// Without the end-anchor, `rock` would answer for every rock there is — which is
+// the whole difference between a pattern and a search box.
+check('a pattern with no star must reach the end',
+  !fits('game:rock', 'game:rock-granite'));
+check('a bare star takes everything', fits('*', COPPER));
+check('case is not the point', fits('GAME:ORE-*-NATIVECOPPER-*', COPPER));
+check('nothing matches nothing', !fits('', COPPER) && !fits(COPPER, '') && !fits(null, COPPER));
+
+console.log("\na marker's details come down on their own");
+{
+  const forge = hovering.marker('forge');
+  hovering.open(forge);
+  hovering.leave();
+  check('still up the moment the pointer leaves', hovering.closed.length === 0);
+  await rest(LINGER * 3);
+  check('and down a moment later', hovering.closed.join() === 'forge');
+}
+{
+  // Crossing back over it, or onto the box itself, is not done reading.
+  const hoard = hovering.marker('hoard');
+  hovering.open(hoard);
+  hovering.leave();
+  await rest(LINGER / 3);
+  hovering.reenter();
+  await rest(LINGER * 3);
+  check('coming back cancels the wait', !hovering.closed.includes('hoard'));
+}
+{
+  // A deliberate open is not a hover, however it started.
+  const road = hovering.marker('road');
+  hovering.open(road);
+  hovering.click();
+  hovering.leave();
+  await rest(LINGER * 3);
+  check('one opened by clicking stays open', !hovering.closed.includes('road'));
+  check('and nothing is left waiting to fire', !hovering.isWaiting());
+}
 
 console.log(failed === 0 ? '\nall checks passed' : `\n${failed} FAILED`);
 process.exit(failed === 0 ? 0 : 1);

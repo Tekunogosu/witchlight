@@ -5,6 +5,188 @@ two **must match on minor version**: minor is the compatibility generation, move
 whenever the file format or the socket protocol changes. Patch is free to differ,
 and covers anything that changes only one half.
 
+## 0.20.2
+
+**A marker opened by hovering comes down on its own**, a couple of seconds after
+the pointer leaves it, rather than staying up over the map. Moving onto the box
+to read it cancels that, and a marker opened by clicking stays open — a click is
+not a hover however it started.
+
+**The marker and presets buttons are one control.** Stacked in a single bar with
+a rule between them, the way the zoom pair is built, because one makes a marker
+and the other decides what a marker starts as.
+
+## 0.20.1
+
+The marker box reads left to right: where it is on the left, whose it is on the
+right. The coordinates hold their width and a long name gives way to an ellipsis,
+because a place is read digit by digit and a name that has run out of room still
+says who.
+
+## 0.20.0
+
+**Your settings survive a reload.** They never had: a later `remember(marker)`
+for presets silently replaced the `remember()` that writes the browser's own
+settings, so every call reached the wrong one and nothing was stored. Nothing
+reported it — not the parser, not the page. There is a test now that fails on any
+two top-level declarations sharing a name.
+
+**The interface is grey rather than black**, on a measured palette. Black hid
+anything dark drawn on it — the game's own near-black waypoint colour came out
+invisible in the picker — and read as a hole in the map rather than a panel over
+it. Body text now clears 4.5:1 against the surface behind it, where the muted
+grey used before came to 3.3:1; swatches carry a light hairline so a near-black
+one is still a square; and the boxes you type into clear 3:1, which on a dark
+theme no fill difference can do.
+
+**Sizes and spacing come from a scale**, four steps of each, so a panel reads as
+one thing rather than a collection of separately tuned boxes. Small print went up
+a step, pointer targets are at least 24px square, and the windows have room to
+breathe.
+
+**A marker says what it is more clearly.** Its name is the heading; whose it is
+and where it is sit under a rule in a footer, smaller and quieter — rather than
+all five facts run together at one size.
+
+**Two more things in Show**: marker names worn permanently, and a marker's
+details opening on hover.
+
+**The presets button is clear of the marker button.** It never moved: a rule for
+the corner column outweighed the one setting its margin, and quietly zeroed it.
+
+## 0.19.3
+
+**The mark beside your name sits beside it.** The tool buttons are drawn as a
+grid, which gave the mark a row of its own and stacked it above the name.
+
+**Cancel closes the profile window**, putting the switches back on the way out —
+the mark in the bar, further out where a hand is already reaching for Save.
+
+**The size sliders are live again**, landing when the hand lets go rather than on
+every step. Applying mid-drag rescaled the window the slider was in and walked it
+out from under the pointer.
+
+**"Set as preset" is back on every new marker**, whether or not a block was
+clicked, with a box under the name saying what it is remembered against.
+
+**Presets can be created**, from the button in the corner of their window. That
+box searches the game's blocks as you type, by name or by code, so a preset can
+be keyed on something without going and clicking it first. `GET /blocks.json?q=`
+answers it.
+
+A query value is percent-decoded now. Every other one this service reads is a
+number or a word of hex; a search box is the first that can hold a space, and
+matching against `%20` found nothing at all — which reads as a search with no
+answers rather than one that never asked.
+
+**More room between the marker button and the presets button.**
+
+## 0.19.2
+
+**The × on a window closes it.** The bar captured the pointer on every press,
+including a press on its own close mark, which sent the click to the bar instead
+of the button. A press on anything in the bar that does its own job no longer
+starts a drag.
+
+**Presets have their own button**, under the flag, and have left the profile
+window. Picking one from the list opens it in the marker window beside it, filled
+in, with Save reading **Update** — which is how a preset is changed rather than
+only made and deleted.
+
+**Nothing in the profile window applies until Save.** The size sliders were the
+reason: applying as they moved rescaled the window the slider was in and walked
+it out from under the pointer.
+
+**The mark beside your name has room around it**, and a rule between it and the
+name.
+
+## 0.19.1
+
+Shared markers are fixed in the mod; the service and viewer are unchanged and the
+version moves only to keep the halves reporting the same number.
+
+## 0.19.0
+
+**Deploy both halves together.** The mod collects markers in a new shape — makes
+and changes rather than makes alone — and posts a block name table the service
+serves from.
+
+**Markers can be edited.** Right click one on the web map to open it in the form.
+Its owner always may; `markers_public_editable`, new and off, lets anybody correct
+a marker anybody can see. Whoever asks, the mod decides again against the waypoint
+itself before anything moves.
+
+**Marker presets.** Right click a block and the form starts as that block: named
+what the game calls it, and — once you have saved a preset for it — coloured,
+pictured and shared the way you last chose. "Set as preset" on the form keeps one;
+the presets window edits and deletes them. A pattern may use `*`, so one preset
+saved on basalt copper ore can be widened to `game:ore-*-nativecopper-*` and
+cover every rock it appears in.
+
+**A settings window of your own**, behind your name in the corner. It holds
+whether new markers become presets, whether they are private — over the server
+default, either way — and three size sliders for the player list, the windows and
+the map buttons. What is about you follows your account to any browser; what is
+about the screen stays in it.
+
+**The map pans past what has been drawn**, by a world's width on every side,
+rather than pinning the edge of the export to the edge of the screen.
+
+**The settings button has moved to the top left**, beside your name.
+
+The service keeps its first file of its own, `preferences.json`, holding each
+person's presets and defaults against their uid. `GET`/`PUT /me/preferences` reads
+and writes it, `PUT /markers/{key}` changes a marker, and `/block.json` now says
+what the game calls the block as well as its code.
+
+## 0.18.1
+
+The marker form is a window rather than a panel: it floats over everything, it is
+moved by its bar, and it closes with the × in its corner. Opening it no longer
+shifts the zoom and inspect buttons out from under it — they stay where they are
+and it covers them. A window dragged past an edge keeps a grip of itself on
+screen, and a browser resized under one pulls it back in.
+
+The colour and picture rows lost their labels, which named what was already
+visible, and the place row reads `Coords — relative` or `Coords — absolute` after
+the setting that decides it.
+
+## 0.18.0
+
+**Deploy both halves together.** The mod posts markers in a new shape — sorted by
+who may see them — and the service does not read the old one. A service on 0.17
+paired with a mod on 0.18 shows an empty map, and the reverse shows one that never
+updates.
+
+**Markers can be made from the web map.** Right click the map for a form on the
+left, or press the flag in the corner and type the coordinates — or press ⌖ and
+click the spot. The form offers the same colours and the same pictures the game's
+own waypoint dialog does, read off the game rather than written down, so a mod
+that adds either adds it here. Making one needs a login link; the flag appears
+once you have followed one.
+
+**A marker can be kept to its owner.** The box beside Save decides, and it starts
+where `markers_public` puts it. That setting now means what it always said it
+meant — the default for a marker nobody has decided about — and a choice made on
+the form overrides it both ways, on the web map and on other players' in-game maps
+alike.
+
+**Markers a viewer may not see no longer reach their browser.** The web map used
+to send every marker to everybody regardless of the setting. With `markers_public`
+off, which is the default, markers made in game are now their owner's alone there
+too, and a map that showed everything will show less until their owners share them.
+
+The service decides who is sent which marker, from the session a browser
+carries; it still never reads a waypoint, because the mod hands it two lists
+rather than one. `GET /colors.json` is new, `POST /markers` is the first thing
+the public port accepts rather than serves, and `POST /markers/pending` on the
+API channel is how the mod collects what was asked for.
+
+## 0.17.1
+
+Marker colours are fixed in the mod; the service and viewer are unchanged and the
+version moves only to keep the halves reporting the same number.
+
 ## 0.17.0
 
 **Deploy both halves together.** The mod and the service no longer speak the
