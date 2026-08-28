@@ -8,7 +8,20 @@
                background: #14141a; color: #cfcfd6;
                font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; }
   #map { position: absolute; inset: 0; background: #14141a; }
-  .leaflet-container { background: #14141a; outline: none; }
+  /* Ground the map has never been given is drawn as a flat #141416 tile; where
+     there is no tile at all, this shows through instead. They were within four
+     units of each other, so a map with no tiles and a map with nothing on it
+     looked identical — which is how a palette that had lost its colours read as
+     a map that broke when you zoomed in, three separate times. The hatch is the
+     difference: flat means the map has been here and found nothing, striped
+     means no tile arrived. Cheap enough to sit under the whole viewport, and it
+     costs the stored tiles nothing to change. */
+  .leaflet-container {
+    background-color: #14141a;
+    background-image: repeating-linear-gradient(45deg,
+      #191920 0 6px, #14141a 6px 12px);
+    outline: none;
+  }
   /* One pixel is one block, so a magnified terrain tile must stay blocks and not
      blur. Only the terrain: the grid's lines are drawn at the size they are
      wanted and pixelating them thickens them into a lattice. */
@@ -53,6 +66,14 @@
          color: #cfcfd6; cursor: pointer; font-size: 20px; line-height: 1;
          user-select: none; }
   #cog:hover { border-color: #4dd2ff66; color: #fff; }
+  /* Which build is serving this page. Beside the cog rather than in it, and
+     quiet enough to read past: the only question it answers is whether the half
+     someone is looking at is the half they just deployed. No box — a shadow
+     keeps it legible over pale terrain without putting furniture on the map. */
+  #version { position: absolute; right: 60px; bottom: 12px; z-index: 500;
+             height: 40px; display: grid; place-items: center;
+             font-size: 11px; color: #6f6f7b; pointer-events: none;
+             text-shadow: 0 1px 2px #000000cc; }
   #settings { position: absolute; right: 12px; bottom: 60px; z-index: 500;
               width: 216px; padding: 10px 12px; background: #000000e6;
               border: 1px solid #33333f; border-radius: 4px; display: none; }
@@ -101,11 +122,42 @@
      an emoji and paints itself, so `color` says nothing about it. */
   .leaflet-bar a.tool.armed { background: #0d1a22;
                               box-shadow: inset 0 0 0 2px #4dd2ff; }
+  /* Two columns down the left edge, because they answer to different things.
+     What moves the map hangs from the middle, where a hand reaches for it and
+     where there is room either side of it to grow. Who you are sits in the
+     corner, out of the way of the map and where a page puts an account. */
+  .leaflet-top.leaflet-left { top: 50%; transform: translateY(-50%); }
+  #corner { position: absolute; left: 10px; top: 10px; z-index: 800; }
+
+  /* Who is looking. Wider than a map control because a name is wider than a
+     glyph, and left aligned with the rest of the column. */
+  #account a { width: auto; min-width: 26px; max-width: 190px; padding: 0 9px;
+               justify-content: start; font-size: 12px; overflow: hidden;
+               text-overflow: ellipsis; white-space: nowrap; }
+  /* Nobody has followed a link yet. Still a button, so the shape of the page
+     does not move when somebody logs in, but plainly not offering anything. */
+  #account a.out { color: #6f6f7b; cursor: default; }
+  #account a.out:hover { background: #1c1c24; color: #6f6f7b; }
+  /* Leaflet spaces and shrink-wraps its own bars; these are not its, so they say
+     both for themselves. Without the width a bar fills the column and the narrow
+     button in it sits in a wide box.
+
+     One clear button's height between the account and whatever it gates, so the
+     two read as different things rather than one column of controls. Written at
+     the same weight as the reset above it, or the reset wins and they touch. */
+  #corner .leaflet-bar { margin: 0; width: max-content; }
+  #corner #account { margin-bottom: 26px; }
+  /* Shown only to somebody who can act on it — see `showAccount`. */
+  #mine { display: none; }
+  #mine.on { display: block; }
+
   .leaflet-control-attribution { display: none; }
 </style>
 <div id="map"></div>
 <div id="who"></div>
+<div id="corner"></div>
 <div id="settings"><h2>Show</h2></div>
+<div id="version">v__VERSION__</div>
 <div id="cog" title="Settings">⚙</div>
 <div id="hud"><div id="where">loading…</div><div id="what"></div></div>
 <script src="/leaflet.js"></script>
@@ -876,6 +928,70 @@ const picker = new Picker();
 map.addControl(picker);
 
 /**
+ * A bar of one button, in the shape Leaflet draws its own, in the corner.
+ *
+ * Not a Leaflet control: these say who is looking rather than doing anything to
+ * the map, and Leaflet has one container per corner — putting them in it would
+ * tie where they sit to where the zoom sits. They borrow the class and nothing
+ * else.
+ */
+function cornerButton(id, mark, label) {
+  const bar = L.DomUtil.create('div', 'leaflet-bar', corner);
+  bar.id = id;
+  const button = L.DomUtil.create('a', 'tool', bar);
+  button.href = '#';
+  button.title = label;
+  button.setAttribute('role', 'button');
+  // Every one of these is a square with a mark in it, so the name is the only
+  // thing telling a reader — or a test — which one it reached.
+  button.setAttribute('aria-label', label);
+  button.textContent = mark;
+  // Over the map, so a click or a drag on one must not reach it.
+  L.DomEvent.disableClickPropagation(bar);
+  L.DomEvent.disableScrollPropagation(bar);
+  L.DomEvent.on(button, 'click', L.DomEvent.stop);
+  return bar;
+}
+
+// Not `chrome`: a browser already has one of those, and a `const` of that
+// name throws before a line of this page runs.
+const corner = document.getElementById('corner');
+const accountBar = cornerButton('account', 'Unauthenticated', 'Account');
+const mineBar = cornerButton('mine', '\u2691', 'My markers');
+
+/**
+ * Says who is looking, and offers what only they can act on.
+ *
+ * The account button is always there and is greyed when nobody has followed a
+ * login link: a control that appears on login moves everything under it, and a
+ * page whose furniture jumps is a page somebody clicks the wrong thing on.
+ *
+ * What sits under it is offered to anybody who can act on it — somebody logged
+ * in, or anybody at all where the operator has said every marker is everyone's.
+ */
+function showAccount(me) {
+  const button = accountBar.querySelector('a');
+  const named = me && me.Name;
+  button.textContent = named || 'Unauthenticated';
+  button.classList.toggle('out', !named);
+  button.title = named
+    ? `Signed in as ${me.Name}`
+    : 'Not signed in — run /witchlight login in the game';
+  button.setAttribute('aria-label', named ? `Account: ${me.Name}` : 'Not signed in');
+  mineBar.classList.toggle('on', Boolean(named || (me && me.MarkersPublic)));
+}
+
+/** Who the service says is looking. Asked at load, which is when it changes:
+ *  following a login link lands back here as a fresh page. */
+async function pollMe() {
+  try {
+    showAccount(await (await fetch('/me.json', { cache: 'no-store' })).json());
+  } catch (error) {
+    showAccount(null);
+  }
+}
+
+/**
  * The one block the picker is on, outlined so that "under the pointer" is exact.
  *
  * A rectangle in world coordinates rather than a box drawn at the pointer: it is
@@ -1097,6 +1213,7 @@ async function pollWorld() {
 
 recall();
 buildSettings();
+pollMe();
 for (const setting of Object.values(settings)) setting.apply(setting.on);
 
 setInterval(pollLive, 2000);

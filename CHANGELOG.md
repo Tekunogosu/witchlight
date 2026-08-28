@@ -1,11 +1,161 @@
 # witchlight
 
-The map service. It pairs with the [server mod](../../mapstique-csharp), and the
+The map service. It pairs with the [server mod](../../witchlight-csharp), and the
 two **must match on minor version**: minor is the compatibility generation, moved
 whenever the file format or the socket protocol changes. Patch is free to differ,
 and covers anything that changes only one half.
 
-## Unreleased
+## 0.17.0
+
+**Deploy both halves together.** The mod and the service no longer speak the
+protocol they did before this, and neither reads what the other minor wrote.
+
+**A settings file older than this stops the service**, which says which name
+replaced which: `api_socket` is now `api_bind`, an address rather than a unix
+socket path. Leave it empty for loopback on a free port, which is where the mod
+now looks.
+
+**Markers are private now.** Every marker used to reach every player's in-game
+map; `markers_public` decides that, and it is off. Until a player can mark a
+single waypoint as shared, off means nothing is shared in game at all — a server
+that wants what it had sets `markers_public = true` for now.
+
+The map is **not** cleared: the region format is untouched.
+
+### A palette that has not changed does not redraw the map
+
+The palette is reloaded when its file's timestamp moves, and reloading one costs
+every tile in the cache and a redraw of every stored level — seconds of blank map.
+A file rewritten with the same colours in it is not a new palette, so the
+timestamp moving is what prompts a look and the colours themselves are what
+decide.
+
+Compared by what would be drawn rather than by the file, because the file carries
+things that do not decide a colour: a palette rewritten by a different admin with
+the same assets is the same palette as far as anything drawn from it is concerned.
+
+### The map knows who is looking at it
+
+A player runs `/witchlight login` in the game and follows the link they are sent.
+The service mints the word on the API channel, spends it at `/login`, and hands
+back a session in a cookie — `HttpOnly`, `SameSite=Lax`, thirty days, its clock
+going back to the full term on every request that carries it.
+
+In a cookie rather than in the address, because the address is meant to be shared:
+`#x,z,scale` exists so a view can be pasted to somebody, and a session in the path
+would travel with it. It also keeps tile URLs out of a per-session namespace, which
+is what makes them cacheable at all.
+
+Sessions live in memory and go when this stops. That costs one click of one link,
+and it means the map keeps nothing about anybody it was not asked to keep.
+
+`/me.json` says who is looking, in the same shape logged in or not. **The map
+itself stays public**: a session decides only whose settings and whose markers a
+page may act on.
+
+### Two columns down the left edge
+
+What moves the map hangs from the middle, where a hand reaches for it and where
+there is room either side to grow: zoom, and the block inspector. Who you are sits
+in the top corner, out of the way of the map and where a page puts an account.
+
+The account button says your name when you are logged in, and is greyed and reads
+"Unauthenticated" when you are not. Always there rather than appearing on login —
+a control that appears moves everything under it, and a page whose furniture jumps
+is a page somebody clicks the wrong thing on. One clear button's height below it
+sits what it gates, offered to anybody who can act on it: somebody logged in, or
+anybody at all where the operator has set `markers_public`.
+
+Neither button does anything yet.
+
+### `markers_public`
+
+Whether a marker nobody has decided about belongs to everybody. Off by default,
+and read by the mod as well as here, so the in-game map and the web map cannot
+disagree about who can see what.
+
+### The page says which build served it
+
+Softly, in grey, beside the settings cog. Compiled into the page rather than
+fetched from `/info.json`, so a page can only ever report the build that sent it —
+asking would let a cached page name a version it never came from.
+
+The two halves must match on minor version, and until now the only way to check
+the one being looked at was to go and ask the machine.
+
+### The map no longer goes blank when you zoom in
+
+Level 0 is drawn on demand from the palette; every level above it is a picture
+stored when it was last built. So a palette with no colours in it blanked the
+finest level while the rest of the pyramid went on showing the world — a map that
+worked until you zoomed past about 0.7 pixels per block and then went dark. It
+read as a zoom bug three times and was never one.
+
+Three things change.
+
+A palette that colours nothing no longer draws anything. Level 0 falls back to
+the level above it, enlarged: a coarse map instead of an empty one. Leaflet does
+not substitute a parent tile of its own accord, so a tile that cannot be answered
+is simply absent, which looks exactly like a map that has broken.
+
+A palette that colours nothing no longer redraws the stored levels either. Every
+level is built from level 0, so reloading an empty palette used to replace a
+working pyramid with a blank one — and those pictures are the only thing left to
+look at until a real palette arrives. They are now left exactly as they are, and
+the service says so.
+
+The levels record which palette drew them, in `tiles/painted-by`. Levels drawn
+with a different palette than the one in use disagree with the level below them,
+which is a map that changes as it is zoomed; they are redrawn at start when they
+disagree — but only when there is a palette to redraw them with.
+
+### Ground with nothing on it no longer looks like a missing tile
+
+Unexplored ground draws as `#141416` and the page behind the map was `#14141a`,
+four units apart. A map with no tiles and a map with nothing on it were the same
+picture, which is why four separate faults over four releases were all reported as
+"the map is black" and each took a fresh investigation to tell apart. The page now
+carries a faint hatch: flat means the map has been here and found nothing, striped
+means no tile arrived.
+
+### A zoom sweep, in a real browser
+
+`tests/zoom-sweep.py` drives chromium across the zoom range and counts the colours
+that reach the screen. Terrain is thousands; an empty screen is a few hundred. Each
+of the four faults left the viewer's own arithmetic correct, so none was reachable
+from `tests/viewer.mjs` — what they had in common was only ever visible on screen.
+
+Not part of `cargo test`: it needs a map worth looking at and a browser.
+
+### The mod and the service meet on loopback, not a unix socket
+
+The two halves talked over a unix socket in `/tmp`, named after the export
+directory so both sides found it without being told and two game servers on one
+machine did not collide. The filesystem decided who was allowed to connect, which
+is the right shape — and a mechanism Rust does not have on Windows, where a
+Vintage Story server is perfectly happy to run.
+
+The shape is kept and the mechanism replaced. The service now listens on
+`127.0.0.1`, on whatever port the machine had free, and writes that port and a
+fresh random token into `api.json` beside the map, mode `0600` where the system
+has modes. Every post must carry `Authorization: Bearer {Token}`; without it the
+answer is `401`. Nothing off the machine can reach loopback and nothing on it can
+post without reading a file only its owner can read, which is what the socket's
+permissions bought. The port is asked of the machine rather than derived from the
+export path, so two servers on one box still collide with nothing, and neither
+side is configured.
+
+The port changes with every service start, so where the service is is a belief
+about it rather than a fact. The mod reads `api.json` again whenever a post fails
+or is refused `401`, which also covers the ordinary case of a mod that started the
+service a moment ago and looked before the file existed.
+
+`api_socket` is now **`api_bind`**, an address rather than a path, with
+`api_token` beside it; both are empty by default and only worth setting for a mod
+on another machine, which is the one case a file beside the map cannot reach.
+A settings file naming `api_socket` stops the service and says which name replaced
+it — an unknown setting is otherwise indistinguishable from a misspelled one, and
+being read as a default is worse than being refused.
 
 ### A new portrait shows without a reload
 

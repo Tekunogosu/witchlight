@@ -27,11 +27,32 @@ pub struct Config {
     /// `127.0.0.1:8080` to keep it on this machine only.
     pub bind: String,
 
-    /// Where the server mod posts who is online and where the markers are. Empty
-    /// means a socket in `/tmp` named after the export directory, which is where
-    /// the mod looks unless it has been told otherwise. A `host:port` is accepted
-    /// for a mod running on another machine; a path is taken as a socket.
-    pub api_socket: String,
+    /// Where the server mod posts who is online and where the markers are.
+    ///
+    /// Empty means loopback on a port the machine picks, published in `api.json`
+    /// beside the map so the mod finds it without being told and two game servers
+    /// on one box collide with nothing. Set a `host:port` only for a mod running
+    /// on another machine, which is also the one case `api_token` must be set.
+    pub api_bind: String,
+
+    /// What the mod must present to post. Empty means a fresh one each start,
+    /// written into `api.json` where the mod reads it.
+    ///
+    /// Only worth setting where that file cannot reach the mod — a mod on another
+    /// machine — in which case the same value goes on both sides.
+    pub api_token: String,
+
+    /// Whether a marker whose owner has not decided is everyone's.
+    ///
+    /// Off, so a marker a player drops is theirs until they say otherwise —
+    /// somebody's unfinished base is not the server's business by default. An
+    /// operator running a map everyone is meant to share turns it on, and every
+    /// marker without a decision of its own becomes public.
+    ///
+    /// The mod reads it too: it decides both what the in-game map shares and what
+    /// the web map shows, and those must be the same answer or the two disagree
+    /// about who can see what.
+    pub markers_public: bool,
 
     /// How many threads render tiles. Zero decides from the machine, capped so
     /// that the game server this usually shares a box with keeps its cores.
@@ -70,7 +91,9 @@ impl Default for Config {
         Self {
             vs_data: default_vs_data(),
             bind: "0.0.0.0:8080".to_owned(),
-            api_socket: String::new(),
+            api_bind: String::new(),
+            api_token: String::new(),
+            markers_public: false,
             threads: 0,
             tile_cache_mb: 256,
             autostart: true,
@@ -78,6 +101,31 @@ impl Default for Config {
             announce_url: String::new(),
         }
     }
+}
+
+/// What to say about a setting this build no longer has.
+///
+/// `deny_unknown_fields` is what catches a misspelled setting rather than letting
+/// it read as a default, and it catches a renamed one the same way — correctly,
+/// and unhelpfully. A settings file older than the build stops the service dead,
+/// so the one thing worth saying is which name replaced which.
+///
+/// One list rather than a check at the point of each rename, so the next one is
+/// an entry and not another branch.
+fn retired(text: &str) -> String {
+    const RETIRED: [(&str, &str); 1] = [(
+        "api_socket",
+        "api_bind, which is an address rather than a unix socket path. Leave it \
+         empty for loopback on a free port, which is where the mod now looks",
+    )];
+
+    let mut said = String::new();
+    for (was, now) in RETIRED {
+        if text.lines().any(|line| line.trim_start().starts_with(was)) {
+            said.push_str(&format!("\n\n`{was}` is now {now}."));
+        }
+    }
+    said
 }
 
 /// Where the game puts its data when nobody has told it otherwise.
@@ -108,7 +156,9 @@ impl Config {
             Err(error) => return Err(Error::io(format!("reading {}", path.display()), error)),
         };
 
-        toml::from_str(&text).map_err(|error| Error::parse(path, error.to_string()))
+        toml::from_str(&text).map_err(|error| {
+            Error::parse(path, format!("{error}{}", retired(&text)))
+        })
     }
 
     pub fn write(&self, path: &Path) -> Result<()> {
@@ -144,9 +194,13 @@ impl Config {
             "# witchlight configuration\n\
              # vs_data is the server's --dataPath; exports are read from the\n\
              # `witchlight` folder inside it.\n\
-             # api_socket is where the mod posts live data. Empty means a unix\n\
-             # socket in /tmp named after this folder, which is where the mod\n\
-             # looks; a host:port is accepted instead.\n\
+             # api_bind is where the mod posts live data. Empty means loopback\n\
+             # on a port the machine picks, written to api.json beside the map\n\
+             # where the mod reads it. Set a host:port, and api_token to match\n\
+             # on both sides, only for a mod on another machine.\n\
+             # markers_public decides a marker nobody has chosen for: off keeps\n\
+             # one to its owner, on shares it with everybody. Read by the mod as\n\
+             # well as here, so the in-game map and the web map agree.\n\
              # threads is how many requests are answered at once; 0 decides.\n\
              # tile_cache_mb is how much memory rendered tiles may hold.\n\
              # autostart is whether the server mod runs this service itself.\n\

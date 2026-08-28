@@ -4,7 +4,7 @@ Renders and serves a browsable map of a Vintage Story world.
 
 This is the renderer half. It never reads a save file and does not need the game
 installed: everything it draws comes from exports written by the companion server
-mod in [`mapstique-csharp`](../../mapstique-csharp). The mod knows the game; this
+mod in [`witchlight-csharp`](../../witchlight-csharp). The mod knows the game; this
 knows pixels.
 
 ## Tests
@@ -12,6 +12,7 @@ knows pixels.
 ```sh
 cargo test                     # everything, including the viewer's
 node tests/viewer.mjs          # just the viewer's, with its output
+./tests/zoom-sweep.py URL      # against a running map, in a real browser
 ```
 
 The viewer is JavaScript and is tested as JavaScript. `tests/viewer.mjs` lifts the
@@ -20,9 +21,16 @@ second copy to check — a copy passes happily while the page it stands for is
 broken, which is how the clamp was once removed from `draw` without a single
 check noticing. `cargo test` shells out to `node`, and says so if it is missing.
 
+`zoom-sweep.py` is the one that needs a map and a browser, so it is not part of
+`cargo test`. It drives chromium across the zoom range and counts the colours that
+reach the screen. The map has gone blank past some zoom four times, for four
+unrelated reasons, and every one of them looked identical from the page and left
+the viewer's own arithmetic correct — so this checks the only thing they had in
+common, which is that the picture stops arriving.
+
 ## Running
 
-The usual way is not to. The [server mod](../../mapstique-csharp) carries this
+The usual way is not to. The [server mod](../../witchlight-csharp) carries this
 binary inside its archive and starts it once the world is ready, so installing the
 mod installs the map — its settings are then `witchlight.conf` in the game's
 `ModConfig` folder and everything it prints goes to `Logs/witchlight-service.log`.
@@ -45,6 +53,9 @@ own `ModConfig/witchlight.conf`:
 ```toml
 vs_data = "/home/vintagestory/data"   # the server's --dataPath
 bind = "0.0.0.0:8080"                 # every interface; 127.0.0.1 for this machine only
+api_bind = ""                         # where the mod posts; empty means loopback on a free port
+api_token = ""                        # what it must present; empty means a fresh one each start
+markers_public = false                # whether a marker nobody has chosen for is everyone's
 autostart = true                      # whether the server mod starts this itself
 announce = true                       # whether it tells joining players where the map is
 announce_url = ""                     # and what to tell them; empty means work it out
@@ -135,15 +146,16 @@ palette as the terrain: on a dedicated server the palette arrives from an admin'
 client some time after start-up, and a service that read it once would show nothing
 until restarted.
 
-Players and markers do not come from a file. The mod posts them to the **API
-socket** — by default a unix socket in `/tmp` named after the export directory,
-which both sides work out for themselves — and they are held in memory, because a
-position is worthless by the time a disk has finished with it. Markers are the
-exception and are written to `markers.json` when they arrive, so the map still has
-something to show when the game server is off. That socket takes writes, which is
-why it is not on the map port. Nothing here reads a file this build does not
-write, so an empty map means nothing was posted rather than nothing was found.
-Every interface is written up in [API.md](../../mapstique-csharp/API.md).
+Players and markers do not come from a file. The mod posts them on the **API
+channel** — a second listener on loopback, on whatever port the machine had free,
+whose port and token are written to `api.json` beside the map so the mod finds it
+without being told. They are held in memory, because a position is worthless by
+the time a disk has finished with it. Markers are the exception and are written to
+`markers.json` when they arrive, so the map still has something to show when the
+game server is off. That channel takes writes, which is why it is not on the map
+port. Nothing here reads a file this build does not write, so an empty map means
+nothing was posted rather than nothing was found. Every interface is written up in
+[API.md](../../witchlight-csharp/API.md).
 
 ## How a pixel is decided
 
@@ -224,6 +236,6 @@ seeing where that stops, squarely, is half of what a grid is for.
   the viewer; a real pyramid with downsampled levels would be sharper zoomed out.
 - **The tile cache is unbounded.** It grows with the area anyone has looked at.
   Reloads only drop the tiles a changed region touches, so it is otherwise kept.
-- **No authentication.** Anything that can reach the map port sees everything. The
-  API socket is separate, and takes writes, so it is a unix socket rather than a
-  port.
+- **No authentication on the map port.** Anything that can reach it sees
+  everything. The API channel is separate and takes writes, so it answers only on
+  loopback and only to a caller carrying the token from `api.json`.

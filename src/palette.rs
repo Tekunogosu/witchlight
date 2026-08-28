@@ -33,6 +33,11 @@ struct RawPalette {
     /// `server` or `client`: which machine's assets these colours came from.
     #[serde(default)]
     source: String,
+    /// The block registry these colours are keyed on, as the mod hashed it.
+    /// Carried so that levels built from one palette can be told from levels
+    /// built from another.
+    #[serde(default)]
+    fingerprint: String,
     blocks: HashMap<String, RawEntry>,
 }
 
@@ -50,6 +55,18 @@ pub struct Appearance {
     pub invisible: bool,
 }
 
+impl Appearance {
+    /// Whether this block would be drawn the same way.
+    #[must_use]
+    fn same_as(&self, other: &Self) -> bool {
+        self.known == other.known
+            && self.invisible == other.invisible
+            && self.base == other.base
+            && self.climate_map == other.climate_map
+            && self.season_map == other.season_map
+    }
+}
+
 pub struct Palette {
     pub game_version: String,
     pub source: String,
@@ -64,6 +81,52 @@ pub struct Palette {
     codes: Vec<Option<Box<str>>>,
     pub color_maps: Vec<ColorMap>,
     pub named: usize,
+    /// The block registry these colours were built against.
+    pub fingerprint: String,
+    /// How many blocks have a colour to draw.
+    ///
+    /// Held rather than counted on demand because it is asked before every level
+    /// 0 tile: a palette that colours nothing can only ever render bare ground,
+    /// and rendering it anyway is how a broken palette came to look like a broken
+    /// map.
+    pub coloured: usize,
+}
+
+impl Palette {
+    /// Whether this palette can draw anything at all.
+    ///
+    /// Not a judgement about quality — a palette missing most of its colours
+    /// still draws a map worth looking at. This is the case where every block
+    /// there is would come out as bare ground, which no world produces and only
+    /// a palette built without readable textures does.
+    #[must_use]
+    pub fn paints_nothing(&self) -> bool {
+        self.coloured == 0
+    }
+
+    /// Whether another palette would draw the same map as this one.
+    ///
+    /// Compares the appearances rather than the file, because the file carries
+    /// things that do not decide a colour — who built it, which mod set they had
+    /// — and a palette rewritten by a different admin with the same assets is the
+    /// same palette as far as anything drawn from it is concerned.
+    #[must_use]
+    pub fn same_as(&self, other: &Self) -> bool {
+        self.fingerprint == other.fingerprint
+            && self.coloured == other.coloured
+            && self.by_id.len() == other.by_id.len()
+            && self
+                .by_id
+                .iter()
+                .zip(&other.by_id)
+                .all(|(a, b)| a.same_as(b))
+            && self.color_maps.len() == other.color_maps.len()
+            && self
+                .color_maps
+                .iter()
+                .zip(&other.color_maps)
+                .all(|(a, b)| a.name == b.name && a.pixels == b.pixels)
+    }
 }
 
 /// A climate lookup image: horizontal axis temperature, vertical axis rainfall,
@@ -132,10 +195,14 @@ impl Palette {
             };
         }
 
+        let coloured = by_id.iter().filter(|a| a.known && !a.invisible).count();
+
         Ok(Self {
             game_version: raw.game_version,
             source: if raw.source.is_empty() { "unknown".to_owned() } else { raw.source },
             named: raw.blocks.len(),
+            fingerprint: raw.fingerprint,
+            coloured,
             by_id,
             codes,
             color_maps,

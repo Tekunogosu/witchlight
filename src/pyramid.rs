@@ -211,6 +211,74 @@ pub fn reset_unless_built_from(exports: &Path, version: u16) -> bool {
     cleared
 }
 
+/// The best stored picture of this tile's ground, taken from a level above it.
+///
+/// A tile that cannot be drawn at its own level is not nothing: the levels above
+/// it are pictures of the same ground, coarser. Enlarging one is a worse map than
+/// the real tile and a far better map than no tile — and Leaflet does not
+/// substitute a parent of its own accord, so an unanswerable tile is simply
+/// absent, which looks exactly like a map that has broken.
+///
+/// Walks up until it finds a level that has this ground, so it survives a gap of
+/// more than one. Nearest neighbour on the way back down, because the pixels this
+/// enlarges are already averages and smoothing them again only invents detail
+/// that was never there.
+#[must_use]
+pub fn from_above(exports: &Path, level: u32, x: i32, z: i32, size: u32, ceiling: u32) -> Option<RgbImage> {
+    for up in 1..=ceiling.saturating_sub(level) {
+        let (ax, az) = ancestor(up, x, z);
+        let Some(above) = read(exports, level + up, ax, az) else {
+            continue;
+        };
+
+        // Which part of that ancestor is this tile's ground: `up` halvings in,
+        // so the tile occupies one part in `2^up` of each edge.
+        let across = 1i32 << up;
+        let part = size / across as u32;
+        let left = (x - ax * across) as u32 * part;
+        let top = (z - az * across) as u32 * part;
+
+        let mut grown = RgbImage::new(size, size);
+        for row in 0..size {
+            for column in 0..size {
+                let from = above.get_pixel(left + column / across as u32, top + row / across as u32);
+                grown.put_pixel(column, row, *from);
+            }
+        }
+        return Some(grown);
+    }
+    None
+}
+
+/// Where the palette the levels were drawn with is recorded.
+fn painted_by(exports: &Path) -> PathBuf {
+    tiles_dir(exports).join("painted-by")
+}
+
+/// The block registry the stored levels were drawn against, if it was recorded.
+///
+/// Kept apart from [`stamp`], which decides whether the levels are *readable* and
+/// throws them away when they are not. This decides only whether they agree with
+/// the palette in use, and the answer to disagreement is to draw them again — not
+/// to delete them. A pyramid drawn with the last good palette is the only thing
+/// left to look at when the current one draws nothing.
+#[must_use]
+pub fn palette_built_from(exports: &Path) -> Option<String> {
+    std::fs::read_to_string(painted_by(exports))
+        .ok()
+        .map(|found| found.trim().to_owned())
+        .filter(|found| !found.is_empty())
+}
+
+/// Records which palette the levels have now been drawn with.
+pub fn record_palette(exports: &Path, fingerprint: &str) {
+    if fingerprint.is_empty() {
+        return;
+    }
+    let _ = std::fs::create_dir_all(tiles_dir(exports));
+    let _ = std::fs::write(painted_by(exports), fingerprint);
+}
+
 /// Which regions have a stored tile above them that is missing, or older than the
 /// region itself.
 ///
@@ -266,6 +334,76 @@ mod tests {
     use super::*;
 
     const BLANK: Rgb = Rgb::new(0, 0, 0);
+
+    /// A directory of this test's own, emptied first so a previous run cannot
+    /// answer for this one.
+    fn scratch(name: &str) -> PathBuf {
+        let at = std::env::temp_dir().join(format!("witchlight-pyramid-{name}"));
+        let _ = std::fs::remove_dir_all(&at);
+        std::fs::create_dir_all(&at).expect("a scratch directory");
+        at
+    }
+
+    /// Each quarter a flat value, so which quarter a child came from is readable
+    /// straight off the result.
+    fn quarters(size: u32) -> RgbImage {
+        tile(size, |x, z| {
+            let quarter = u8::try_from((z / (size / 2)) * 2 + (x / (size / 2))).unwrap();
+            [quarter, quarter, quarter]
+        })
+    }
+
+    #[test]
+    fn a_tile_with_no_level_above_it_cannot_be_grown() {
+        let at = scratch("nothing-above");
+        assert!(from_above(&at, 0, 5, 5, 8, 3).is_none());
+    }
+
+    #[test]
+    fn a_missing_tile_is_grown_from_its_parents_own_quarter() {
+        let at = scratch("own-quarter");
+        write(&at, 1, 3, 3, &quarters(8)).expect("the parent stores");
+
+        // Level 1 tile (3, 3) covers level 0 tiles (6, 7) in both axes.
+        for (x, z, want) in [(6, 6, 0u8), (7, 6, 1), (6, 7, 2), (7, 7, 3)] {
+            let grown = from_above(&at, 0, x, z, 8, 3).expect("the parent serves");
+            assert_eq!(grown.dimensions(), (8, 8));
+            assert!(
+                grown.pixels().all(|pixel| pixel.0[0] == want),
+                "level 0 ({x}, {z}) took the wrong quarter"
+            );
+        }
+    }
+
+    #[test]
+    fn a_gap_of_more_than_one_level_is_walked_past() {
+        // Nothing at level 1, so the answer has to come from level 2 — and from
+        // the sixteenth of it this tile actually covers.
+        let at = scratch("gap");
+        let grandparent = tile(8, |x, z| [u8::try_from(z * 8 + x).unwrap(), 0, 0]);
+        write(&at, 2, 1, 1, &grandparent).expect("the grandparent stores");
+
+        // Level 2 tile (1, 1) covers level 0 tiles (4..=7); (5, 6) is one across
+        // and two down inside it, so the 2x2 patch at (2, 4), each pixel grown
+        // fourfold.
+        let grown = from_above(&at, 0, 5, 6, 8, 3).expect("the grandparent serves");
+        assert_eq!(grown.get_pixel(0, 0).0[0], grandparent.get_pixel(2, 4).0[0]);
+        assert_eq!(grown.get_pixel(7, 7).0[0], grandparent.get_pixel(3, 5).0[0]);
+    }
+
+    #[test]
+    fn a_negative_tile_takes_the_right_quarter_too() {
+        // The quarter comes from subtracting the ancestor's origin, which is the
+        // step that goes wrong when a coordinate is negative.
+        let at = scratch("negative");
+        write(&at, 1, -1, -1, &quarters(8)).expect("the parent stores");
+
+        // Level 1 tile (-1, -1) covers level 0 tiles (-2, -1) in both axes.
+        for (x, z, want) in [(-2, -2, 0u8), (-1, -2, 1), (-2, -1, 2), (-1, -1, 3)] {
+            let grown = from_above(&at, 0, x, z, 8, 3).expect("the parent serves");
+            assert_eq!(grown.get_pixel(0, 0).0[0], want, "level 0 ({x}, {z})");
+        }
+    }
 
     /// A tile whose every pixel is a known function of its position.
     fn tile(size: u32, of: impl Fn(u32, u32) -> [u8; 3]) -> RgbImage {

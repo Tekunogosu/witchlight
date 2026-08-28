@@ -4,6 +4,8 @@
 //! The mod knows the game; this knows pixels. Nothing here reads a save file or
 //! needs the game installed.
 
+mod api;
+mod auth;
 mod color;
 mod columns;
 mod config;
@@ -11,6 +13,7 @@ mod error;
 mod live;
 mod palette;
 mod pyramid;
+mod random;
 mod render;
 mod server;
 
@@ -41,9 +44,9 @@ struct Args {
     #[arg(short, long, value_name = "ADDR")]
     bind: Option<String>,
 
-    /// Where the server mod posts live data: a unix socket path, or `host:port`.
-    #[arg(short = 'a', long, value_name = "SOCKET")]
-    api_socket: Option<String>,
+    /// Where the server mod posts live data. Empty means loopback on a free port.
+    #[arg(short = 'a', long, value_name = "ADDR")]
+    api_bind: Option<String>,
 
     /// How many threads render tiles. 0 decides from the machine.
     #[arg(short = 't', long, value_name = "N")]
@@ -171,8 +174,16 @@ fn run() -> Result<()> {
             Ok(())
         }
         Command::Serve => {
-            let api = server::ApiSocket::resolve(&config.api_socket, &exports);
-            server::serve(&config.bind, &exports, palette, &api, config.threads, config.tile_cache_mb)
+            let api = api::Api::resolve(&config.api_bind, &config.api_token);
+            server::serve(
+                &config.bind,
+                &exports,
+                palette,
+                &api,
+                config.threads,
+                config.tile_cache_mb,
+                config.markers_public,
+            )
         }
     }
 }
@@ -188,8 +199,8 @@ fn resolve(args: &Args) -> Result<(Config, PathBuf)> {
     if let Some(bind) = &args.bind {
         config.bind = bind.clone();
     }
-    if let Some(api_socket) = &args.api_socket {
-        config.api_socket = api_socket.clone();
+    if let Some(api_bind) = &args.api_bind {
+        config.api_bind = api_bind.clone();
     }
     if let Some(threads) = args.threads {
         config.threads = threads;

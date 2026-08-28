@@ -1,6 +1,6 @@
 //! The parts of the map that move.
 //!
-//! Players and markers arrive from the server mod over the API socket and are
+//! Players and markers arrive from the server mod over the API channel and are
 //! held here rather than on disk. Positions change every couple of seconds and
 //! are worth nothing once they are old; writing them to a file to read them back
 //! a moment later was work with no product.
@@ -108,35 +108,6 @@ impl Live {
 #[must_use]
 pub fn markers_path(exports: &Path) -> PathBuf {
     exports.join("markers.json")
-}
-
-/// Where the mod posts, unless told otherwise.
-///
-/// In `/tmp`, because a socket is how two programs talk and not something either
-/// of them keeps: it belongs with the running system rather than beside the map.
-/// That also keeps it far inside the hundred-odd bytes a socket address holds,
-/// which a data directory several levels deep does not.
-///
-/// The name carries a hash of the export directory so that two game servers on
-/// one machine do not land on the same socket. Both sides derive it the same way
-/// from the path they already agree on, so neither needs configuring — and both
-/// print what they resolved, because a mismatch is otherwise silent.
-#[must_use]
-pub fn default_api_socket(exports: &Path) -> PathBuf {
-    let full = std::path::absolute(exports).unwrap_or_else(|_| exports.to_path_buf());
-    let key = full.to_string_lossy();
-    PathBuf::from(format!("/tmp/witchlight-{:08x}.sock", tag(key.trim_end_matches('/'))))
-}
-
-/// FNV-1a, 32 bits. Short, and simple enough that the mod computes the same
-/// number from the same path without either side sharing code with the other.
-fn tag(text: &str) -> u32 {
-    let mut hash: u32 = 0x811c_9dc5;
-    for byte in text.as_bytes() {
-        hash ^= u32::from(*byte);
-        hash = hash.wrapping_mul(0x0100_0193);
-    }
-    hash
 }
 
 /// Enough of a check to keep a mangled body from reaching a browser as the map's

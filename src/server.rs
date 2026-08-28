@@ -4,7 +4,6 @@
 //! only the part of the world someone actually looks at is ever drawn.
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::fmt;
 use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -14,6 +13,8 @@ use std::time::{Duration, SystemTime};
 use image::RgbImage;
 use tiny_http::{Header, Method, Request, Response, Server};
 
+use crate::api::Api;
+use crate::auth::{Sessions, Who};
 use crate::columns::{Region, World, columns_dir, region_coords, region_files};
 use crate::live::Live;
 use crate::pyramid;
@@ -43,54 +44,19 @@ const BUILD_EVERY: Duration = Duration::from_secs(2);
 /// a viewer is told to repaint everything rather than lied to.
 const HISTORY: usize = 128;
 
-/// Where the mod posts what moves. A socket in `/tmp` by default, named after the
-/// export directory so that both sides find it without being told and two game
-/// servers on one machine do not collide.
-pub enum ApiSocket {
-    Socket(PathBuf),
-    Address(String),
-}
-
-impl ApiSocket {
-    /// Reads the `api_socket` setting. Empty means the default socket in `/tmp`; a
-    /// value with a colon and no slash is an address; anything else is a socket
-    /// path.
-    #[must_use]
-    pub fn resolve(setting: &str, exports: &Path) -> Self {
-        if setting.is_empty() {
-            return Self::Socket(crate::live::default_api_socket(exports));
-        }
-        if setting.contains(':') && !setting.contains('/') {
-            return Self::Address(setting.to_owned());
-        }
-        Self::Socket(PathBuf::from(setting))
-    }
-}
-
-impl fmt::Display for ApiSocket {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Socket(path) => write!(f, "{}", path.display()),
-            Self::Address(address) => f.write_str(address),
-        }
-    }
-}
-
-/// The most a single post to the API socket may carry. Positions for a full
+/// The most a single post on the API channel may carry. Positions for a full
 /// server are a couple of kilobytes and markers are tens; this only stops a
 /// broken poster from being read into memory without limit.
 const POST_LIMIT: u64 = 8 * 1024 * 1024;
-
-/// What `sockaddr_un` has room for, less a byte for the terminator.
-const SOCKET_PATH_LIMIT: usize = 107;
 
 pub fn serve(
     bind: &str,
     data: &Path,
     palette: Palette,
-    api: &ApiSocket,
+    api: &Api,
     threads: usize,
     cache_mb: usize,
+    markers_public: bool,
 ) -> Result<()> {
     let cache_bytes = cache_mb.max(1) * 1024 * 1024;
     let columns = columns_dir(data);
@@ -101,6 +67,8 @@ pub fn serve(
         regions: Mutex::new(region_times(&columns)),
         painted: Mutex::new(modified(&data.join("palette.json"))),
         live: Arc::new(Live::load(data)),
+        sessions: Arc::new(Sessions::new()),
+        markers_public,
         generation: AtomicU64::new(1),
         history: Mutex::new(VecDeque::new()),
         stale: Mutex::new(HashSet::new()),
@@ -109,13 +77,13 @@ pub fn serve(
         columns,
     });
 
-    // The map is the product and live data is a garnish, so an API socket that
+    // The map is the product and live data is a garnish, so an API channel that
     // will not bind is said out loud and stepped over rather than taken as fatal.
-    if let Err(error) = serve_api(api, Arc::clone(&state.live)) {
+    if let Err(error) = serve_api(api, Arc::clone(&state.live), Arc::clone(&state.sessions), data) {
         eprintln!("witchlight: {error}");
         eprintln!(
-            "witchlight: nobody will show on the map. Set `api_socket` to a shorter \
-             path or to a host:port, on both this and the server mod."
+            "witchlight: nobody will show on the map. Set `api_bind` to an address \
+             this machine has free."
         );
     }
 
@@ -155,6 +123,31 @@ pub fn serve(
     // than the region itself get rebuilt, so a run whose levels are already
     // current starts with nothing to do rather than redrawing a world that has
     // not moved.
+    // A palette with no colours in it draws bare ground everywhere. Said before
+    // anything is served, because the map that follows is not broken — its
+    // colours are missing, and those are two different things to go and fix.
+    let blank = state.palette.read().is_ok_and(|palette| palette.paints_nothing());
+    if blank {
+        println!(
+            "witchlight: the palette has no colours at all — the finest zoom will not draw \
+             and the stored levels are whatever the last usable palette left behind. \
+             An admin joining the game supplies one."
+        );
+    }
+
+    // Levels drawn with a different palette than the one in use disagree with the
+    // level below them, which is a map that changes as it is zoomed. Redrawing
+    // them settles it — but only when there is something to redraw them with.
+    let drawn_with = pyramid::palette_built_from(data);
+    let painting = state.palette.read().ok().map(|palette| palette.fingerprint.clone());
+    let repaint = !blank
+        && matches!((&drawn_with, &painting), (Some(was), Some(now)) if was != now);
+    if repaint {
+        println!(
+            "witchlight: the stored levels were drawn with a different palette — redrawing them"
+        );
+    }
+
     let levels = state.levels();
     if let (Ok(mut stale), Ok(regions)) = (state.stale.lock(), state.regions.lock()) {
         let behind = pyramid::behind(data, &regions, levels);
@@ -164,6 +157,9 @@ pub fn serve(
             regions.len()
         );
         stale.extend(behind);
+        if repaint {
+            stale.extend(regions.keys().copied());
+        }
     }
 
     // One watcher, so noticing a new export is not something every request pays
@@ -212,6 +208,19 @@ fn route(request: &mut Request, state: &State) -> Response<Cursor<Vec<u8>>> {
     } else if path == "/" {
         let (min_x, min_z, max_x, max_z) = state.bounds();
         html(&viewer(min_x, min_z, max_x, max_z))
+    } else if path == "/login" {
+        // The one address that turns a word into a browser somebody knows. It
+        // answers with a redirect so the word leaves the address bar at once:
+        // what stays in history, in a bookmark and in a pasted link is `/`.
+        match link_asked(&url).and_then(|link| state.sessions.redeem(link)) {
+            Some(session) => seated(&session),
+            None => redirect("/?login=expired", None),
+        }
+    } else if path == "/logout" {
+        state.sessions.forget(&cookies(request));
+        redirect("/", Some(format!("{}=; Path=/; Max-Age=0; SameSite=Lax", crate::auth::COOKIE)))
+    } else if path == "/me.json" {
+        json(&state.me(&cookies(request)))
     } else if path == "/live.json" {
         // Straight through: the mod knows what a waypoint is, and this knows it
         // is a JSON array to hand to a browser. That is the whole contract.
@@ -307,6 +316,11 @@ struct State {
     /// Who is online and every marker, posted by the mod rather than read from a
     /// file it rewrote every couple of seconds.
     live: Arc<Live>,
+    /// Who has followed a login link. Memory only — see [`crate::auth`].
+    sessions: Arc<Sessions>,
+    /// Whether a marker nobody has decided about is everyone's. An operator's
+    /// call, read here only to tell the viewer which controls to offer.
+    markers_public: bool,
     painted: Mutex<Option<SystemTime>>,
     /// The regions directory's own timestamp, which is the cheap gate. The mod
     /// writes a region beside itself and renames it into place — it must, or a
@@ -424,13 +438,37 @@ impl State {
             return;
         };
 
-        let (named, source) = (palette.named, palette.source.clone());
+        // A file written again with the same colours in it is not a new palette.
+        // Reloading one costs every tile in the cache and a redraw of every stored
+        // level, which is seconds of blank map — so the timestamp moving is what
+        // prompts a look, and the colours themselves are what decides.
+        if self.palette.read().is_ok_and(|held| held.same_as(&palette)) {
+            return;
+        }
+
+        let (named, source, blank) = (palette.named, palette.source.clone(), palette.paints_nothing());
         if let Ok(mut held) = self.palette.write() {
             *held = palette;
         }
         if let Ok(mut cache) = self.cache.lock() {
             cache.clear();
         }
+        // Every stored level is drawn from level 0, so redrawing them against a
+        // palette with no colours replaces a map that works with a blank one —
+        // and the old pictures are the only thing left to look at until a real
+        // palette arrives. The pyramid is left exactly as it is.
+        if blank {
+            let generation = self.bump(None);
+            eprintln!(
+                "witchlight: the palette that just arrived has no colours at all \
+                 (source {source}). The stored zoom levels are being kept as they are \
+                 and the finest level will not draw until a usable palette arrives — \
+                 an admin joining the game supplies one."
+            );
+            println!("witchlight: generation {generation}, tiles dropped");
+            return;
+        }
+
         if let Ok(mut stale) = self.stale.lock()
             && let Ok(world) = self.world.read()
         {
@@ -716,6 +754,20 @@ impl State {
         self.world.read().map_or(0, |world| world.edge)
     }
 
+    /// What the page needs to know about whoever is looking at it.
+    ///
+    /// Always answers, and answers the same shape logged in or not: a page that
+    /// has to tell an error from a stranger has two ways to draw one state.
+    fn me(&self, cookies: &str) -> String {
+        let who = self.sessions.who(cookies);
+        serde_json::json!({
+            "Name": who.as_ref().map(|who| who.name.clone()),
+            "Uid": who.as_ref().map(|who| who.uid.clone()),
+            "MarkersPublic": self.markers_public,
+        })
+        .to_string()
+    }
+
     fn chunks(&self) -> usize {
         self.world.read().map_or(0, |world| world.chunks.len())
     }
@@ -731,7 +783,24 @@ impl State {
             let (Ok(world), Ok(palette)) = (self.world.read(), self.palette.read()) else {
                 return Err(Error::Empty("the map is being reloaded".to_owned()));
             };
-            render_tile(&Renderer::new(&world, &palette), tx, tz)?
+            // Level 0 is drawn on demand and every level above it is a stored
+            // picture, so a palette with no colours in it blanks the finest level
+            // while the rest of the pyramid goes on showing the world. That reads
+            // as a map that breaks when you zoom in, which is what it was taken
+            // for three times. Refusing is what makes the viewer fall back to the
+            // level above — a coarse map rather than an empty one.
+            if palette.paints_nothing() {
+                let Some(grown) = pyramid::from_above(&self.data, 0, tx, tz, TILE, self.levels())
+                else {
+                    return Err(Error::Empty(
+                        "the palette has no colours and no level above has this ground"
+                            .to_owned(),
+                    ));
+                };
+                pyramid::encode(&grown)?
+            } else {
+                render_tile(&Renderer::new(&world, &palette), tx, tz)?
+            }
         } else {
             // Built by the builder, not here. A coarse tile is made of four of the
             // level below, so making one on demand would make every tile beneath
@@ -849,6 +918,10 @@ impl State {
         // One announcement for the whole export: the level 0 tiles the watcher
         // reloaded are in this list too, so a viewer fetches each changed tile
         // once rather than once per level of the pyramid that touched it.
+        if let Ok(palette) = self.palette.read() {
+            pyramid::record_palette(&self.data, &palette.fingerprint);
+        }
+
         let generation = self.bump(Some(repainted.clone()));
         println!(
             "witchlight: {} tiles rebuilt across {levels} levels (generation {generation})",
@@ -862,48 +935,38 @@ impl State {
 /// Separate from the map's own port on purpose: that one is meant to be reachable
 /// and this one accepts writes, and anything that could reach a public write
 /// endpoint could put people on the map who are not there.
-fn serve_api(api: &ApiSocket, live: Arc<Live>) -> Result<()> {
-    let server = match api {
-        ApiSocket::Socket(path) => {
-            if let Some(parent) = path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            // A socket left behind by a previous run would refuse the bind.
-            let _ = std::fs::remove_file(path);
+fn serve_api(api: &Api, live: Arc<Live>, sessions: Arc<Sessions>, exports: &Path) -> Result<()> {
+    // Before the bind rather than after the failure: a file naming a listener
+    // that does not exist sends the mod's posts at whatever holds that port now,
+    // and the window where that is true should not include this function.
+    Api::unpublish(exports);
 
-            // A socket address carries about a hundred bytes of path and no more,
-            // which a deep data directory can exceed. Said here because the
-            // failure that follows otherwise reads as `SUN_LEN` and nothing else.
-            if path.as_os_str().len() >= SOCKET_PATH_LIMIT {
-                return Err(Error::io(
-                    format!(
-                        "the socket path {} is {} bytes, over the {SOCKET_PATH_LIMIT} a \
-                         unix socket allows",
-                        path.display(),
-                        path.as_os_str().len()
-                    ),
-                    std::io::Error::other("path too long"),
-                ));
-            }
-
-            Server::http_unix(path)
-        }
-        ApiSocket::Address(address) => Server::http(address),
-    }
-    .map_err(|error| {
+    let server = Server::http(&api.bind).map_err(|error| {
         Error::io(
-            format!("listening for live data on {api}"),
+            format!("listening for live data on {}", api.bind),
             std::io::Error::other(error.to_string()),
         )
     })?;
 
-    println!("witchlight: taking live data on {api}");
+    // Asked of the listener rather than read back from the setting, because the
+    // setting is usually a request for whatever port is free and says nothing
+    // about which one that turned out to be.
+    let Some(address) = server.server_addr().to_ip() else {
+        return Err(Error::io(
+            format!("listening for live data on {}", api.bind),
+            std::io::Error::other("the listener has no address"),
+        ));
+    };
 
+    api.publish(exports, address.port());
+    println!("witchlight: taking live data on {address}");
+
+    let token = Api { bind: api.bind.clone(), token: api.token.clone() };
     std::thread::spawn(move || {
         for mut request in server.incoming_requests() {
-            let response = posted(&mut request, &live);
+            let response = posted(&mut request, &live, &sessions, &token);
             if let Err(error) = request.respond(response) {
-                eprintln!("witchlight: API socket response failed: {error}");
+                eprintln!("witchlight: API response failed: {error}");
             }
         }
     });
@@ -912,9 +975,15 @@ fn serve_api(api: &ApiSocket, live: Arc<Live>) -> Result<()> {
 }
 
 /// One post from the mod.
-fn posted(request: &mut Request, live: &Live) -> Response<Cursor<Vec<u8>>> {
+fn posted(request: &mut Request, live: &Live, sessions: &Sessions, api: &Api) -> Response<Cursor<Vec<u8>>> {
     if *request.method() != Method::Post {
-        return text(405, "the API socket takes posts only");
+        return text(405, "the API channel takes posts only");
+    }
+
+    // Loopback is not a trust boundary on a machine other people have accounts
+    // on, so reaching the port is not the same as being the mod.
+    if !api.authorized(request) {
+        return text(401, "the API channel needs the token from api.json");
     }
 
     let url = request.url().to_owned();
@@ -930,6 +999,17 @@ fn posted(request: &mut Request, live: &Live) -> Response<Cursor<Vec<u8>>> {
         return text(400, "unreadable body");
     }
 
+    // The one thing on this channel that answers with something rather than
+    // merely accepting it. Minting lives here because this is the only listener
+    // the mod can reach and the only party that knows which uid is which player
+    // is the mod — so the trust this needs is the trust that is already here.
+    if path == "/auth/mint" {
+        let Some(who) = asked_for(&body) else {
+            return text(400, "expected {\"Uid\":…, \"Name\":…}");
+        };
+        return json(&format!(r#"{{"Token":"{}"}}"#, sessions.mint(who)));
+    }
+
     let taken = match path {
         "/live/players" => live.set_players(body),
         "/live/markers" => live.set_markers(body),
@@ -941,6 +1021,26 @@ fn posted(request: &mut Request, live: &Live) -> Response<Cursor<Vec<u8>>> {
     } else {
         text(400, "expected a JSON array")
     }
+}
+
+/// Who the mod is asking a login word for.
+///
+/// The uid is the whole of the identity; the name only decides what the page
+/// says. Both come from the game and neither is checked here — the mod is the
+/// only thing that can reach this channel, and the only thing that knows.
+fn asked_for(body: &str) -> Option<Who> {
+    // PascalCase, because everything the mod posts is written by a C# serializer
+    // and this is the same wire as the rest of it.
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "PascalCase")]
+    struct Asked {
+        uid: String,
+        #[serde(default)]
+        name: String,
+    }
+
+    let asked: Asked = serde_json::from_str(body).ok()?;
+    (!asked.uid.is_empty()).then_some(Who { uid: asked.uid, name: asked.name })
 }
 
 /// The addresses worth telling the operator about.
@@ -1190,6 +1290,62 @@ fn json(body: &str) -> Response<Cursor<Vec<u8>>> {
     typed(body, "application/json")
 }
 
+/// The `Cookie` header, or nothing where the browser sent none.
+fn cookies(request: &Request) -> String {
+    request
+        .headers()
+        .iter()
+        .find(|header| header.field.equiv("Cookie"))
+        .map(|header| header.value.as_str().to_owned())
+        .unwrap_or_default()
+}
+
+/// The login word out of `/login?t=…`.
+fn link_asked(url: &str) -> Option<&str> {
+    param(url, "t").filter(|word| !word.is_empty())
+}
+
+/// Somewhere else, optionally leaving a cookie behind.
+///
+/// `303` rather than `302`, so the browser is told in as many words to fetch the
+/// new address with a GET. It is the difference between a login that works on a
+/// resubmitted form and one that does something surprising.
+fn redirect(to: &str, cookie: Option<String>) -> Response<Cursor<Vec<u8>>> {
+    let mut response = Response::from_data(Vec::new()).with_status_code(303);
+    if let Ok(header) = Header::from_bytes(&b"Location"[..], to.as_bytes()) {
+        response.add_header(header);
+    }
+    if let Some(cookie) = cookie
+        && let Ok(header) = Header::from_bytes(&b"Set-Cookie"[..], cookie.as_bytes())
+    {
+        response.add_header(header);
+    }
+    // A redirect that a browser remembers is a login that cannot be repeated.
+    if let Ok(header) = Header::from_bytes(&b"Cache-Control"[..], &b"no-store"[..]) {
+        response.add_header(header);
+    }
+    response
+}
+
+/// Logged in, and sent to the map with nothing in the address to say so.
+///
+/// `HttpOnly` because no script on the page has any use for the word, and
+/// `SameSite=Lax` because the only thing that should arrive carrying it is
+/// somebody following a link to this map themselves.
+///
+/// Not `Secure`: this is served over plain HTTP on a LAN as often as not, and a
+/// cookie a browser refuses to send is a login that silently never works. An
+/// operator putting the map on the internet puts TLS in front of it, and that is
+/// the same place the flag belongs.
+fn seated(session: &str) -> Response<Cursor<Vec<u8>>> {
+    let cookie = format!(
+        "{}={session}; Path=/; Max-Age={}; HttpOnly; SameSite=Lax",
+        crate::auth::COOKIE,
+        60 * 60 * 24 * 30
+    );
+    redirect("/", Some(cookie))
+}
+
 fn typed(body: &str, content_type: &str) -> Response<Cursor<Vec<u8>>> {
     // The page and the two feeds are the things that must never be stale.
     cached(body, content_type, "no-store")
@@ -1240,6 +1396,10 @@ fn text(status: u16, body: &str) -> Response<Cursor<Vec<u8>>> {
 /// would otherwise have to be doubled, which makes editing the thing a chore.
 /// The bounds are substituted so the first paint is already in the right place,
 /// and the page asks `/info.json` for the rest.
+///
+/// The version comes from the build rather than from `/info.json`, so what the
+/// page shows is what compiled it — a page fetched from one build cannot report
+/// the number of another.
 fn viewer(min_x: i32, min_z: i32, max_x: i32, max_z: i32) -> String {
     include_str!("viewer.html")
         .replace("__TILE__", &TILE.to_string())
@@ -1247,6 +1407,7 @@ fn viewer(min_x: i32, min_z: i32, max_x: i32, max_z: i32) -> String {
         .replace("__MIN_Z__", &min_z.to_string())
         .replace("__MAX_X__", &max_x.to_string())
         .replace("__MAX_Z__", &max_z.to_string())
+        .replace("__VERSION__", env!("CARGO_PKG_VERSION"))
 }
 
 #[cfg(test)]
@@ -1304,6 +1465,23 @@ mod tests {
 
         assert_eq!(portrait_name("/portraits/abc.svg"), None, "only png");
         assert_eq!(portrait_name("/icons/abc.png"), None, "not an icon");
+    }
+
+    #[test]
+    #[test]
+    fn the_page_names_the_build_and_leaves_no_placeholder_behind() {
+        let page = viewer(-512, -512, 512, 512);
+        assert!(
+            page.contains(&format!("v{}", env!("CARGO_PKG_VERSION"))),
+            "the page should say which build served it"
+        );
+        // Every substitution the page asks for, checked by the absence of the
+        // only spelling they use. One left unfilled is `__VERSION__` on screen,
+        // or a world whose bounds are a syntax error — both silent until seen.
+        assert!(
+            !page.contains("__"),
+            "a placeholder was left unsubstituted in the page"
+        );
     }
 
     #[test]
