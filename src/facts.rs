@@ -25,6 +25,28 @@ pub struct Spawn {
     pub z: i32,
 }
 
+/// What the world is like, beyond where it counts from.
+///
+/// The one field defaults, because a mod older than this build wrote none. A sea
+/// level of zero puts every column above the sea, which is what the season weight
+/// assumed before there was a number to ask for. What the clock says is not here:
+/// it changes every second a server is up, and this is a file.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct World {
+    #[serde(default)]
+    pub sea_level: i32,
+}
+
+/// What the mod last said about the world.
+#[must_use]
+pub fn world(exports: &Path) -> World {
+    std::fs::read_to_string(path_in(exports))
+        .ok()
+        .and_then(|body| serde_json::from_str(&body).ok())
+        .unwrap_or_default()
+}
+
 /// Where `world.json` lives inside the export directory.
 #[must_use]
 pub fn path_in(exports: &Path) -> std::path::PathBuf {

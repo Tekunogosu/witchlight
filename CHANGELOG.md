@@ -5,6 +5,323 @@ two **must match on minor version**: minor is the compatibility generation, move
 whenever the file format or the socket protocol changes. Patch is free to differ,
 and covers anything that changes only one half.
 
+## 0.23.3
+
+**Deploy note:** nothing to do by hand, and nothing is cleared. The mod half is
+untouched.
+
+**The panels in the corner open over the zoom rather than under it.** Leaflet
+puts its own controls at a stacking order of 1000 and the corner column sat at
+800 — and because that column stacks as one thing, a panel hung off a button
+inside it could not climb out however high it was told to go. Both panels were
+900 and both went underneath. The column sits at 1050 now: over the map's own
+furniture, still under a window somebody dragged out on purpose.
+
+Only the accessibility panel was long enough to reach the zoom and show it, but
+the settings panel had it too.
+
+## 0.23.2
+
+**Deploy note:** nothing to do by hand, and nothing is cleared. The mod half is
+untouched.
+
+**The map can be repainted for a reader who cannot separate two of its colours.**
+Under Colour vision in the accessibility panel: red-green in both its forms,
+protan and deutan, and blue-yellow. Off to begin with, and remembered.
+
+It is daltonisation rather than simulation. Simulating colour blindness shows
+somebody what they can already see; this works out what the deficiency loses and
+puts that back into the channels the eye still has, so that ground and markers
+arriving as one colour arrive as two. The deficiency is simulated from Machado,
+Oliveira and Fernandes (2009) at full severity, the loss is the difference from
+the original, and it is redistributed the usual way — all of which is linear, so
+each of the three is a single colour matrix rather than a pipeline.
+
+**It covers the whole map, not only the terrain**, unlike the colour presets
+above it. That is where it earns itself: measured against the marker colours the
+game hands out, every pair a red-green reader loses came back apart, about two
+and a half times further apart in perceptual distance. The terrain gains far
+less, being mostly olive and tan already, which little of this can confuse — so
+markers, which somebody chose a colour for on purpose, are the point.
+
+The matrices are applied as SVG filters in **linear RGB**, said out loud in the
+markup. They are ratios of light, and sRGB numbers are not; applying them to
+sRGB gives a confidently wrong answer that still looks like something.
+
+It will look strange to a reader who does not need it. That is what it is for: it
+is tuned for telling colours apart, not for looking like the world.
+
+## 0.23.1
+
+**Deploy note:** nothing to do by hand, and nothing is cleared. The mod half is
+untouched.
+
+**The colour button is an accessibility button.** Same place, under the settings
+and above the marker controls, still shown to everybody. It holds what the map
+can be asked to do differently for one pair of eyes, which the colours were only
+ever one of.
+
+**Deeper zoom** is the first of the rest. The map stops at eight pixels to the
+block; turned on, it goes to sixteen. It costs no tiles either way — the finest
+level is stretched rather than a finer one fetched — so this is only how far the
+stretching is allowed to go. Sixteen rather than the twelve asked for because the
+rungs are powers of two, as the zoom is: eight, sixteen, and nothing between.
+
+Turning it off brings the view back down with it. Leaflet lowers the limit
+without moving a map that is already past it, which leaves the map above its own
+ceiling with no tiles to draw — blank at exactly the magnification somebody just
+turned off.
+
+**A `Default` preset**, first in the list, which is the map with no filter over
+it at all. `Vivid` is still what a viewer starts on, since that is the one that
+reads most easily, and the choice is remembered.
+
+**The clock wears the account button's box.** It was a little taller than the
+button beside it and lined up with nothing. It now takes its height from the same
+two numbers Leaflet sizes that button by — 26, or 30 where Leaflet decides the
+machine has a touch screen — so the two stay level whichever it picks.
+
+## 0.23.0
+
+**Deploy note:** both halves go together, as a minor always means — the mod posts
+the world's clock on a channel this build is the first to answer. No map is
+cleared and nothing is rewritten; a mismatched pair simply shows no clock.
+
+**The map has a colour filter, and it starts on.** Five of them, in a panel hung
+off a new button under the settings: Vivid, Natural, Strong, Muted and Greyscale.
+They sit on the terrain tiles rather than on the map, so the markers, the grid and
+the player dots keep the colours somebody actually chose for them. The choice is
+kept in the browser, because it is about one pair of eyes.
+
+The button is not gated on being signed in, unlike the marker controls under it.
+Nothing it does is anybody else's business.
+
+**Why it earns its place.** 0.22.6 made the ground the colours the game would
+draw, which was right and is harder to read: measured over one world, the older
+build's ground varied half again as much in brightness as the corrected one does.
+That variation is what a map is looked at for.
+
+**None of the presets is the older build, and none can be.** That map's advantage
+was that its ground changed *hue* from region to region — a rust-brown north
+against a green middle — because it multiplied two tints at every pixel. A filter
+shifts every pixel the same way, so it can put the contrast back and cannot put
+that back. Bringing it back properly would be a second way of painting a tile,
+which is a change to the renderer rather than to the page.
+
+**The date, the time and the season have a widget of their own**, beside whoever
+is looking, in two columns of two: the date over the year, the time over the
+season. The lower line of each is the quieter one, because a year is what a date
+is *in*.
+
+**And the clock actually runs.** It was written into `world.json` once, when the
+world came up, and never again — so it showed the moment the server started for
+as long as the server ran. It arrives on the live channel now, every two seconds,
+with the players. A clock is the thing a map has least business writing to a
+disk: it is stale before the write finishes.
+
+## 0.22.6
+
+**Deploy note:** nothing to do by hand, and no map is cleared. The stored zoom
+levels are, because they were painted by a build that painted differently — they
+redraw from the region files as they are asked for, and the region files are not
+in question. Pairs with mod 0.22.7, which is where the sea level and the date
+come from; without it the map still draws correctly, and every column is treated
+as though it were at sea level.
+
+**The tints were being compounded.** The game builds *one* tint for a block and
+multiplies the block's colour by it once. The climate map makes that tint, from
+temperature across and rainfall down. The season map does not darken it — it
+stands in for part of it, in the proportion the season is felt at that place at
+all. This multiplied the two instead, which compounds them: warm ground came out
+redder and browner than the game draws it, everything came out darker, and
+nowhere ever looked as though the season had left it alone.
+
+Measured over the same world and the same view, red against green fell from 1.19
+to 1.07 and the whole map lightened, which is what removing a second tint from
+underneath the first does.
+
+**How much season a place feels is now asked rather than assumed.** The game
+weighs it by temperature and by height above the sea: foliage in the tropics
+never turns, temperate ground turns almost completely, cold ground turns a
+little because it is drab already, and a mountainside keeps its needles while
+the valley below goes to autumn. This applied the season at full strength
+everywhere. The curve is the game's own, constants included.
+
+**The climate maps are no longer read through their own border.** They are a 256
+square drawn inside a 264 one, and the border belongs to the game's texture
+atlas rather than to the lookup. Reading it as though it were the map put every
+sample a few pixels out, worst at the extremes — which is where the hottest and
+coldest ground is. The mod now writes down each map's border beside the pictures,
+since it is a fact about the asset that cannot be told from the pixels.
+
+All three come from `colormap.fsh` and `colormap.vsh` in the game's own shaders,
+which are the only statement of this that cannot drift.
+
+**Still not done, and it shows in winter:** the game whitens frostable blocks
+below about 0°C, and works out that temperature with a seasonal offset this half
+is never told. So a winter map is the right colours for winter foliage without
+the frost over the top of it. That needs the mod to say what the season has done
+to the temperature, and is a separate change.
+
+**The corner says the date and the season.** Both come from the game's own
+words, taken at spawn — a season is a fact about a place, and the hemispheres
+disagree about it.
+
+## 0.22.5
+
+**Deploy note:** nothing to do by hand, and nothing is cleared.
+
+**A tile being replaced no longer flashes.** Leaflet keeps a `load` listener on
+every tile it makes, and answers one by setting the tile to nothing and fading
+it back in over a fifth of a second. That is right for a tile arriving into an
+empty square. It is wrong for one being replaced in place — and it fired anyway,
+because putting new pixels into a tile is done by giving it a new `src`, and the
+listener is still there when they land.
+
+So each repaint faded from transparent, whatever the map had going for it. On one
+tile, measured: the old way wrote `opacity: 0` and left it there for the fade to
+undo; the new way writes `1` and never writes `0` at all. Leaflet's handler runs
+first and this one second, both inside the same event and so both before the
+browser has painted either, which is what makes it a swap rather than a fade.
+
+This was always the case. What changed is how often it shows: 0.22.3 moved the
+export to ten seconds and the terrain poll to two, so a map that repainted twice
+a minute now repaints six times, and every one of them was a flash. Zoomed out it
+is worse again, because one tile at a coarse level covers many regions and almost
+any change anywhere lands on a tile you can see.
+
+**What is repainting is not wrong, for the record.** The service was asked. Of
+the exports on a live server, all but one rewrote a single region holding one or
+two changed columns. The exception rewrote 59, because the season had moved —
+which really does change the colour of every column stored under it. Nothing is
+repainting that has not changed; it was only that changing looked like breaking.
+
+## 0.22.4
+
+**Deploy note:** nothing to do by hand, and nothing is cleared.
+
+**Every button on the map is one size again.** Leaflet draws its bar four pixels
+larger on a machine it believes has a touch screen, and it says so with a class
+on the container it owns. The corner column borrows Leaflet's bar and sits
+outside that container, so the rule never reached it: the cog and the account
+came out 26 square against a zoom and a picker at 30, on exactly the machines
+where Leaflet chose the larger size. The column is now told what the map was
+told, so the two agree whichever size Leaflet picks — rather than a number
+written down here that would be wrong on whatever it disagreed with.
+
+The account keeps its width, which is however wide the name in it needs to be.
+
+**The name is back beside the version.** `#version` was laid out as a grid, and
+a grid makes a row of each of its children — so the moment the name became a
+child of its own, to be given a colour, it went above the number instead of
+beside it. It is laid out as the line of text it is.
+
+## 0.22.3
+
+**Deploy note:** nothing to do by hand, and nothing is cleared. Pairs with mod
+0.22.4, which is where most of the waiting was; this half is worth deploying on
+its own but the two together are what makes new ground appear quickly.
+
+**New ground is drawn about three times sooner.** The page asked what had changed
+every five seconds, on top of everything else between a player walking somewhere
+and seeing it: the mod's export timer, the service noticing, the levels above
+being built. Asking is cheap — `?since=` usually answers with nothing at all — so
+it asks every two, the same clock the players and markers already use. Most of
+the rest of that wait is the mod's, and mod 0.22.4 takes it from thirty seconds
+to ten.
+
+**What the picker is looking at sits above the readout.** Underneath, it pushed
+the six numbers down the screen whenever it appeared and let them drop back when
+it went — so the row being read moved out from under the reader. The panel is
+anchored to the bottom of the screen, so the line grows upward off the top of it
+and the numbers stay where they are.
+
+**The name drifts.** `Witchlight` in the corner moves through a soft purple, blue
+and green and back over thirty seconds. Slow enough never to be seen moving, and
+close enough in weight to the text beside it to stay furniture rather than
+decoration. A machine asked to stop things moving gets one of the three colours
+and no animation.
+
+## 0.22.2
+
+**Deploy note:** nothing to do by hand, and nothing is cleared. The mod half is
+untouched; repackage it to carry this binary.
+
+**A repaint no longer empties the map.** When the service cannot say which tiles
+changed — a new palette recolours all of them, or a viewer has been away longer
+than the service remembers — the page fell back to Leaflet's `redraw()`, which
+removes every tile and asks for them again. The map went blank and filled back
+in, at the one moment it was most obviously working. It now swaps each tile the
+way a named change already did: the replacement is loaded out of sight and put in
+place only once it has decoded, so nothing is ever detached and no tile is empty
+between the old pixels and the new.
+
+**The settings hang off the button that opens them.** The panel was pinned 92
+pixels down the page, which is a guess at where the cog is — one that a scaled
+toolbar makes wrong, and which left it floating well below the control it belongs
+to. It is the cog's own panel now, so it follows the button.
+
+**The corner readout is read rather than parsed.** Six numbers ran together in
+one line with spaces between them, which asks whoever is looking to remember the
+order to know which is which. They are three labelled pairs now — where the
+pointer is, how the map is drawn, what the world holds — ruled apart, with the
+unit in the label so every value is a bare number. The digits are tabular and
+each field has a floor under its width, so a coordinate crossing zero no longer
+shoves the rest of the panel along.
+
+A world with nothing exported says so in a sentence rather than showing six
+zeroes, which were six wrong answers where there is honestly no answer yet.
+
+**The page says which page it is.** The corner read `v0.22.1` and now reads
+`Witchlight - v0.22.1`.
+
+**Player cards cast the same shadow as the controls.** They are furniture laid
+over the map exactly as a button is, and without it a card read as a hole cut in
+the terrain rather than as something resting on it.
+
+## 0.22.1
+
+**Deploy note:** nothing to do by hand, and nothing is cleared. The mod half is
+untouched and stays where it is; repackage it to carry this binary.
+
+**The viewer's furniture is drawn rather than typed.** Every mark on it was a
+Unicode character: a magnifying glass on the block picker, a gear, a flag, a
+trigram, a position indicator, a bust and a multiplication sign. Two of those were
+colour emoji, which paint themselves and ignore what the page asks for — the
+reason an armed tool signalled with a ring drawn around its mark instead of by
+colouring it. The rest were symbol-font characters each machine drew in whatever
+face it happened to have, or drew as a box, having none: `⌖` is missing from
+enough fonts to be a real hole rather than a theoretical one.
+
+They are silhouettes now, filled with the colour of the button they sit in, which
+is how this map has always drawn a waypoint. So an armed tool says so twice — the
+surface lifts a step and the mark takes the accent — where before it had one
+signal and a workaround.
+
+The block picker is marked with a frame around a block rather than a magnifying
+glass. A glass is what a browser puts on a search box, and the tool names the
+block under the pointer.
+
+**`/chrome/{name}.svg`** serves them, compiled in and cached like the library
+rather than read from the map directory. `/icons/` is a game's waypoint marks —
+data, exported per world, absent until something has been. Furniture has to draw
+on a map that has never been exported, so it cannot come from there.
+
+**Phosphor is vendored**, all six weights of it, at 2.1.1 — MIT, no dependencies,
+9,072 files that are each a single path. Only the six marks named in `chrome.rs`
+reach the binary; the rest is kept so the next one is already here at a known
+version. `src/vendor/README.md` records the commit, its hash, and why a commit
+rather than a tag.
+
+One weight is mixed: the mark that shuts a window is bold, not filled. In the
+filled weight an `x` is a square with the cross knocked out of it, which beside a
+heading reads as a blot rather than as a way out.
+
+Three copies of the mask boilerplate in the stylesheet became one `.masked`, and
+the account button's mark became an element instead of a `::before` — a mask
+clips an element's border along with everything else it draws, which had quietly
+taken the rule between the mark and the name with it.
+
 ## 0.22.0
 
 **Deploy note:** the settings file gains `map_data` and `per_world`. This build

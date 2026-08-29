@@ -4,6 +4,38 @@
 <title>Witchlight</title>
 <link rel="stylesheet" href="/leaflet.css">
 <link rel="stylesheet" href="/viewer.css?v=__VERSION__">
+<!-- What a reader who cannot separate two colours is shown instead.
+     Daltonisation, not simulation: the map is not made to look the way a colour
+     blind reader sees it, it is repainted so that what they cannot tell apart
+     becomes something they can. Each is one matrix because the whole of it is
+     linear — simulate the deficiency, take what was lost, and put that back into
+     the channels the eye still has. Simulation comes from Machado, Oliveira and
+     Fernandes (2009) at full severity; the redistribution is the usual one.
+
+     `linearRGB` is not decoration. These matrices are ratios of light, and
+     applying them to sRGB numbers, which are not, gives the wrong answer — it
+     is also SVG's default, and said out loud because a browser that changed its
+     mind about that would break this quietly. -->
+<svg id="cvd" aria-hidden="true" focusable="false"><defs>
+  <filter id="cvd-protan" color-interpolation-filters="linearRGB">
+    <feColorMatrix type="matrix" values="1.00000 0.00000 0.00000 0 0
+                                         0.47890 0.47691 0.04419 0 0
+                                         0.59728 -0.68869 1.09141 0 0
+                                         0 0 0 1 0"/>
+  </filter>
+  <filter id="cvd-deutan" color-interpolation-filters="linearRGB">
+    <feColorMatrix type="matrix" values="1.00000 0.00000 0.00000 0 0
+                                         0.16279 0.72505 0.11216 0 0
+                                         0.45469 -0.64539 1.19070 0 0
+                                         0 0 0 1 0"/>
+  </filter>
+  <filter id="cvd-tritan" color-interpolation-filters="linearRGB">
+    <feColorMatrix type="matrix" values="0.74116 -0.40721 0.66605 0 0
+                                         0.07510 0.58523 0.33967 0 0
+                                         0.00000 0.00000 1.00000 0 0
+                                         0 0 0 1 0"/>
+  </filter>
+</defs></svg>
 <div id="map"></div>
 <div id="who"></div>
 <div id="corner"></div>
@@ -11,7 +43,7 @@
 <div id="compose" class="window">
   <div class="bar">
     <h2 id="compose-title">New marker</h2>
-    <button class="shut" type="button" title="Close" aria-label="Close">×</button>
+    <button class="shut" type="button" title="Close" aria-label="Close"><span class="chrome masked mark-x" aria-hidden="true"></span></button>
   </div>
   <div class="field"><span>Name</span>
     <input id="marker-name" type="text" maxlength="128" placeholder="what is here">
@@ -36,7 +68,8 @@
       <input id="marker-z" type="number" aria-label="Marker z" placeholder="z">
       <button id="marker-pick" class="tool" type="button"
               title="Pick the spot on the map" aria-label="Pick the spot on the map"
-              aria-pressed="false">⌖</button>
+              aria-pressed="false"><span class="chrome masked mark-map-pin-simple"
+              aria-hidden="true"></span></button>
     </div>
   </div>
   <label class="line" id="remember-line">
@@ -54,7 +87,7 @@
 <div id="presets" class="window">
   <div class="bar">
     <h2>Presets</h2>
-    <button class="shut" type="button" title="Close" aria-label="Close">×</button>
+    <button class="shut" type="button" title="Close" aria-label="Close"><span class="chrome masked mark-x" aria-hidden="true"></span></button>
   </div>
   <p class="note">What a marker starts as, by what you clicked. Pick one to change
      it.</p>
@@ -69,7 +102,7 @@
   <div class="bar">
     <span id="profile-face" class="face"></span>
     <h2 id="profile-name">Not signed in</h2>
-    <button class="shut" type="button" title="Close" aria-label="Close">×</button>
+    <button class="shut" type="button" title="Close" aria-label="Close"><span class="chrome masked mark-x" aria-hidden="true"></span></button>
   </div>
   <label class="line"><input id="want-presets" type="checkbox">New markers become presets by default</label>
   <label class="line"><input id="want-private" type="checkbox">New markers are private by default</label>
@@ -86,8 +119,28 @@
     <button id="profile-save" class="go" type="button">Save</button>
   </div>
 </div>
-<div id="version">v__VERSION__</div>
-<div id="hud"><div id="where">loading…</div><div id="what"></div></div>
+<div id="version"><span class="name">Witchlight</span> - v__VERSION__</div>
+<div id="hud">
+  <!-- Six numbers in three pairs, each pair answering a different question:
+       where the pointer is, how the map is drawn, and what the world holds.
+       The unit belongs to the label so every value is a bare number, which is
+       what lets a column of them stay still while the pointer moves. -->
+  <!-- Above the readout, not below it. This line comes and goes with the
+       picker, and underneath it pushed the six numbers down the screen every
+       time it appeared — so the row somebody is reading moved out from under
+       them. The panel is anchored to the bottom, so growing upward leaves it
+       exactly where it was. -->
+  <div id="what"></div>
+  <div id="waiting">loading…</div>
+  <div id="where">
+    <div class="read wide"><span class="key">x</span><b id="at-x">0</b></div>
+    <div class="read wide"><span class="key">z</span><b id="at-z">0</b></div>
+    <div class="read apart wide"><span class="key">px/block</span><b id="at-scale">0</b></div>
+    <div class="read"><span class="key">level</span><b id="at-level">0</b></div>
+    <div class="read apart wide"><span class="key">chunks</span><b id="at-chunks">0</b></div>
+    <div class="read"><span class="key">online</span><b id="at-online">0</b></div>
+  </div>
+</div>
 <script>
 // What the server knew at the moment it served this page, so the first paint is
 // already in the right place rather than jumping once `/info.json` answers.

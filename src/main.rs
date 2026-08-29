@@ -8,6 +8,7 @@ mod api;
 mod apiport;
 mod auth;
 mod cache;
+mod chrome;
 mod color;
 mod columns;
 mod config;
@@ -173,7 +174,7 @@ fn run() -> Result<()> {
         palette.game_version
     );
 
-    let coverage = Renderer::new(&world, &palette).coverage();
+    let coverage = Renderer::new(&world, &palette, facts::world(&exports).sea_level).coverage();
     println!("witchlight: surface {}", coverage.summary());
     if coverage.is_poor() {
         eprintln!(
@@ -190,7 +191,7 @@ fn run() -> Result<()> {
                     "there is nothing to draw yet — the server has exported no regions".to_owned(),
                 ));
             }
-            let renderer = Renderer::new(&world, &palette);
+            let renderer = Renderer::new(&world, &palette, facts::world(&exports).sea_level);
             let width = (max_x - min_x).unsigned_abs();
             let image = renderer.render(min_x, min_z, width.max((max_z - min_z).unsigned_abs()));
             image

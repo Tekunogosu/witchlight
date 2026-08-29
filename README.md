@@ -228,10 +228,13 @@ the owner is the only thing that says whose it is.
 
 [Leaflet](https://leafletjs.com/), vendored into the binary rather than fetched
 from a CDN, so the service stays one file that works offline and tells nobody who
-is looking at the map. See `src/vendor/README.md` for the exact release it came
-from and how to move version.
+is looking at the map. The marks its furniture wears are vendored beside it, from
+[Phosphor](https://phosphoricons.com/): filled silhouettes, which is what the
+game's own waypoint marks are, so the two read as one set. Only the six the page
+uses are compiled in, and `src/chrome.rs` is the list. See `src/vendor/README.md`
+for the exact releases both came from and how to move version.
 
-The **picker** — the 🔍 below the zoom control — reads one block rather than
+The **picker** — the block in a frame, below the zoom control — reads one block rather than
 looking at all of them. It leaves the pointer an arrow, since a crosshair centres
 on the block it is naming and so covers it. It outlines the block instead, which
 at one pixel per block is the whole point of the tool, and asks `/block.json` what
@@ -263,6 +266,7 @@ needed it. Reading order, roughly outside in:
 | `watch.rs` | noticing that the mod has written something |
 | `feeds.rs` | the JSON the page asks for |
 | `viewer.rs` `viewer/` | the page: markup, style, and eleven scripts joined in order |
+| `chrome.rs` | which marks the furniture wears, and which of the vendored pack reach the binary |
 | `columns.rs` `pyramid.rs` `render.rs` `palette.rs` `color.rs` | the map itself, from region file to pixel |
 | `live.rs` `pending.rs` `preferences.rs` `auth.rs` `facts.rs` | what the two halves say to each other |
 | `http.rs` `urls.rs` `cache.rs` `net.rs` `files.rs` `random.rs` `error.rs` | utilities, which know nothing about maps |

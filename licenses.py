@@ -27,6 +27,30 @@ HERE = pathlib.Path(__file__).resolve().parent
 # COPYING.md in a crate's root cannot silently become the notice this reproduces.
 LICENCE_FILES = ("LICENSE", "LICENCE", "COPYING", "NOTICE", "UNLICENSE")
 
+# What is vendored under `src/vendor`, in the order it is reported. A table
+# rather than a branch each, so that adding the next one is a line here and the
+# missing-licence path is written once — a vendored thing whose notice has gone
+# astray is the one case that must stop the run rather than quietly shorten it.
+#
+# Only the marks named in `src/chrome.rs` are compiled in, but the notice is owed
+# on the whole of what the repository carries: the licence travels with the copy,
+# and the copy here is the whole pack.
+VENDORED = (
+    (
+        "leaflet 1.9.4",
+        "leaflet-LICENSE",
+        "Vendored in `src/vendor` and compiled into the binary. BSD-2-Clause.",
+        "https://github.com/Leaflet/Leaflet",
+    ),
+    (
+        "phosphor-icons 2.1.1",
+        "phosphor-LICENSE",
+        "Vendored in `src/vendor/phosphor`; the marks the viewer wears are "
+        "compiled into the binary. MIT.",
+        "https://github.com/phosphor-icons/core",
+    ),
+)
+
 
 def crates():
     """Every crate whose code reaches the binary, nearest the root first."""
@@ -99,17 +123,16 @@ def main():
     print("---\n")
 
     vendor = HERE / "src" / "vendor"
-    leaflet = vendor / "leaflet-LICENSE"
-    if leaflet.exists():
-        block(
-            "leaflet 1.9.4",
-            "Vendored in `src/vendor` and compiled into the binary. BSD-2-Clause.",
-            [(leaflet.name, leaflet.read_text(encoding="utf-8"))],
-            "https://github.com/Leaflet/Leaflet",
-        )
+    missing = False
+    for title, licence, subtitle, upstream in VENDORED:
+        path = vendor / licence
+        if not path.exists():
+            print(f"licenses: {path} is missing", file=sys.stderr)
+            missing = True
+            continue
+        block(title, subtitle, [(path.name, path.read_text(encoding="utf-8"))], upstream)
         print("---\n")
-    else:
-        print(f"licenses: {leaflet} is missing", file=sys.stderr)
+    if missing:
         return 1
 
     for package in crates():

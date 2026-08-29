@@ -25,9 +25,24 @@ const said = (x, z) => settings.absolute.on
   ? [Math.round(x), Math.round(z)]
   : [Math.round(x - spawn.x), Math.round(z - spawn.z)];
 
-/** How far past one block per pixel the view may go. Costs no extra tiles: Leaflet
- *  stretches the finest level rather than asking for one that does not exist. */
+/**
+ * How far past one block per pixel the view may go, as powers of two.
+ *
+ * Costs no extra tiles either way: Leaflet stretches the finest level rather
+ * than asking for one that does not exist, so this is only how far it is allowed
+ * to stretch it. Three is eight pixels to the block, four is sixteen — the rungs
+ * are powers of two because the zoom is, and there is no rung between them.
+ */
 const ZOOM_IN_BEYOND_NATIVE = 3;
+const ZOOM_IN_DEEPER = 4;
+
+/** Which of the two is in force. */
+let zoomBeyond = ZOOM_IN_BEYOND_NATIVE;
+
+/** The furthest in the map may currently be taken. */
+function zoomCeiling() {
+  return NATIVE_ZOOM + zoomBeyond;
+}
 
 /**
  * The Leaflet zoom at which one pixel is one block, fixed once and never moved.

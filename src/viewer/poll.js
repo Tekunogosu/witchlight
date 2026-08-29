@@ -1,7 +1,12 @@
 // Asking the service what has changed, and starting the page.
 //
-// Three clocks: markers and players every two seconds, terrain every five, and
-// the things that only change when a mod set does asked once at load.
+// Three clocks: markers, players and terrain every two seconds, and the things
+// that only change when a mod set does asked once at load.
+//
+// Terrain used to be asked for every five. Nothing about the question is
+// expensive — `?since=` answers with the tiles that moved and usually with none
+// — and five seconds of it sat on top of every other wait between a player
+// walking into new ground and seeing it drawn.
 
 /**
  * Which marker pictures exist.
@@ -38,6 +43,7 @@ async function pollLive() {
   try {
     const live = await (await fetch('/live.json')).json();
     players = live.Players || [];
+    showWhen(live.World);
     const waypoints = live.Waypoints || [];
 
     // A marker naming a picture nobody has heard of means the set has grown.
@@ -104,7 +110,7 @@ async function pollWorld() {
     // both at once, since the export that added a region also drew it.
     if (grew) resize();
     if (info.tiles) terrain?.refresh(info.tiles);
-    else if (!grew) terrain?.redraw();
+    else if (!grew) terrain?.refreshAll();
 
     // The block under a resting pointer may be a different block now. What was
     // said about it was true of the map before this export, so it is asked again.
@@ -127,5 +133,5 @@ for (const setting of Object.values(settings)) setting.apply(setting.on);
 // A beat rather than an interval: each answer is waited for before the next
 // question is counted, so a service slower than the gap is not asked twice over.
 beat(pollLive, 2000, 'the live poll');
-beat(pollWorld, 5000, 'the terrain poll');
+beat(pollWorld, 2000, 'the terrain poll');
 started(pollWorld().then(pollIcons).then(pollColours).then(pollLive), 'the first poll');

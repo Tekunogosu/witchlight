@@ -189,13 +189,28 @@ pub fn stamp(exports: &Path) -> PathBuf {
     tiles_dir(exports).join("built-by")
 }
 
+/// How this build paints a column, counted up whenever that changes.
+///
+/// Separate from the region format, because the two go wrong in different ways
+/// and only one of them costs the map. A region format the service no longer
+/// reads means the ground itself has to be exported again; a change in here means
+/// the same ground would now be drawn a different colour, so what is stored is
+/// merely out of date. Bumping this throws the pictures away and redraws them
+/// from region files that were never in doubt.
+///
+/// 1: the season tint stood in for part of the climate tint rather than being
+///    multiplied over the top of it, weighted the way the game weights it, and
+///    the climate maps stopped being read through their own border.
+pub const PAINT: u16 = 1;
+
 /// Throws away every level if it was built from a region format this build no
-/// longer reads. Returns whether it did.
+/// longer reads, or painted by a build that painted differently. Returns whether
+/// it did.
 pub fn reset_unless_built_from(exports: &Path, version: u16) -> bool {
     // The tile encoding is in here too: levels written by a different encoder are
     // still readable, but they are not the size this build would have made them,
     // and nothing else would notice the difference.
-    let want = format!("{version}/png-nofilter");
+    let want = format!("{version}/png-nofilter/paint{PAINT}");
     if std::fs::read_to_string(stamp(exports)).is_ok_and(|found| found.trim() == want) {
         return false;
     }

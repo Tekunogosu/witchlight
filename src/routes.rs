@@ -76,6 +76,16 @@ fn stored(request: &mut Request, state: &State, path: &str) -> Reply {
         };
     }
 
+    // Compiled in rather than read from the map directory, and so served like
+    // the library rather than like a waypoint's mark: these cannot change for a
+    // given build, and the page asks for them under its build's number.
+    if let Some(name) = urls::chrome_name(path) {
+        return match crate::chrome::icon(name) {
+            Some(body) => http::asset(body, "image/svg+xml"),
+            None => http::text(404, "the furniture wears no such mark"),
+        };
+    }
+
     if let Some(name) = urls::portrait_name(path) {
         return match std::fs::read(state.data.join("portraits").join(format!("{name}.png"))) {
             Ok(bytes) => http::portrait(&bytes),

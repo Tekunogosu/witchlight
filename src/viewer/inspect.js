@@ -23,9 +23,24 @@ let told = null;
  *  it stopped on rather than all hundred. */
 let asking = false;
 
-/** What the tool is marked with. An emoji, so it is a picture on every machine
- *  without a drawing to keep aligned inside a 26 pixel square. */
-const TOOL_MARK = '🔍';
+/**
+ * The mark a control wears.
+ *
+ * A silhouette the service compiled in, filled with whatever colour the button
+ * is currently using, so a tool that is armed colours its own mark. Every one of
+ * these was a Unicode character: two were colour emoji that ignore `color`
+ * outright, and the rest were symbol-font characters each machine drew in
+ * whatever face it had — or drew as a box, having none.
+ *
+ * The mark is for the eye alone. What a screen reader says is the button's
+ * label, which is why nothing here carries a name.
+ */
+function chromeMark(name) {
+  const mark = document.createElement('span');
+  mark.className = `chrome masked mark-${name}`;
+  mark.setAttribute('aria-hidden', 'true');
+  return mark;
+}
 
 const Picker = L.Control.extend({
   options: { position: 'topleft' },
@@ -40,9 +55,7 @@ const Picker = L.Control.extend({
     // is among the three identical squares in the corner.
     button.setAttribute('aria-label', 'Inspect a block');
     button.setAttribute('aria-pressed', 'false');
-    // The label is what a screen reader says; the mark is only for the eye, and
-    // `aria-label` is what stops it being read out as "magnifying glass".
-    button.textContent = TOOL_MARK;
+    button.append(chromeMark('scan'));
 
     // Wired the way Leaflet wires its own bar buttons. Without the first line a
     // double click on the tool zooms the map underneath it and a drag from it
@@ -84,7 +97,7 @@ function cornerAnchor(into, mark, label) {
   // Every one of these is a square with a mark in it, so the name is the only
   // thing telling a reader — or a test — which one it reached.
   button.setAttribute('aria-label', label);
-  button.textContent = mark;
+  button.append(chromeMark(mark));
   L.DomEvent.on(button, 'click', L.DomEvent.stop);
   return button;
 }
@@ -110,16 +123,91 @@ function cornerButton(id, mark, label, into) {
 // Not `chrome`: a browser already has one of those, and a `const` of that
 // name throws before a line of this page runs.
 const corner = document.getElementById('corner');
+
+// Leaflet draws its bar buttons four pixels larger on a machine it believes has
+// a touch screen, and it says so with a class on the container it owns. This
+// column borrows the bar and sits outside that container, so the rule never
+// reached it: the cog and the account came out 26 square against a zoom and a
+// picker at 30, on exactly the machines where Leaflet decides in favour of the
+// larger one. Told what the map was told, both sizes stay one size — rather than
+// a number written here that would be wrong on whichever machine Leaflet
+// disagreed with.
+if (map.getContainer().classList.contains('leaflet-touch')) {
+  corner.classList.add('leaflet-touch');
+}
 /** The settings and who you are, side by side. One is about the map and one is
  *  about you; putting them in a column would make one read as the other's. */
 const row = L.DomUtil.create('div', '', corner);
 row.id = 'row';
-const cogBar = cornerButton('cog', '\u2699', 'Settings', row);
-const accountBar = cornerButton('account', 'Unauthenticated', 'Account', row);
+const cogBar = cornerButton('cog', 'gear-six', 'Settings', row);
+const accountBar = cornerButton('account', 'user', 'Account', row);
+/**
+ * The one corner button that says a name as well as wearing a mark.
+ *
+ * The name is its own element rather than the button's text, because the button
+ * already has a child: writing a name onto the button would take the mark with
+ * it. It says something before `/me.json` has answered, so the button reads as a
+ * control rather than as an empty box for the width of one request.
+ */
+const accountName = document.createElement('span');
+accountName.className = 'who';
+accountName.textContent = 'Unauthenticated';
+accountBar.querySelector('a').append(accountName);
+/**
+ * What the world's clock says, beside who is looking at it.
+ *
+ * Two columns of two: the date over the year, the time over the season. The
+ * lower line of each is the quieter one — a year and a season are what the date
+ * and the time are *in*, and saying all four equally loudly makes a reader work
+ * out which is which every time they glance at it.
+ */
+const whenBar = L.DomUtil.create('div', 'leaflet-bar', row);
+whenBar.id = 'when';
+/** The same box the account wears, so the two sit level and read as one row of
+ *  furniture rather than as a control and a label that happen to be adjacent. */
+const whenBox = L.DomUtil.create('div', 'tool clock', whenBar);
+const when = {};
+for (const [top, under] of [['date', 'year'], ['time', 'season']]) {
+  const column = L.DomUtil.create('div', 'when-part', whenBox);
+  when[top] = L.DomUtil.create('b', '', column);
+  when[under] = L.DomUtil.create('span', '', column);
+  when[top].textContent = '—';
+  when[under].textContent = '';
+}
+L.DomEvent.disableClickPropagation(whenBar);
+
+/**
+ * Says what the clock says, or takes itself off the map.
+ *
+ * Shown only where there is something to show: a service running without a game
+ * server behind it has no clock at all, and four dashes in the corner is a broken
+ * widget rather than an honest absence.
+ */
+function showWhen(clock) {
+  const has = Boolean(clock && (clock.Date || clock.Time));
+  whenBar.style.display = has ? '' : 'none';
+  if (!has) return;
+  when.date.textContent = clock.Date || '—';
+  when.year.textContent = clock.Year || '';
+  when.time.textContent = clock.Time || '—';
+  when.season.textContent = clock.Season || '';
+}
+showWhen(null);
+
+/**
+ * What the map can be asked to do differently, under the settings and above the
+ * marker controls.
+ *
+ * Not gated on being signed in, unlike what is under it: nothing in here changes
+ * the map, or anything anybody else sees. It changes what one pair of eyes is
+ * shown, which is nobody's business but theirs.
+ */
+const accessBar = cornerButton('access', 'person-arms-spread', 'Accessibility');
+
 /** Making a marker, and deciding what one starts as: one control, two buttons. */
-const mineBar = cornerButton('mine', '\u2691', 'Add a marker');
+const mineBar = cornerButton('mine', 'map-pin-simple', 'Add a marker');
 const markerButton = mineBar.querySelector('a');
-const presetButton = cornerAnchor(mineBar, '\u2630', 'Presets');
+const presetButton = cornerAnchor(mineBar, 'bookmarks-simple', 'Presets');
 
 /**
  * Says who is looking, and offers what only they can act on.
@@ -135,7 +223,7 @@ const presetButton = cornerAnchor(mineBar, '\u2630', 'Presets');
 function showAccount(me) {
   const button = accountBar.querySelector('a');
   const named = me && me.Name;
-  button.textContent = named || 'Unauthenticated';
+  accountName.textContent = named || 'Unauthenticated';
   button.classList.toggle('out', !named);
   button.title = named
     ? `Signed in as ${me.Name}`
@@ -289,11 +377,17 @@ function say() {
   if (!terrain) return;
   const seen = pointer || map.getCenter();
   const [x, z] = said(seen.lng, seen.lat);
-  const perBlock = scaleAt(map.getZoom(), NATIVE_ZOOM);
-  hudWhere.textContent =
-    `x ${x}   z ${z}   ` +
-    `${perBlock.toFixed(2)} px/block   level ${levelFor(Math.round(map.getZoom()), NATIVE_ZOOM)}   ` +
-    `${chunks} chunks   ${players.length} online`;
+  // Written field by field rather than as one line, so that a pointer moving
+  // across the map rewrites two numbers instead of the whole readout.
+  readout.x.textContent = x;
+  readout.z.textContent = z;
+  readout.scale.textContent = scaleAt(map.getZoom(), NATIVE_ZOOM).toFixed(2);
+  readout.level.textContent = levelFor(Math.round(map.getZoom()), NATIVE_ZOOM);
+  readout.chunks.textContent = chunks;
+  readout.online.textContent = players.length;
+  // A world whose mod is older than this says neither, and a dash is the honest
+  // answer to a question nobody has answered.
+  hud.classList.remove('waiting');
   hudWhat.textContent = picking ? describe() : '';
 }
 

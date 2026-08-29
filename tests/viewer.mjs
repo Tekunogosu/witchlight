@@ -60,6 +60,7 @@ function constant(text, pattern, what) {
 const TILE = constant(pyramid, /pub const TILE: u32 = (\d+)/, 'TILE in pyramid.rs');
 const BEYOND = constant(source, /const ZOOM_IN_BEYOND_NATIVE = (\d+)/, 'ZOOM_IN_BEYOND_NATIVE');
 const NATIVE = constant(source, /const NATIVE_ZOOM = (\d+)/, 'NATIVE_ZOOM');
+const DEEPER = constant(source, /const ZOOM_IN_DEEPER = (\d+)/, 'ZOOM_IN_DEEPER');
 
 const GRID_MIN = constant(source, /const GRID_MIN_PIXELS = (\d+)/, 'GRID_MIN_PIXELS');
 
@@ -271,13 +272,17 @@ console.log('\nthe layer is told the zoom range the map actually uses');
 // magnification the level system exists to provide.
 const options = source.slice(source.indexOf('terrain = new Terrain('), source.indexOf("className: 'terrain'"));
 const stated = name => {
-  const match = options.match(new RegExp(`${name}:\\s*([A-Za-z_0-9 +-]+),`));
+  const match = options.match(new RegExp(`${name}:\\s*([A-Za-z_0-9 +()-]+),`));
   return match && match[1].trim();
 };
+// Said as the one function that owns the ceiling rather than as the sum, because
+// the ceiling moves now: a reader who wants to get closer to the blocks raises
+// it, and a layer left on the old sum would drop every tile above the old top.
 check('the layer states its own maxZoom rather than inheriting 18',
-  stated('maxZoom') === 'NATIVE_ZOOM + ZOOM_IN_BEYOND_NATIVE');
+  stated('maxZoom') === 'zoomCeiling()');
 check('the layer states its own minZoom', stated('minZoom') !== null);
 check(`which covers the map's ceiling of ${NATIVE + BEYOND}`, NATIVE + BEYOND > 18);
+check(`and the deeper ceiling of ${NATIVE + DEEPER}`, NATIVE + DEEPER > NATIVE + BEYOND);
 
 console.log('\na redrawn player gets a new address to fetch');
 // A portrait is filed under its player, so the name is the same before and after

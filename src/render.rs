@@ -32,6 +32,9 @@ const UNKNOWN_BLOCK: Rgb = Rgb::new(0xff, 0x00, 0xdc);
 pub struct Renderer<'a> {
     pub world: &'a World,
     pub palette: &'a Palette,
+    /// Where the world's oceans sit, which is what height is measured against
+    /// when deciding how much of the season a column feels.
+    pub sea_level: i32,
 }
 
 /// What is at one column, read once and used everywhere.
@@ -129,8 +132,8 @@ impl Coverage {
 
 impl<'a> Renderer<'a> {
     #[must_use]
-    pub const fn new(world: &'a World, palette: &'a Palette) -> Self {
-        Self { world, palette }
+    pub const fn new(world: &'a World, palette: &'a Palette, sea_level: i32) -> Self {
+        Self { world, palette, sea_level }
     }
 
     /// What is at one block position.
@@ -143,7 +146,7 @@ impl<'a> Renderer<'a> {
             return Surface::Unmapped;
         };
 
-        match self.palette.color_of(column.block, &column, variation(x, z)) {
+        match self.palette.color_of(column.block, &column, variation(x, z), self.sea_level) {
             Some(color) => Surface::Painted { column, color },
             None if self.palette.knows(column.block) => Surface::Blank { column },
             None => Surface::Unknown { column },

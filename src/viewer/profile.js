@@ -80,7 +80,10 @@ function drawProfile() {
     picture.alt = '';
     face.append(picture);
   } else {
-    face.textContent = '\u{1F464}';
+    // The same mark the account button wears, for the same reason: nobody has
+    // sent a picture, and a letter or an emoji in its place reads as a different
+    // kind of thing rather than as an absent one.
+    face.append(chromeMark('user'));
   }
 
   wantPresets.checked = Boolean(mine.PresetsByDefault);
@@ -118,6 +121,7 @@ function drawPresets() {
     const mark = document.createElement('span');
     mark.className = 'mark';
     const shape = document.createElement('i');
+    shape.className = 'masked';
     shape.style.background = preset.Color || '#ffffff';
     const url = `url(/icons/${encodeURIComponent(preset.Icon || 'circle')}.svg)`;
     shape.style.webkitMaskImage = url;
@@ -140,7 +144,7 @@ function drawPresets() {
     const drop = document.createElement('button');
     drop.type = 'button';
     drop.className = 'shut';
-    drop.textContent = '×';
+    drop.append(chromeMark('x'));
     drop.title = 'Delete this preset';
     drop.setAttribute('aria-label', `Delete preset ${preset.Title || preset.Pattern}`);
     drop.addEventListener('click', () => started(dropPreset(which), 'deleting the preset'));

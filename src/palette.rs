@@ -135,6 +135,13 @@ pub struct ColorMap {
     pub name: String,
     width: u32,
     height: u32,
+    /// How many pixels of border the usable map sits inside.
+    ///
+    /// The climate maps are a 256 square drawn inside a 264 one; the border is
+    /// there for the game's texture atlas and is not part of the lookup. Read
+    /// from the index the mod writes beside the pictures, because it is a fact
+    /// about the asset and cannot be told from the pixels.
+    padding: u32,
     pixels: Vec<Rgb>,
 }
 
@@ -143,9 +150,13 @@ impl ColorMap {
     /// game packs into its colour map data, so this is the same lookup the game
     /// does, without the shader.
     #[must_use]
-    pub fn sample(&self, temperature: u8, rainfall: u8) -> Rgb {
-        let x = (u32::from(temperature) * self.width / 256).min(self.width - 1);
-        let y = (u32::from(rainfall) * self.height / 256).min(self.height - 1);
+    pub fn sample(&self, across: u8, down: u8) -> Rgb {
+        let inset = |value: u8, size: u32| {
+            let usable = size.saturating_sub(self.padding * 2).max(1);
+            self.padding + (u32::from(value) * usable / 256).min(usable - 1)
+        };
+        let x = inset(across, self.width).min(self.width - 1);
+        let y = inset(down, self.height).min(self.height - 1);
         self.pixels[(y * self.width + x) as usize]
     }
 }
@@ -231,29 +242,67 @@ impl Palette {
 
     /// The colour of one column, tinted for where and when it is.
     ///
-    /// Grass, leaves and water are greyscale masks in the game's assets: the
-    /// climate map colours them for their temperature and rainfall, and the
-    /// season map turns them through the year. The game applies both, so this
-    /// does too.
+    /// Grass, leaves and water are greyscale masks in the game's assets. One tint
+    /// is built for them and the block's own colour is multiplied by it once —
+    /// which is the part this used to get wrong. The climate map makes the tint,
+    /// from temperature across and rainfall down. The season map does not darken
+    /// that tint but *stands in for* part of it, in the proportion the season is
+    /// felt at this temperature and height at all. Multiplying the two instead
+    /// compounded them, which is why warm ground came out redder and browner than
+    /// the game draws it, and why nowhere ever looked as though the season had
+    /// left it alone.
+    ///
+    /// Taken from `colormap.fsh` and `colormap.vsh` in the game's own shaders,
+    /// which are the only statement of this that cannot drift.
     #[must_use]
-    pub fn color_of(&self, block: u16, column: &crate::columns::Column, variation: u8) -> Option<Rgb> {
+    pub fn color_of(
+        &self,
+        block: u16,
+        column: &crate::columns::Column,
+        variation: u8,
+        sea_level: i32,
+    ) -> Option<Rgb> {
         let appearance = self.by_id.get(block as usize)?;
         if !appearance.known || appearance.invisible {
             return None;
         }
 
-        let mut color = appearance.base;
+        let mut tint = Rgb::new(255, 255, 255);
         if let Some(map) = appearance.climate_map.and_then(|at| self.color_maps.get(at as usize)) {
-            color = color.multiply(map.sample(column.temperature, column.rainfall));
+            tint = map.sample(column.temperature, column.rainfall);
         }
+
         if let Some(map) = appearance.season_map.and_then(|at| self.color_maps.get(at as usize)) {
-            // The game varies the second axis with per-position noise so that a
-            // forest is not one flat colour; a hash of the position stands in for
-            // it and keeps the map stable between renders.
-            color = color.multiply(map.sample(column.season, variation));
+            let weight = season_weight(column, sea_level);
+            if weight > 0.0 {
+                // The game varies the second axis with per-position noise so that
+                // a forest is not one flat colour; a hash of the position stands
+                // in for it and keeps the map stable between renders.
+                tint = tint.mix(map.sample(column.season, variation), weight);
+            }
         }
-        Some(color)
+
+        Some(appearance.base.multiply(tint))
     }
+}
+
+/// How much of the season's colour is felt at a column, from none to all of it.
+///
+/// The game's own curve, and it is not a gentle one: foliage in the tropics never
+/// turns, temperate ground turns almost completely, and cold ground turns only a
+/// little because it is drab to begin with. Height counts as cold — a mountainside
+/// keeps its needles while the valley below it goes to autumn — which is what the
+/// sea level is for.
+///
+/// Copied from `calcColorMapUvs` in the game's `colormap.vsh`, including the
+/// constants, because a curve rewritten in one's own words is a curve that no
+/// longer matches the game.
+fn season_weight(column: &crate::columns::Column, sea_level: i32) -> f32 {
+    let above_sea = (f32::from(column.height) - sea_level as f32).max(0.0);
+    let x = f32::from(column.temperature) + above_sea * 1.5;
+    let weight = 0.5 - (x / 42.0).cos() / 2.3 + (128.0 - x).max(0.0) / 256.0 / 2.0
+        - (x - 130.0).max(0.0) / 200.0;
+    weight.clamp(0.0, 1.0)
 }
 
 fn load_color_maps(dir: &Path) -> Result<Vec<ColorMap>> {
@@ -263,6 +312,15 @@ fn load_color_maps(dir: &Path) -> Result<Vec<ColorMap>> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => return Err(Error::io(format!("reading {}", dir.display()), error)),
     };
+
+    // What the mod recorded about each picture's border. Absent where the mod is
+    // older than this build, and a border of nothing is what the maps looked like
+    // to every build before this one — wrong at the edges, but drawn.
+    let padding: std::collections::HashMap<String, u32> =
+        std::fs::read_to_string(dir.join("padding.json"))
+            .ok()
+            .and_then(|body| serde_json::from_str(&body).ok())
+            .unwrap_or_default();
 
     let mut maps = Vec::new();
     for entry in entries.flatten() {
@@ -277,7 +335,10 @@ fn load_color_maps(dir: &Path) -> Result<Vec<ColorMap>> {
         let image = image::open(&path)
             .map_err(|error| Error::parse(&path, error.to_string()))?
             .to_rgb8();
+        let border = padding.get(&name).copied().unwrap_or(0);
         maps.push(ColorMap {
+            // A border that leaves nothing to sample is not a border.
+            padding: if border * 2 < image.width().min(image.height()) { border } else { 0 },
             name,
             width: image.width(),
             height: image.height(),

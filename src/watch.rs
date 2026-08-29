@@ -78,6 +78,11 @@ impl State {
         self.refresh_palette();
         self.refresh_names();
         self.refresh_world();
+        // The mod writes the world's facts once it has a world, which on a cold
+        // start is after this has already been read for the first time. Taken
+        // again on the beat rather than at start-up only, so a service that came
+        // up first still learns where the sea is.
+        self.resettle_sea_level();
     }
 
     /// Rereads the block names when the mod has written them again.

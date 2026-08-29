@@ -18,25 +18,86 @@ const Terrain = L.TileLayer.extend({
   },
 
   /**
+   * Puts a tile's new pixels in place without it ever being empty, and without
+   * it being faded in over the top of what it replaces.
+   *
+   * Two things would otherwise show. Assigning `src` on the tile that is on
+   * screen blanks it at once and leaves it blank until the bytes arrive, so the
+   * bytes are fetched into an image nobody can see and only put in place once
+   * they have decoded.
+   *
+   * The second is Leaflet's. It listens for `load` on every tile it made, and
+   * answers one by setting the tile to nothing and fading it back in over
+   * `FADE_MS` — right for a tile arriving into an empty square, wrong for one
+   * being replaced in place, and it fires again because the listener is still
+   * on the element when the new picture lands. So the fade is undone as it is
+   * set: Leaflet's handler runs first and this one second, both before the
+   * browser has painted either, which is why nothing is ever drawn faded.
+   * Backdating `loaded` is what settles it, since that is the only thing
+   * Leaflet's own fade reads.
+   */
+  _swap(held, level, x, z) {
+    if (!held || !held.el) return;
+
+    const next = new Image();
+    next.onload = () => {
+      const tile = held.el;
+      if (!tile) return;
+      tile.addEventListener('load', () => {
+        held.loaded = Date.now() - FADE_MS;
+        tile.style.opacity = 1;
+      }, { once: true });
+      tile.src = next.src;
+    };
+    next.src = `/tiles/${level}/${x}/${z}.png?v=${generation}`;
+  },
+
+  /**
    * Refetches only the tiles named, leaving the rest of the map alone.
    *
    * `redraw()` would throw away every tile and ask again for all of them, which
    * for one person building a wall is hundreds of tiles to redraw one. The
-   * service says exactly which tiles changed, so only those are replaced — and
-   * each is swapped once its replacement has decoded, so nothing blinks.
+   * service says exactly which tiles changed, so only those are replaced.
    */
   refresh(changed) {
     for (const [level, x, z] of changed) {
       const key = tileKey(level, x, z, this.options.maxNativeZoom);
-      const held = this._tiles && this._tiles[key];
-      if (!held || !held.el) continue;
+      this._swap(this._tiles && this._tiles[key], level, x, z);
+    }
+  },
 
-      const next = new Image();
-      next.onload = () => { held.el.src = next.src; };
-      next.src = `/tiles/${level}/${x}/${z}.png?v=${generation}`;
+  /**
+   * Repaints everything on screen, still without blanking any of it.
+   *
+   * For the two cases where the service cannot say which tiles changed: a new
+   * palette recolours the whole map, and a viewer that has been away longer than
+   * the service remembers is told to assume the worst. Leaflet's own `redraw()`
+   * answers both by dropping every tile and asking again, which empties the map
+   * for as long as the refetch takes — the one moment the map is most obviously
+   * working is the one moment it looked broken.
+   *
+   * Only what is held is swapped, which is what is on screen and its buffer.
+   * Anything fetched after this asks for the current generation anyway, because
+   * that is what `getTileUrl` writes.
+   */
+  refreshAll() {
+    for (const held of Object.values(this._tiles || {})) {
+      if (!held || !held.coords) continue;
+      const { x, y, z } = held.coords;
+      this._swap(held, levelFor(z, this.options.maxNativeZoom), x, y);
     }
   },
 });
+
+/**
+ * How long Leaflet takes to fade a tile in, in milliseconds.
+ *
+ * Its own number, not a choice made here: a tile's opacity is the share of this
+ * that has passed since it loaded, so a tile whose load is this far in the past
+ * is one the fade has already finished with. Written down because a swap has to
+ * say so, and read from nowhere else.
+ */
+const FADE_MS = 200;
 
 /** Soft enough to read the terrain through, strong enough to count squares by. */
 const GRID_COLOUR = '#ffffff26';
@@ -132,7 +193,11 @@ function resize() {
   // Nothing exported yet. Every server is here for a moment after a format change
   // clears the map, and a viewer that threw would look like the upgrade failed.
   if (bounds.maxX <= bounds.minX || bounds.maxZ <= bounds.minZ) {
-    hudWhere.textContent = 'waiting for the server to export';
+    // A sentence in place of the readout, not written into it: the numbers are
+    // six elements now, and a world with nothing in it has no value for any of
+    // them rather than a zero for each.
+    hud.classList.add('waiting');
+    waiting.textContent = 'waiting for the server to export';
     return;
   }
 
@@ -146,7 +211,7 @@ function resize() {
   // Only how far out may change. One pixel per block stays at NATIVE_ZOOM
   // whatever the world does, so nothing already drawn moves.
   map.setMinZoom(NATIVE_ZOOM - levels);
-  map.setMaxZoom(NATIVE_ZOOM + ZOOM_IN_BEYOND_NATIVE);
+  map.setMaxZoom(zoomCeiling());
 
   if (first) {
     terrain = new Terrain('', {
@@ -162,7 +227,7 @@ function resize() {
       // to the finest level — so zooming past 18 dropped every tile and left the
       // page black, at exactly the magnification `maxNativeZoom` exists to serve.
       minZoom: 0,
-      maxZoom: NATIVE_ZOOM + ZOOM_IN_BEYOND_NATIVE,
+      maxZoom: zoomCeiling(),
       // A tile the service has not built answers 404. Without something to put
       // there the browser draws a broken image, which on a world explored in an
       // awkward shape is a grid of them.
@@ -186,7 +251,7 @@ function resize() {
     grid = new Grid({
       tileSize: TILE,
       minZoom: gridFloor(chunkEdge, NATIVE_ZOOM),
-      maxZoom: NATIVE_ZOOM + ZOOM_IN_BEYOND_NATIVE,
+      maxZoom: zoomCeiling(),
       pane: 'grid',
       className: 'grid',
       noWrap: true,
@@ -206,6 +271,26 @@ function resize() {
   // world that has grown is picked up without touching a tile already drawn.
   terrain.options.bounds = world;
   terrain.options.minNativeZoom = NATIVE_ZOOM - levels;
+}
+
+/**
+ * Takes the ceiling again, after somebody has moved it.
+ *
+ * Three things hold it: the map, which decides how far a wheel may go, and each
+ * of the two layers, which decide how far they may be stretched. All three are
+ * told, because a map allowed past what its layers allow shows nothing at the
+ * top of the range — which looks like the map breaking rather than like a limit.
+ */
+function applyZoomCeiling() {
+  const top = zoomCeiling();
+  if (terrain) terrain.options.maxZoom = top;
+  if (grid) grid.options.maxZoom = top;
+  if (terrain) map.setMaxZoom(top);
+  // And brings the view back under it. Leaflet lowers the limit without moving a
+  // map that is already past it, which leaves the view somewhere it is no longer
+  // allowed to be — the tiles stop at the ceiling and the map goes blank at
+  // exactly the magnification somebody just turned off.
+  if (terrain && map.getZoom() > top) map.setZoom(top, { animate: false });
 }
 
 /**

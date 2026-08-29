@@ -113,6 +113,7 @@ fn posted(request: &mut Request, channel: &Channel) -> Reply {
         ),
 
         "/live/players" => taken(channel.live.set_players(body)),
+        "/live/world" => taken(channel.live.set_world(body)),
         "/live/markers" => taken(channel.live.set_markers(body)),
 
         _ => http::text(404, "not found"),

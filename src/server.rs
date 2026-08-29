@@ -110,9 +110,13 @@ fn settle(state: &State, data: &Path) {
     }
 
     // Levels built from a region format this build no longer reads would show
-    // terrain that has since been cleared, so they go.
+    // terrain that has since been cleared, and levels painted by a build that
+    // painted differently would show the right ground in the wrong colours. Both
+    // go; both are redrawn from region files that are not in question.
     if pyramid::reset_unless_built_from(data, crate::columns::VERSION) {
-        println!("witchlight: the stored levels were built from an older format and have been cleared");
+        println!(
+            "witchlight: the stored levels were built by a different format or painter, so they have been cleared — the map redraws as it is asked for"
+        );
     }
 
     // A palette with no colours in it draws bare ground everywhere. Said before

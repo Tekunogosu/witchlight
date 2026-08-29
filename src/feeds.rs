@@ -23,7 +23,6 @@ impl State {
     pub fn info(&self, since: Option<u64>) -> String {
         let (min_x, min_z, max_x, max_z) = self.bounds();
         let spawn = facts::spawn(&self.data);
-
         let mut body = serde_json::json!({
             "minX": min_x, "minZ": min_z, "maxX": max_x, "maxZ": max_z,
             "tile": TILE,
@@ -149,7 +148,7 @@ impl State {
             return None;
         };
 
-        let surface = Renderer::new(&world, &palette).surface_at(x, z);
+        let surface = Renderer::new(&world, &palette, self.sea_level()).surface_at(x, z);
         // Every field is a number, a fixed word, or a block code out of the
         // palette, so there is nothing here that can refuse to be JSON.
         serde_json::to_string(&Block::read(x, z, surface, &palette, &names)).ok()

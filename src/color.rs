@@ -35,6 +35,24 @@ impl Rgb {
         )
     }
 
+    /// A step of `weight` from this colour towards another.
+    ///
+    /// What the game's shader calls `mix`, and it means it literally: the season
+    /// tint does not darken the climate tint, it stands in for as much of it as
+    /// the season is felt at all.
+    #[must_use]
+    pub fn mix(self, other: Self, weight: f32) -> Self {
+        let weight = weight.clamp(0.0, 1.0);
+        let channel = |a: u8, b: u8| {
+            (f32::from(a) + (f32::from(b) - f32::from(a)) * weight).clamp(0.0, 255.0) as u8
+        };
+        Self::new(
+            channel(self.r, other.r),
+            channel(self.g, other.g),
+            channel(self.b, other.b),
+        )
+    }
+
     /// Lightens or darkens by a factor, for slope shading.
     #[must_use]
     pub fn scale(self, factor: f32) -> Self {

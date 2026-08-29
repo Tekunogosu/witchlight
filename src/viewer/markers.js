@@ -64,6 +64,7 @@ function pictureButton(name, colour, chosen, chose) {
   swatch.setAttribute('aria-pressed', String(chosen));
 
   const mark = document.createElement('i');
+  mark.className = 'masked';
   mark.style.background = colour;
   const url = `url(/icons/${encodeURIComponent(name)}.svg)`;
   mark.style.webkitMaskImage = url;

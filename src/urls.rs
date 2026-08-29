@@ -123,6 +123,18 @@ pub fn portrait_name(url: &str) -> Option<&str> {
     stored_name(url, "/portraits/", ".png")
 }
 
+/// `/chrome/{name}.svg`, where the name is a mark on the viewer's own furniture.
+///
+/// Read to the same rule as the others even though nothing is joined onto a
+/// directory here — what a chrome icon names is a table compiled into the binary.
+/// A name is still only ever a name, so that the one reader answers for every
+/// address of this shape and a later change of storage cannot widen what is
+/// accepted without somebody deciding to.
+#[must_use]
+pub fn chrome_name(url: &str) -> Option<&str> {
+    stored_name(url, "/chrome/", ".svg")
+}
+
 /// The name in a URL, when it is only ever a name.
 ///
 /// One reader for every kind of stored file, because the rule is not about icons

@@ -82,7 +82,7 @@ function drawPlaces(waypoints) {
     // A picture where the service has one, and a plain shape where it does not —
     // a hole is what a missing icon would otherwise leave.
     const picture = icons.has(name)
-      ? `<i class="icon" style="background:${colour};` +
+      ? `<i class="icon masked" style="background:${colour};` +
         `-webkit-mask-image:url(/icons/${encodeURIComponent(name)}.svg);` +
         `mask-image:url(/icons/${encodeURIComponent(name)}.svg)"></i>`
       : `<i class="diamond" style="background:${colour}"></i>`;

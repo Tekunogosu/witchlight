@@ -77,6 +77,10 @@ struct Sorted {
 
 pub struct Live {
     players: Mutex<Option<(String, Instant)>>,
+    /// What the world's clock last said. Held rather than filed, and forgotten
+    /// the same way the players are: a clock from a server that has stopped is
+    /// not the time, it is the time it stopped.
+    world: Mutex<Option<(String, Instant)>>,
     markers: Mutex<Markers>,
     /// Where markers are kept so they survive both programs stopping.
     path: PathBuf,
@@ -97,7 +101,7 @@ impl Live {
             .and_then(|body| sorted(&body))
             .unwrap_or_default();
 
-        Self { players: Mutex::new(None), markers: Mutex::new(markers), path }
+        Self { players: Mutex::new(None), world: Mutex::new(None), markers: Mutex::new(markers), path }
     }
 
     /// Takes a report of who is online. Held in memory only.
@@ -107,6 +111,21 @@ impl Live {
         }
         if let Ok(mut players) = self.players.lock() {
             *players = Some((body, Instant::now()));
+        }
+        true
+    }
+
+    /// Takes what the world's clock says.
+    ///
+    /// Only that it is an object is checked. What is in it is the mod's to word
+    /// and the page's to read, and a service that understood the words would be a
+    /// third place for a date format to disagree with itself.
+    pub fn set_world(&self, body: String) -> bool {
+        if !body.trim_start().starts_with('{') {
+            return false;
+        }
+        if let Ok(mut world) = self.world.lock() {
+            *world = Some((body, Instant::now()));
         }
         true
     }
@@ -173,8 +192,16 @@ impl Live {
             },
         );
 
+        let world = self
+            .world
+            .lock()
+            .ok()
+            .and_then(|held| held.clone())
+            .filter(|(_, at)| at.elapsed() < PLAYERS_GOOD_FOR)
+            .map_or_else(|| "null".to_owned(), |(body, _)| body);
+
         let players = players.unwrap_or_else(|| "[]".to_owned());
-        format!(r#"{{"Players":{players},"Waypoints":{markers}}}"#)
+        format!(r#"{{"Players":{players},"Waypoints":{markers},"World":{world}}}"#)
     }
 }
 

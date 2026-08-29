@@ -75,6 +75,12 @@ pub struct State {
     pub regions: Mutex<HashMap<(i32, i32), SystemTime>>,
     /// Bumped whenever the world actually changes. The viewer watches this and
     /// it versions tile URLs, which is what gets a new map past the browser cache.
+    /// Where the world's oceans sit, as the mod last said.
+    ///
+    /// Held rather than read, because every tile drawn asks for it and it changes
+    /// only when a different world is loaded. Refreshed on the same beat the
+    /// regions are.
+    sea_level: std::sync::atomic::AtomicI32,
     generation: AtomicU64,
     /// Which tiles each generation changed, so a viewer that has fallen a few
     /// generations behind can repaint those and leave the rest of the map alone.
@@ -106,9 +112,22 @@ impl State {
             history: Mutex::new(VecDeque::new()),
             stale: Mutex::new(HashSet::new()),
             cache: Mutex::new(Cache::new(cache_bytes)),
+            sea_level: std::sync::atomic::AtomicI32::new(crate::facts::world(data).sea_level),
             data: data.to_path_buf(),
             columns,
         })
+    }
+
+    /// Where the world's oceans sit.
+    #[must_use]
+    pub fn sea_level(&self) -> i32 {
+        self.sea_level.load(Ordering::Relaxed)
+    }
+
+    /// Takes the sea level again, for a world that has said it since start-up.
+    pub fn resettle_sea_level(&self) {
+        self.sea_level
+            .store(crate::facts::world(&self.data).sea_level, Ordering::Relaxed);
     }
 
     pub fn generation(&self) -> u64 {
@@ -182,7 +201,7 @@ impl State {
         let (Ok(world), Ok(palette)) = (self.world.read(), self.palette.read()) else {
             return;
         };
-        println!("witchlight: surface {}", Renderer::new(&world, &palette).coverage().summary());
+        println!("witchlight: surface {}", Renderer::new(&world, &palette, self.sea_level()).coverage().summary());
     }
 
     /// One tile as PNG bytes, drawn or read as its level requires.
@@ -221,7 +240,7 @@ impl State {
 
             if !palette.paints_nothing() {
                 let image =
-                    Renderer::new(&world, &palette).render(tx * TILE as i32, tz * TILE as i32, TILE);
+                    Renderer::new(&world, &palette, self.sea_level()).render(tx * TILE as i32, tz * TILE as i32, TILE);
                 return pyramid::encode(&image);
             }
         }
@@ -252,7 +271,7 @@ impl State {
         let (Ok(world), Ok(palette)) = (self.world.read(), self.palette.read()) else {
             return None;
         };
-        Some(Renderer::new(&world, &palette).render(tx * TILE as i32, tz * TILE as i32, TILE))
+        Some(Renderer::new(&world, &palette, self.sea_level()).render(tx * TILE as i32, tz * TILE as i32, TILE))
     }
 
     /// Rebuilds every level above zero for whatever has changed since last time.
