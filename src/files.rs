@@ -76,55 +76,106 @@ pub fn modified(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).ok()?.modified().ok()
 }
 
+/// What is in a directory, sorted, or nothing where the directory is not there.
+///
+/// A directory the mod has not written yet is not a fault. Every one of these the
+/// service reads — the regions, the colour maps, the marker pictures — is made by
+/// the other half when it first exports, and a map being served before that has
+/// happened is a map with nothing in it rather than a map that failed. Three
+/// callers each said so in their own words, one of them differently enough that
+/// an unreadable directory read as an empty one.
+///
+/// Sorted, because a directory listing is in whatever order the filesystem hands
+/// it back and every caller here wants a settled one.
+pub fn listing(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
+
+    let mut paths: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
+    paths.sort();
+    Ok(paths)
+}
+
+/// A directory of one test's own.
+///
+/// Three modules had written this out, each with its own spelling of "empty it
+/// first so a previous run cannot answer for this one, and take it away again
+/// afterwards". It is one type here, and what each of them did with the directory
+/// stays where it was.
+#[cfg(test)]
+pub mod testing {
+    use std::path::{Path, PathBuf};
+
+    pub struct Scratch(PathBuf);
+
+    impl Scratch {
+        /// `name` only has to be different from every other test's.
+        #[must_use]
+        pub fn new(name: &str) -> Self {
+            let at = std::env::temp_dir().join(format!("witchlight-{name}"));
+            let _ = std::fs::remove_dir_all(&at);
+            std::fs::create_dir_all(&at).expect("a scratch directory");
+            Self(at)
+        }
+
+        #[must_use]
+        pub fn at(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::testing::Scratch;
     use super::*;
-
-    fn scratch(name: &str) -> PathBuf {
-        let at = std::env::temp_dir().join(format!("witchlight-files-{name}"));
-        let _ = std::fs::remove_dir_all(&at);
-        at
-    }
 
     #[test]
     fn a_write_lands_and_the_temporary_does_not_stay() {
-        let at = scratch("lands");
-        let path = at.join("deep").join("service.json");
+        let held = Scratch::new("files-lands");
+        let path = held.at().join("deep").join("service.json");
         replace(&path, b"{}").expect("the directories are made on the way");
 
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "{}");
         assert!(!beside(&path).exists(), "nothing is left beside it");
-        let _ = std::fs::remove_dir_all(&at);
     }
 
     #[test]
     fn two_files_differing_only_in_extension_do_not_share_a_temporary() {
         // `with_extension` would name both of these `r.0.0.part`, so a tile
         // being written could clobber a region being written next to it.
-        let at = scratch("extensions");
+        let held = Scratch::new("files-extensions");
+        let at = held.at();
         assert_ne!(beside(&at.join("r.0.0.msqr")), beside(&at.join("r.0.0.png")));
     }
 
     #[test]
     fn writing_again_replaces_what_was_there() {
-        let at = scratch("replaces");
-        let path = at.join("markers.json");
+        let held = Scratch::new("files-replaces");
+        let path = held.at().join("markers.json");
         replace(&path, b"first").expect("a first write");
         replace(&path, b"second").expect("and a second");
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "second");
-        let _ = std::fs::remove_dir_all(&at);
     }
 
     #[test]
     #[cfg(unix)]
     fn a_private_file_is_readable_by_nobody_else() {
         use std::os::unix::fs::PermissionsExt as _;
-        let at = scratch("private");
-        let path = at.join("api.json");
+        let held = Scratch::new("files-private");
+        let path = held.at().join("api.json");
         replace_private(&path, b"{}").expect("a private write");
 
         let mode = std::fs::metadata(&path).unwrap().permissions().mode();
         assert_eq!(mode & 0o077, 0, "the token must not be group or world readable");
-        let _ = std::fs::remove_dir_all(&at);
     }
 }

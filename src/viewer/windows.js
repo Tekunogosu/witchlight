@@ -7,9 +7,11 @@
 /**
  * Windows over the map.
  *
- * Three of them — the marker form, the presets, and who you are — and one set of
- * manners between them: shown by a class, moved by their bar, closed by the mark
- * in their corner, and kept where they were put for as long as the page is open.
+ * Four of them — the marker form, the presets, every marker there is, and who
+ * you are — and one set of manners between them: shown by a class, moved by
+ * their bar, closed by the mark in their corner, and kept where they were put
+ * for as long as the page is open. The two that list things a reader may have a
+ * great many of are resized by their corner as well.
  *
  * They float rather than sitting in the layout because everything else here is
  * anchored to a corner of the map and would have to move aside for them. A
@@ -19,6 +21,34 @@
 
 /** Where each window has been put, by the element it is. */
 const windowsAt = new Map();
+
+/** How small a window may be dragged before it stops being one. */
+const WINDOW_LEAST = { wide: 240, high: 140 };
+
+/** How far one press of an arrow key resizes a window. */
+const WINDOW_STEP = 24;
+
+/**
+ * The stacking order windows are dealt from.
+ *
+ * They were all at one z-index, which leaves the markup deciding which of two
+ * overlapping windows is in front — permanently, and in an order nobody chose.
+ * The one written last in the page won every time, so a window opened on top of
+ * it was behind it, and the mark that shuts the window underneath did nothing at
+ * all: the click never reached it.
+ *
+ * Counted up rather than shuffled down, so raising one window is one write and
+ * touches no other. The number only ever grows, which a browser has no trouble
+ * with and nobody can reach the end of by clicking.
+ */
+let stacked = 1100;
+
+/** Puts a window in front of the others. */
+function raiseWindow(panel) {
+  if (panel.style.zIndex === String(stacked)) return;
+  stacked += 1;
+  panel.style.zIndex = String(stacked);
+}
 
 /**
  * Puts a window somewhere it can still be reached.
@@ -78,6 +108,11 @@ function dragBy(panel) {
     handle.addEventListener('pointercancel', done);
   });
 
+  // Touching a window is asking for it, so it comes to the front. Captured
+  // rather than bubbled: this has to happen for a press anywhere in the window,
+  // including on a control that stops the event getting any further.
+  panel.addEventListener('pointerdown', () => raiseWindow(panel), { capture: true });
+
   // Only the bar's own mark. `.shut` is the shape of a small × and a preset row
   // has one to delete itself with, which is not a window closing.
   for (const shut of panel.querySelectorAll('.bar .shut')) {
@@ -86,6 +121,95 @@ function dragBy(panel) {
   // Over the map, so a click, a drag or a scroll on a window must not reach it.
   L.DomEvent.disableClickPropagation(panel);
   L.DomEvent.disableScrollPropagation(panel);
+}
+
+/**
+ * Gives a window a corner to be resized by.
+ *
+ * A list of what somebody has kept is as long as they have made it, and there is
+ * no width or height that is right for everybody's: the presets window at three
+ * hundred and forty pixels is generous for four presets and a slot for eighty.
+ * So the reader says, and what they say holds for as long as the page is open —
+ * the same rule the window's position follows, and for the same reason: this is
+ * about the screen in front of them and this session on it.
+ *
+ * The sums are in the window's own pixels rather than the pointer's. A window is
+ * drawn through `--scale-panel`, so a hand that moves a hundred pixels across a
+ * panel drawn half again as large has asked for sixty-odd more pixels of window,
+ * not a hundred — and taking the pointer's number would run the corner out from
+ * under the hand at every size but one.
+ *
+ * A button rather than a bare corner, because a resize nobody can reach without
+ * a pointer is furniture a keyboard cannot move: the arrows do the same job, and
+ * a name says which window they will do it to.
+ */
+function growBy(panel) {
+  const grip = document.createElement('button');
+  grip.type = 'button';
+  grip.className = 'grip';
+  const named = panel.querySelector('h2').textContent.trim();
+  grip.title = `Resize ${named}`;
+  grip.setAttribute('aria-label', `Resize the ${named} window — drag, or use the arrow keys`);
+  panel.append(grip);
+
+  grip.addEventListener('pointerdown', event => {
+    if (event.button !== 0) return;
+    const from = {
+      wide: panel.offsetWidth,
+      high: panel.offsetHeight,
+      x: event.clientX,
+      y: event.clientY,
+      scale: scales.panel || 1,
+    };
+
+    grip.setPointerCapture(event.pointerId);
+    grip.classList.add('held');
+    event.preventDefault();
+
+    const moved = to => sizeWindow(
+      panel,
+      from.wide + (to.clientX - from.x) / from.scale,
+      from.high + (to.clientY - from.y) / from.scale,
+    );
+    const done = () => {
+      grip.classList.remove('held');
+      grip.removeEventListener('pointermove', moved);
+      grip.removeEventListener('pointerup', done);
+      grip.removeEventListener('pointercancel', done);
+    };
+    grip.addEventListener('pointermove', moved);
+    grip.addEventListener('pointerup', done);
+    grip.addEventListener('pointercancel', done);
+  });
+
+  grip.addEventListener('keydown', event => {
+    const step = {
+      ArrowLeft: [-WINDOW_STEP, 0],
+      ArrowRight: [WINDOW_STEP, 0],
+      ArrowUp: [0, -WINDOW_STEP],
+      ArrowDown: [0, WINDOW_STEP],
+    }[event.key];
+    if (!step) return;
+    event.preventDefault();
+    sizeWindow(panel, panel.offsetWidth + step[0], panel.offsetHeight + step[1]);
+  });
+}
+
+/**
+ * Takes a size for a window, and keeps it reachable at it.
+ *
+ * Floored rather than free: a window dragged to nothing is a window that cannot
+ * be dragged back, which is the same trap the position clamp exists to close.
+ * The ceiling is the stylesheet's, which already holds every window inside the
+ * viewport. Settled afterwards because a window that just grew against the right
+ * edge has to be pulled back to stay grabbable.
+ */
+function sizeWindow(panel, wide, high) {
+  panel.classList.add('sized');
+  panel.style.width = `${Math.round(Math.max(wide, WINDOW_LEAST.wide))}px`;
+  panel.style.height = `${Math.round(Math.max(high, WINDOW_LEAST.high))}px`;
+  const held = windowsAt.get(panel);
+  if (held) settleWindow(panel, held.x, held.y);
 }
 
 /**
@@ -98,6 +222,7 @@ function dragBy(panel) {
  */
 function openWindow(panel, middle) {
   panel.classList.add('open');
+  raiseWindow(panel);
   const held = windowsAt.get(panel);
   if (held) {
     settleWindow(panel, held.x, held.y);
@@ -110,6 +235,20 @@ function openWindow(panel, middle) {
 function shutWindow(panel) {
   panel.classList.remove('open');
   if (panel === composer) forgetCompose();
+}
+
+/**
+ * Gives every window its manners, in one place.
+ *
+ * Each of these used to be wired where its own panel was built, which meant the
+ * list of what is a window was spread over three files and a fourth one could be
+ * added without ever being made draggable. What a window is, is decided here.
+ */
+function buildWindows() {
+  for (const panel of [composer, presetPanel, directory, profile]) dragBy(panel);
+  // Only the two that list things. A form is as big as its fields and a window
+  // with a size nobody can use is a corner that does nothing when pulled.
+  for (const panel of [presetPanel, directory]) growBy(panel);
 }
 
 // A browser narrowed under a window that was near the right edge leaves it off

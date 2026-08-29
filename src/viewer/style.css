@@ -66,8 +66,10 @@
   --gap-2: 8px;
   --gap-3: 12px;
   --gap-4: 16px;
-  --round: 4px;
-  --round-sm: 3px;
+  /* Two radii, a step apart. Everything with a corner takes one of them, so
+     "rounded" is one decision and not a number written at each box. */
+  --round: 6px;
+  --round-sm: 5px;
 }
 html, body { margin: 0; height: 100%; overflow: hidden;
              background: var(--bg); color: var(--text);
@@ -99,14 +101,36 @@ html, body { margin: 0; height: 100%; overflow: hidden;
    one thing it must not do; an arrow's tip is the point and its body lies
    away from it. Against the map's usual grab hand it still reads as a mode. */
 .leaflet-container.picking { cursor: default; }
+/* Who is online: a row of tabs, the cards, and a line saying why there are
+   fewer cards than people where there are. The panel is the column and the cards
+   scroll inside it, so the tabs stay put while a busy server's list moves. */
 #who { position: absolute; right: 12px; top: 12px; z-index: 500; width: 216px;
-       max-height: calc(100% - 24px); overflow-y: auto;
+       max-height: calc(100% - 24px);
        display: flex; flex-direction: column; gap: 6px;
        transform: scale(var(--scale-people)); transform-origin: top right; }
-#who:empty { display: none; }
+#who-list { display: flex; flex-direction: column; gap: 6px;
+            min-height: 0; overflow-y: auto; }
+/* Nothing to show and nothing to say about it: an empty panel over the map is
+   furniture doing nothing, so it takes itself off. */
+#who.quiet { display: none; }
+/* The tabs and the note sit on the map rather than in a panel, so each carries
+   the same veil a card does — without it they are text on terrain. */
+#who .tabs { margin: 0; padding: 2px; background: var(--surface-veil);
+             border: 1px solid var(--line); border-radius: var(--round);
+             box-shadow: 0 1px 5px rgba(0, 0, 0, .65); }
+#who .tab { min-height: 22px; font-size: var(--font-sm); letter-spacing: .06em;
+            text-transform: uppercase; border-radius: var(--round-sm);
+            border-bottom: none; }
+#who .tab.on { background: var(--surface-on); }
+#who-said { margin: 0; padding: 6px 10px; background: var(--surface-veil);
+            border: 1px solid var(--line); border-radius: var(--round);
+            box-shadow: 0 1px 5px rgba(0, 0, 0, .65);
+            font-size: var(--font-sm); }
+#who-said:empty { display: none; }
 .card { display: grid; grid-template-columns: 40px 1fr; gap: 9px;
         align-items: center; padding: 8px 10px;
-        background: var(--surface-veil); border: 1px solid var(--line); border-radius: 4px;
+        background: var(--surface-veil); border: 1px solid var(--line);
+        border-radius: var(--round);
         cursor: pointer;
         /* Leaflet's own, on Leaflet's own controls. A card is furniture laid over
            the map exactly as a button is, and without the shadow it read as a
@@ -114,7 +138,7 @@ html, body { margin: 0; height: 100%; overflow: hidden;
         box-shadow: 0 1px 5px rgba(0, 0, 0, .65); }
 .card:hover { border-color: var(--accent-soft); background: var(--surface-bar); }
 .card.followed { border-color: var(--accent); background: var(--surface-on); }
-.card .face { width: 40px; height: 40px; border-radius: 3px; background: var(--surface);
+.card .face { width: 40px; height: 40px; border-radius: var(--round-sm); background: var(--surface);
               border: 1px solid var(--line); display: grid; place-items: center;
               font-size: 17px; color: var(--text-off); overflow: hidden; }
 .card .face svg { width: 100%; height: 100%; display: block; }
@@ -184,7 +208,7 @@ html, body { margin: 0; height: 100%; overflow: hidden;
    to look at five to find out. */
 #access-panel { position: absolute; left: 0; top: calc(100% + 6px); z-index: 900;
            width: 170px; padding: 10px 12px; background: var(--surface-veil);
-           border: 1px solid var(--line); border-radius: 4px; display: none;
+           border: 1px solid var(--line); border-radius: var(--round); display: none;
            box-shadow: 0 1px 5px rgba(0, 0, 0, .65); }
 #access-panel.open { display: block; }
 #access-panel label { display: flex; align-items: center; gap: var(--gap-2);
@@ -206,7 +230,7 @@ html, body { margin: 0; height: 100%; overflow: hidden;
                                        border-color: var(--accent); color: var(--text-strong); }
 #settings { position: absolute; left: 0; top: calc(100% + 6px); z-index: 900;
             width: 216px; padding: 10px 12px; background: var(--surface-veil);
-            border: 1px solid var(--line); border-radius: 4px; display: none;
+            border: 1px solid var(--line); border-radius: var(--round); display: none;
             box-shadow: 0 1px 5px rgba(0, 0, 0, .65); }
 #settings.open { display: block; }
 #settings h2 { margin: 0 0 var(--gap-2); font-size: var(--font-sm);
@@ -224,7 +248,12 @@ html, body { margin: 0; height: 100%; overflow: hidden;
    One chrome for all three, because three windows that behave differently are
    three things to learn. What differs between them is where they open and how
    wide they are, which is all any of them says for itself. */
-.window { position: absolute; z-index: 1100; display: none;
+/* Border box, so that the number a window is given is the number it measures.
+   The corner that resizes one reads the size it has and writes the size it is to
+   become, and under content box those are two different numbers thirty-four
+   pixels apart — which is a window that jumps that far the moment it is grabbed.
+   The widths below are the whole window for the same reason. */
+.window { position: absolute; z-index: 1100; box-sizing: border-box; display: none;
           max-height: calc(100% - 24px); overflow-y: auto;
           padding: var(--gap-3) var(--gap-4) var(--gap-4);
           background: var(--surface-veil);
@@ -257,9 +286,69 @@ html, body { margin: 0; height: 100%; overflow: hidden;
    the top of a window rather than alone in a square, and at the full size it
    shouts over the heading beside it. */
 .window .shut .chrome { width: 13px; height: 13px; }
-#compose { left: 260px; top: 92px; width: 232px; }
-#presets { left: 300px; top: 130px; width: 340px; }
-#profile { left: 50%; top: 90px; width: 300px; }
+#compose { left: 260px; top: 92px; width: 266px; }
+#presets { left: 300px; top: 130px; width: 374px; }
+#directory { left: 340px; top: 150px; width: 374px; }
+#profile { left: 50%; top: 90px; width: 334px; }
+/* The two windows that list things somebody may have a great many of. Their own
+   height goes to the list rather than to the window, so the heading, the search
+   and the buttons stay put while the rows scroll under them — which is what
+   makes a hundred presets a window you read rather than one you drag. */
+/* Only while open. `display` is what `.window` uses to show and hide, so a rule
+   here naming these by id outranks it and the window is on the screen whatever
+   class it wears — which is a window whose close mark removes a class and
+   changes nothing anybody can see. `.open` is on this selector for that reason
+   and not for tidiness. */
+#presets.open, #directory.open { display: flex; flex-direction: column; }
+#presets, #directory { overflow: hidden; }
+#presets > *, #directory > * { flex: none; }
+#preset-list, #marker-list { flex: 1 1 auto; min-height: 0; overflow-y: auto;
+                             max-height: 264px; }
+/* Once a reader has said how tall the window is, the list is what fills it, so
+   the standing cap on the list has to give way to what they asked for. */
+.window.sized #preset-list, .window.sized #marker-list { max-height: none; }
+/* The corner that resizes a window. Two rules rather than a mark of its own: it
+   is what every desktop draws for the same job, so a reader who has met one
+   before does not have to be told what it is. */
+.grip { position: absolute; right: 0; bottom: 0; width: 18px; height: 18px;
+        padding: 0; background: none; border: none;
+        cursor: nwse-resize; touch-action: none; }
+.grip::after { content: ''; position: absolute; right: 4px; bottom: 4px;
+               width: 9px; height: 9px;
+               background: repeating-linear-gradient(-45deg,
+                 var(--line-edge) 0 1px, transparent 1px 3px); }
+.grip:hover::after, .grip.held::after, .grip:focus-visible::after {
+    background: repeating-linear-gradient(-45deg,
+      var(--accent) 0 1px, transparent 1px 3px); }
+.grip:focus-visible { outline: 1px solid var(--accent); outline-offset: -3px; }
+/* Two lists in one window, one of which is showing. A row of tabs rather than a
+   badge on the rows that are private: who else can see a marker is what somebody
+   opens this window to check, and a column read row by row does not answer it. */
+.tabs { display: flex; gap: var(--gap-1); margin-bottom: var(--gap-2);
+        border-bottom: 1px solid var(--line-soft); }
+.tab { flex: 1; min-height: 26px; padding: var(--gap-1) var(--gap-2);
+       font: inherit; font-size: var(--font-md); color: var(--text-dim);
+       background: none; border: none; border-bottom: 2px solid transparent;
+       cursor: pointer; }
+.tab:hover { color: var(--text-strong); }
+.tab.on { color: var(--text-strong); border-bottom-color: var(--accent); }
+.tab .tally { margin-left: 5px; color: var(--text-off); }
+.tab.on .tally { color: var(--accent); }
+/* A box that filters the list under it. The mark sits inside the field rather
+   than beside it, so the box is as wide as the window and the row is one thing
+   rather than a label and a control. */
+.find { position: relative; display: flex; align-items: center;
+        margin-bottom: var(--gap-2); }
+.find .chrome { position: absolute; left: var(--gap-2); width: 13px; height: 13px;
+                color: var(--text-dim); pointer-events: none; }
+.find input { width: 100%; box-sizing: border-box; padding: 6px var(--gap-2) 6px 26px;
+              font: inherit; font-size: var(--font-md); color: var(--text-strong);
+              background: var(--surface-sunk); border: 1px solid var(--line-edge);
+              border-radius: var(--round-sm); }
+.find input:focus { outline: none; border-color: var(--accent); }
+/* The browser draws its own clear button as a dark cross, which on a field this
+   dark is a smudge. Escape empties the box, and the mark says so nowhere. */
+.find input::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; }
 #compose .field { margin-bottom: var(--gap-3); }
 #compose .field > span { display: block; font-size: var(--font-sm);
                          letter-spacing: .07em; text-transform: uppercase;
@@ -278,7 +367,7 @@ html, body { margin: 0; height: 100%; overflow: hidden;
 #compose input[type=number]::-webkit-inner-spin-button {
     -webkit-appearance: none; margin: 0; }
 .swatches { display: flex; flex-wrap: wrap; gap: 4px; }
-#colours .swatch { width: 18px; height: 18px; border-radius: 3px;
+#colours .swatch { width: 18px; height: 18px; border-radius: var(--round-sm);
                    border: 1px solid #ffffff2e; cursor: pointer; padding: 0; }
 .swatch.chosen { box-shadow: 0 0 0 2px var(--accent); }
 /* A silhouette filled with a colour, which is how every picture on this map is
@@ -289,28 +378,43 @@ html, body { margin: 0; height: 100%; overflow: hidden;
 .masked { -webkit-mask-size: contain; mask-size: contain;
           -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
           -webkit-mask-position: center; mask-position: center; }
+/* What stands in where the service has no picture under the name a marker gave.
+   A mask whose image never loads draws nothing at all, so the alternative to a
+   shape here is a marker that is simply absent — on the map, in the preset list
+   and in the marker list alike. How large it is belongs to whatever holds it. */
+.diamond { display: block; border: 1.5px solid #000000aa; transform: rotate(45deg); }
 /* Compiled into the service rather than exported by a game, and so addressed
    under this build's number: a mark that changed with a release would otherwise
    stay the old one in every browser that had already seen it. Filled with
    `currentColor` by way of the background, which is what lets an armed tool
    colour its own mark instead of drawing a ring around it. */
 .chrome { display: block; width: 16px; height: 16px; background: currentColor; }
-/* Which mark goes where, named once. The service carries these six and no
-   others, so a class here with no icon behind it is a mark that never draws —
-   which is why the list is short enough to read against the one in `chrome.rs`. */
+/* Which mark goes where, named once. The service carries these and no others,
+   so a class here with no icon behind it is a mark that never draws — which is
+   why the list is short enough to read against the one in `chrome.rs`. */
 .mark-scan { -webkit-mask-image: url(/chrome/scan.svg); mask-image: url(/chrome/scan.svg); }
 .mark-gear-six { -webkit-mask-image: url(/chrome/gear-six.svg); mask-image: url(/chrome/gear-six.svg); }
 .mark-map-pin-simple { -webkit-mask-image: url(/chrome/map-pin-simple.svg); mask-image: url(/chrome/map-pin-simple.svg); }
 .mark-bookmarks-simple { -webkit-mask-image: url(/chrome/bookmarks-simple.svg); mask-image: url(/chrome/bookmarks-simple.svg); }
+.mark-list-bullets { -webkit-mask-image: url(/chrome/list-bullets.svg); mask-image: url(/chrome/list-bullets.svg); }
+.mark-magnifying-glass { -webkit-mask-image: url(/chrome/magnifying-glass.svg);
+                         mask-image: url(/chrome/magnifying-glass.svg); }
+.mark-lock-simple { -webkit-mask-image: url(/chrome/lock-simple.svg);
+                    mask-image: url(/chrome/lock-simple.svg); }
+.mark-lock-simple-open { -webkit-mask-image: url(/chrome/lock-simple-open.svg);
+                         mask-image: url(/chrome/lock-simple-open.svg); }
+.mark-caret-up { -webkit-mask-image: url(/chrome/caret-up.svg);
+                 mask-image: url(/chrome/caret-up.svg); }
 .mark-user { -webkit-mask-image: url(/chrome/user.svg); mask-image: url(/chrome/user.svg); }
 .mark-person-arms-spread { -webkit-mask-image: url(/chrome/person-arms-spread.svg);
                            mask-image: url(/chrome/person-arms-spread.svg); }
 .mark-x { -webkit-mask-image: url(/chrome/x.svg); mask-image: url(/chrome/x.svg); }
 
 #pictures { max-height: 108px; overflow-y: auto; padding: 3px;
-            background: var(--bg); border: 1px solid var(--line); border-radius: 3px; }
+            background: var(--bg); border: 1px solid var(--line);
+            border-radius: var(--round-sm); }
 #pictures .swatch { width: 24px; height: 24px; display: grid; place-items: center;
-                    border-radius: 3px; cursor: pointer; background: none;
+                    border-radius: var(--round-sm); cursor: pointer; background: none;
                     border: none; padding: 0; }
 /* Drawn the way the marker itself will be — the silhouette as a mask, filled
    with the colour chosen above it — so the picker shows markers rather than a
@@ -322,7 +426,8 @@ html, body { margin: 0; height: 100%; overflow: hidden;
 .finding { position: relative; }
 #block-found { position: absolute; left: 0; right: 0; top: 100%; z-index: 10;
                max-height: 168px; overflow-y: auto; margin-top: 2px;
-               background: var(--surface-sunk); border: 1px solid var(--line); border-radius: 3px;
+               background: var(--surface-sunk); border: 1px solid var(--line);
+               border-radius: var(--round-sm);
                box-shadow: 0 6px 18px #000000aa; display: none; }
 #block-found.open { display: block; }
 #block-found button { display: block; width: 100%; min-height: 24px;
@@ -376,7 +481,7 @@ html, body { margin: 0; height: 100%; overflow: hidden;
 .slide input { accent-color: var(--accent); width: 100%; margin: 0; }
 /* Whoever is looking, drawn the way the player cards draw one. A portrait is
    one block per pixel, so it is scaled the way the terrain is. */
-#profile .face { width: 28px; height: 28px; flex: none; border-radius: 3px;
+#profile .face { width: 28px; height: 28px; flex: none; border-radius: var(--round-sm);
                  background: var(--surface); border: 1px solid var(--line);
                  display: grid; place-items: center; overflow: hidden;
                  font-size: 15px; color: var(--text-off); }
@@ -391,28 +496,84 @@ html, body { margin: 0; height: 100%; overflow: hidden;
 #sign-out { margin-left: auto; font-size: 12px; color: var(--text-dim);
             text-decoration: none; }
 #sign-out:hover { color: var(--warn); }
-/* A list of what there is, picked from rather than typed into. Changing one
-   opens it in the marker window, which is where every one of these choices is
-   already made — a second set of pickers in here would be a second place for
-   the same choice to look different. */
-.preset { display: grid; grid-template-columns: 22px 1fr auto; gap: 7px;
-          align-items: center; }
-.preset .pick { display: contents; }
-.preset .mark { width: 22px; height: 22px; display: grid; place-items: center; }
-.preset .mark i { display: block; width: 16px; height: 16px; }
-.preset .said { min-width: 0; text-align: left; background: none; border: none;
+/* One row in a list of things to pick from: what it looks like, what it is
+   called, and whatever else that row offers. The presets and the markers share
+   these because they are the same question — which of these do I mean — and a
+   second set of rules would be a second answer to it. Changing either opens the
+   marker window, which is where every one of those choices is already made. */
+.listed { display: grid; grid-template-columns: 22px 1fr auto; gap: 7px;
+          align-items: center; padding: 0 var(--gap-1); border-radius: var(--round-sm); }
+.listed .mark { width: 22px; height: 22px; display: grid; place-items: center; }
+.listed .mark i { display: block; width: 16px; height: 16px; }
+.listed .said { min-width: 0; text-align: left; background: none; border: none;
                 padding: 5px 0; font: inherit; color: var(--text); cursor: pointer; }
-.preset .said b { display: block; color: var(--text-strong); font-weight: normal;
+.listed .said b { display: block; color: var(--text-strong); font-weight: normal;
                   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.preset .said span { display: block; font-size: 11px; color: var(--text-dim);
+.listed .said span { display: block; font-size: 11px; color: var(--text-dim);
                      overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.preset:hover .said b { color: var(--accent); }
-.preset.chosen { background: var(--surface-on); box-shadow: inset 0 0 0 1px var(--accent-soft);
-                 border-radius: 3px; }
-#preset-list { display: flex; flex-direction: column; }
-#preset-list:empty::after { content: 'No presets yet. Tick "set as preset" when you save a marker.';
-                            display: block; font-size: 11px; color: var(--text-dim);
-                            padding: 4px 0 10px; }
+/* Every other row shaded. Faint on purpose: it is there so a long list is read
+   across rather than counted down, and anything stronger reads as two kinds of
+   row. Written last of the three so that hovering a row, and the row a window is
+   open on, both still say so over the top of it. */
+.listed.alt { background: #ffffff08; }
+.listed:hover { background: var(--surface-bar); }
+.listed:hover .said b { color: var(--accent); }
+.listed.chosen { background: var(--surface-on); box-shadow: inset 0 0 0 1px var(--accent-soft); }
+/* What order the list is in, said at the top of it and changed there. Aligned so
+   the lock sits over the column of locks; the three word columns share what is
+   left, because a name is what a reader scans for and the rest are how they
+   narrow it down. */
+.head { display: grid; grid-template-columns: 1fr auto auto 24px;
+        gap: var(--gap-1); align-items: center;
+        margin-bottom: var(--gap-1); padding: 0 var(--gap-1) var(--gap-1);
+        border-bottom: 1px solid var(--line-soft); }
+.sort { display: flex; align-items: center; gap: 3px; min-height: 22px;
+        padding: 0 var(--gap-1); font: inherit; font-size: var(--font-sm);
+        letter-spacing: .07em; text-transform: uppercase; color: var(--text-dim);
+        background: none; border: none; border-radius: var(--round-sm);
+        cursor: pointer; }
+.sort:hover { color: var(--text-strong); background: var(--surface-bar); }
+.sort.on { color: var(--accent); }
+.sort.seen { justify-content: center; padding: 0; }
+.sort .chrome { width: 11px; height: 11px; }
+/* The caret is on the column the list is in the order of and on no other, so
+   there is one of them on the screen and it says which way round. Turned over
+   for the other direction rather than drawn twice. */
+.sort .caret { width: 9px; height: 9px; visibility: hidden; }
+.sort.on .caret { visibility: visible; }
+.sort.down .caret { transform: scaleY(-1); }
+/* Who may see a marker, in the column the presets keep their delete mark in.
+   The same twenty-four square target the close mark uses, because it is the same
+   kind of thing: a small mark somebody has to be able to hit. */
+.listed .lock { flex: none; display: grid; place-items: center;
+                width: 24px; height: 24px; padding: 0;
+                background: none; border: none; border-radius: var(--round-sm);
+                color: var(--text-dim); }
+.listed button.lock { cursor: pointer; }
+.listed button.lock:hover { color: #fff; background: var(--surface-bar); }
+/* A shut lock is a marker its owner keeps, and it says so in the colour the rest
+   of the page uses for a control that is currently on. An open one is quiet: a
+   marker everybody can see is the ordinary case, and colouring both would make
+   the pair a decoration rather than a state. */
+.listed .lock.shut { color: var(--accent); }
+.listed .lock .chrome { width: 14px; height: 14px; }
+/* The two bulk buttons, side by side under the list. Each says the number it
+   would touch, so what is about to happen is on the button rather than in a
+   sentence beside it. */
+#directory .deed { gap: var(--gap-2); }
+#directory .deed button { flex: 1; min-width: 0; }
+/* Asked once and waiting to be asked again. The warning colour, because the
+   press after this one changes markers in bulk. */
+#directory .deed button.armed { color: var(--warn); border-color: var(--warn); }
+#marker-said { margin: var(--gap-2) 0 0; font-size: var(--font-md);
+               color: var(--text-dim); min-height: 17px; }
+#marker-said.wrong { color: var(--warn); }
+#preset-list, #marker-list { display: flex; flex-direction: column; }
+/* What a list says when it has nothing to show. Written by the page rather than
+   by the stylesheet, because there are two ways to have no rows — nothing kept,
+   and nothing matching what was typed — and they need different words. */
+.nothing { margin: 0; padding: 6px var(--gap-1) 10px;
+           font-size: var(--font-sm); color: var(--text-dim); }
 #profile-said { margin: var(--gap-2) 0 var(--gap-3); font-size: var(--font-md);
                 color: var(--text-dim); min-height: 17px; }
 #profile-said.wrong { color: var(--warn); }
@@ -426,7 +587,7 @@ html, body { margin: 0; height: 100%; overflow: hidden;
    scanned rather than parsed. */
 #hud { position: absolute; left: 12px; bottom: 12px; z-index: 500;
        padding: 7px 12px; background: var(--surface-veil); border: 1px solid var(--line);
-       border-radius: 4px; pointer-events: none;
+       border-radius: var(--round); pointer-events: none;
        box-shadow: 0 1px 5px rgba(0, 0, 0, .65); }
 #where { display: flex; align-items: flex-start; gap: 13px; }
 .read { display: flex; flex-direction: column; gap: 1px; }
@@ -457,14 +618,15 @@ html, body { margin: 0; height: 100%; overflow: hidden;
 .player, .marker { background: none; border: none; }
 .pin { display: block; width: 10px; height: 10px; margin: -5px 0 0 -5px;
        border: 2px solid var(--surface-veil); border-radius: 50%; background: var(--accent); }
-.diamond { display: block; width: 11px; height: 11px; margin: -6px 0 0 -6px;
-           border: 1.5px solid #000000aa; transform: rotate(45deg); }
 /* The game's own marker pictures are single colour silhouettes, so they are
    used as a mask and filled with the colour their owner chose — the same way
    the game draws them. A drop shadow stands in for an outline, since a mask
-   has no edge of its own to stroke. */
-.icon { display: block; width: 18px; height: 18px; margin: -9px 0 0 -9px;
-        filter: drop-shadow(0 0 1px #000) drop-shadow(0 0 2px #000a); }
+   has no edge of its own to stroke. The negative margins centre the mark on the
+   block it names, which is what makes this the map's own copy of a size the two
+   lists and the picker each answer for themselves. */
+.marker .masked { display: block; width: 18px; height: 18px; margin: -9px 0 0 -9px;
+                  filter: drop-shadow(0 0 1px #000) drop-shadow(0 0 2px #000a); }
+.marker .diamond { width: 11px; height: 11px; margin: -6px 0 0 -6px; }
 body.no-names .tag { display: none; }
 /* A marker's name is off by default and worn permanently when it is on: a map
    with forty markers on it is forty labels, which is a map you cannot see. */
@@ -508,7 +670,17 @@ body.show-marker-names .marker .tag { display: block; }
 .said-where { flex: none; letter-spacing: .02em; }
 .said-who { min-width: 0; overflow: hidden; text-overflow: ellipsis;
             white-space: nowrap; }
+/* The library rounds its own controls at a number of its own, which was the same
+   number this page used and is no longer. Said here rather than in the vendored
+   file, so a library update does not undo it — and asked of the one variable, so
+   the zoom, the tool column and the panels keep one corner between them. */
+.leaflet-bar { border-radius: var(--round); }
 .leaflet-bar a { background: var(--surface); color: var(--text); border-bottom-color: var(--line); }
+/* Leaflet rounds the ends of a stacked bar to match, so a bar of three buttons
+   reads as one control rather than as a rounded box with square corners in it. */
+.leaflet-bar a:first-child { border-radius: var(--round) var(--round) 0 0; }
+.leaflet-bar a:last-child { border-radius: 0 0 var(--round) var(--round); }
+.leaflet-bar a:only-child { border-radius: var(--round); }
 .leaflet-bar a:hover { background: var(--surface-bar); color: #fff; }
 /* Centred by the grid rather than by a line height, which is what the cog in
    the other corner does and the only thing that centres a glyph reliably. */

@@ -62,8 +62,8 @@ impl Default for Markers {
     }
 }
 
-/// The envelope the mod posts. Only its shape is read; the arrays inside are
-/// carried through untouched.
+/// The envelope the mod posts for markers. Only its shape is read; the arrays
+/// inside are carried through untouched.
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct Sorted {
@@ -75,8 +75,50 @@ struct Sorted {
     private: HashMap<String, Box<RawValue>>,
 }
 
+/// Who is online, as the mod sorted them.
+///
+/// The same shape the markers arrive in and for the same reason: whether where
+/// somebody is standing may be shown to somebody else depends on a setting and on
+/// what groups the game has them in, and the half that knows both is the mod.
+/// This holds two lists it hands out and never looks inside.
+struct Seen {
+    /// How many are on, whoever is asking. A server that hides positions still
+    /// says how busy it is — that is a fact about the server, not about anybody.
+    online: u32,
+    /// Players anyone may see.
+    open: String,
+    /// Players one particular person may see beyond that, by their uid. Empty
+    /// where positions are everybody's, since then everyone is in `open`.
+    owned: HashMap<String, String>,
+    /// Who shares a group with one particular person, by their uid, as a list of
+    /// uids. Not about who may be seen — it is what lets the page offer "my
+    /// group" as a way of reading a list it already has.
+    grouped: HashMap<String, String>,
+}
+
+impl Default for Seen {
+    /// Empty arrays rather than empty strings, for the reason `Markers` gives.
+    fn default() -> Self {
+        Self { online: 0, open: "[]".to_owned(), owned: HashMap::new(), grouped: HashMap::new() }
+    }
+}
+
+/// The envelope the mod posts for players.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct Watching {
+    #[serde(default)]
+    online: u32,
+    #[serde(default)]
+    public: Option<Box<RawValue>>,
+    #[serde(default)]
+    private: HashMap<String, Box<RawValue>>,
+    #[serde(default)]
+    grouped: HashMap<String, Box<RawValue>>,
+}
+
 pub struct Live {
-    players: Mutex<Option<(String, Instant)>>,
+    players: Mutex<Option<(Seen, Instant)>>,
     /// What the world's clock last said. Held rather than filed, and forgotten
     /// the same way the players are: a clock from a server that has stopped is
     /// not the time, it is the time it stopped.
@@ -104,13 +146,14 @@ impl Live {
         Self { players: Mutex::new(None), world: Mutex::new(None), markers: Mutex::new(markers), path }
     }
 
-    /// Takes a report of who is online. Held in memory only.
+    /// Takes a report of who is online, sorted by who may see them. In memory
+    /// only: a position is stale before a write of it would finish.
     pub fn set_players(&self, body: String) -> bool {
-        if !is_json_array(&body) {
+        let Some(taken) = watching(&body) else {
             return false;
-        }
+        };
         if let Ok(mut players) = self.players.lock() {
-            *players = Some((body, Instant::now()));
+            *players = Some((taken, Instant::now()));
         }
         true
     }
@@ -176,20 +219,33 @@ impl Live {
     /// not write.
     #[must_use]
     pub fn body(&self, uid: Option<&str>) -> String {
-        let players = self
+        // Who is online, whom of them this person may see, and who of those is in
+        // a group with them. A report older than the patience is a game server
+        // that has gone, and a dot saying somebody is standing somewhere is worse
+        // than no dot at all.
+        let (players, online, grouped) = self
             .players
             .lock()
             .ok()
-            .and_then(|held| held.clone())
-            .filter(|(_, at)| at.elapsed() < PLAYERS_GOOD_FOR)
-            .map(|(body, _)| body);
+            .and_then(|held| {
+                held.as_ref()
+                    .filter(|(_, at)| at.elapsed() < PLAYERS_GOOD_FOR)
+                    .map(|(seen, _)| {
+                        (mine(&seen.open, seen.owned.get(uid.unwrap_or_default())),
+                         seen.online,
+                         seen.grouped.get(uid.unwrap_or_default()).cloned())
+                    })
+            })
+            .map_or_else(
+                || ("[]".to_owned(), 0, "[]".to_owned()),
+                |(list, online, grouped)| {
+                    (list, online, grouped.unwrap_or_else(|| "[]".to_owned()))
+                },
+            );
 
         let markers = self.markers.lock().map_or_else(
             |_| "[]".to_owned(),
-            |held| match uid.and_then(|uid| held.owned.get(uid)) {
-                Some(mine) => joined(&held.open, mine),
-                None => held.open.clone(),
-            },
+            |held| mine(&held.open, uid.and_then(|uid| held.owned.get(uid))),
         );
 
         let world = self
@@ -200,8 +256,22 @@ impl Live {
             .filter(|(_, at)| at.elapsed() < PLAYERS_GOOD_FOR)
             .map_or_else(|| "null".to_owned(), |(body, _)| body);
 
-        let players = players.unwrap_or_else(|| "[]".to_owned());
-        format!(r#"{{"Players":{players},"Waypoints":{markers},"World":{world}}}"#)
+        format!(
+            r#"{{"Players":{players},"Online":{online},"Grouped":{grouped},"Waypoints":{markers},"World":{world}}}"#
+        )
+    }
+}
+
+/// What everybody is shown, plus whatever one person is shown on top of it.
+///
+/// The one sum both the players and the markers are made of: two JSON arrays,
+/// joined end to end where there is a second one. Written once because getting it
+/// wrong in either place is the same bug — somebody handed what is not theirs, or
+/// not handed what is.
+fn mine(open: &str, extra: Option<&String>) -> String {
+    match extra {
+        Some(theirs) => joined(open, theirs),
+        None => open.to_owned(),
     }
 }
 
@@ -228,6 +298,34 @@ fn sorted(body: &str) -> Option<Markers> {
             .private
             .into_iter()
             .map(|(uid, markers)| (uid, array(Some(&markers))))
+            .collect(),
+    })
+}
+
+/// The mod's report of who is online, taken apart no further than it has to be.
+///
+/// An array rather than an object is a mod older than this build, which posted
+/// every player to everybody. Refused rather than read that way: the two halves
+/// must match on minor, and quietly showing every position to everybody would be
+/// exactly the thing an operator turned the setting off to prevent.
+fn watching(body: &str) -> Option<Seen> {
+    if !body.trim_start().starts_with('{') {
+        return None;
+    }
+
+    let read: Watching = serde_json::from_str(body).ok()?;
+    Some(Seen {
+        online: read.online,
+        open: array(read.public.as_deref()),
+        owned: read
+            .private
+            .into_iter()
+            .map(|(uid, players)| (uid, array(Some(&players))))
+            .collect(),
+        grouped: read
+            .grouped
+            .into_iter()
+            .map(|(uid, uids)| (uid, array(Some(&uids))))
             .collect(),
     })
 }
@@ -264,13 +362,6 @@ fn within(array: &str) -> &str {
 #[must_use]
 pub fn markers_path(exports: &Path) -> PathBuf {
     exports.join("markers.json")
-}
-
-/// Enough of a check to keep a mangled body from reaching a browser as the map's
-/// own data. What is inside is the mod's business.
-fn is_json_array(body: &str) -> bool {
-    let body = body.trim();
-    body.starts_with('[') && body.ends_with(']')
 }
 
 #[cfg(test)]
@@ -369,10 +460,23 @@ mod tests {
         assert_eq!(joined(" [ 1 ] ", " [ 2 ] "), "[1,2]");
     }
 
+    /// Ada is on and everybody may see her; Bob is on and only his own group may.
+    /// Cass is in that group and is not on, which is what the map is asked about.
+    fn watched() -> Live {
+        let live = Live::load(Path::new("/nonexistent"));
+        assert!(live.set_players(
+            r#"{"Online":2,
+                "Public":[{"Name":"ada","Uid":"a"}],
+                "Private":{"b":[{"Name":"bob","Uid":"b"}],"c":[{"Name":"bob","Uid":"b"}]},
+                "Grouped":{"b":["b","c"],"c":["b","c"]}}"#
+                .to_owned()
+        ));
+        live
+    }
+
     #[test]
     fn a_report_of_who_is_online_goes_stale() {
-        let live = Live::load(Path::new("/nonexistent"));
-        assert!(live.set_players(r#"[{"Name":"ada"}]"#.to_owned()));
+        let live = watched();
         assert!(live.body(None).contains("ada"));
 
         // A game server that stopped must not leave a dot standing on the map.
@@ -382,6 +486,51 @@ mod tests {
         {
             *at = Instant::now() - PLAYERS_GOOD_FOR - Duration::from_secs(1);
         }
+        let gone = live.body(None);
+        assert!(!gone.contains("ada"), "the players go");
+        assert!(gone.contains(r#""Online":0"#), "and so does the count of them");
+    }
+
+    #[test]
+    fn a_position_only_a_group_may_see_reaches_that_group_and_nobody_else() {
+        let live = watched();
+
+        let stranger = live.body(None);
+        assert!(stranger.contains("ada"), "what is public is everybody's");
+        assert!(!stranger.contains("bob"), "and what is not, is not");
+
+        // Bob's own browser, and Cass, who is in his group and is not even on.
+        for uid in ["b", "c"] {
+            let theirs = live.body(Some(uid));
+            assert!(theirs.contains("bob"), "{uid} shares a group with bob");
+            assert!(theirs.contains("ada"), "and still sees what is public");
+        }
+    }
+
+    #[test]
+    fn how_many_are_on_is_said_to_everybody() {
+        // A server that hides where people are standing still says how busy it
+        // is: that is a fact about the server rather than about anybody on it.
+        let live = watched();
+        for uid in [None, Some("a"), Some("b")] {
+            assert!(live.body(uid).contains(r#""Online":2"#), "{uid:?} is told the count");
+        }
+    }
+
+    #[test]
+    fn who_shares_a_group_is_said_only_to_them() {
+        let live = watched();
+        assert!(live.body(Some("b")).contains(r#""Grouped":["b","c"]"#));
+        assert!(live.body(None).contains(r#""Grouped":[]"#), "a stranger is in no group");
+        assert!(live.body(Some("a")).contains(r#""Grouped":[]"#), "nor is somebody in none");
+    }
+
+    #[test]
+    fn a_report_in_the_shape_an_older_mod_posted_is_refused() {
+        // A bare array was every player, to everybody. Read that way it would be
+        // exactly what an operator turned the setting off to prevent.
+        let live = Live::load(Path::new("/nonexistent"));
+        assert!(!live.set_players(r#"[{"Name":"ada"}]"#.to_owned()));
         assert!(!live.body(None).contains("ada"));
     }
 }

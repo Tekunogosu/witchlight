@@ -1,8 +1,9 @@
-// Who is online: dots on the map, and a card each beside it.
+// What the map itself draws: a dot per player, a mark per marker.
 //
-// Nothing here is redrawn for being sent again. A card is built once and
-// patched afterwards, and the markers are compared as a set — the service posts
-// every player every two seconds and almost none of them has changed.
+// Nothing here is redrawn for being sent again. A player who is still online
+// keeps the marker they had and is moved, and the markers are compared as a set —
+// the service posts every player every two seconds and almost none of them has
+// changed. Who is online as a list is the panel, in `who.js`.
 
 const people = L.layerGroup().addTo(map);
 const places = L.layerGroup().addTo(map);
@@ -71,21 +72,17 @@ function drawPlaces(waypoints) {
     return;
   }
   drawnPlaces = shape;
+  // The list of every marker there is shows this same set, so it is drawn from
+  // the same moment they changed rather than from a clock of its own.
+  listed = waypoints;
+  drawDirectory();
 
   // Every marker is about to be replaced, including whichever one a hover had
   // opened; a wait to close a marker that no longer exists closes nothing.
   forgetHovered();
   places.clearLayers();
   for (const place of waypoints) {
-    const colour = /^#[0-9a-f]{6}$/i.test(place.Color || '') ? place.Color : '#ffffff';
-    const name = String(place.Icon || '');
-    // A picture where the service has one, and a plain shape where it does not —
-    // a hole is what a missing icon would otherwise leave.
-    const picture = icons.has(name)
-      ? `<i class="icon masked" style="background:${colour};` +
-        `-webkit-mask-image:url(/icons/${encodeURIComponent(name)}.svg);` +
-        `mask-image:url(/icons/${encodeURIComponent(name)}.svg)"></i>`
-      : `<i class="diamond" style="background:${colour}"></i>`;
+    const picture = markFor(place.Icon, colourOf(place.Color)).outerHTML;
     // Every death marker is titled "You died here", so the owner is the only
     // thing that says whose it is. A marker only its owner is sent says so as
     // well: somebody who ticked the box should be able to see that it took.
@@ -183,9 +180,6 @@ function linger(marker) {
   box.addEventListener('mouseleave', closeHovered);
 }
 
-/** Cards on the panel, by the player they stand for. */
-const cards = new Map();
-
 /** Whose view the map is keeping, if anyone's. */
 let following = null;
 
@@ -198,9 +192,7 @@ let following = null;
  */
 function follow(uid) {
   following = following === uid ? null : uid;
-  for (const [id, card] of cards) {
-    card.element.classList.toggle('followed', id === following);
-  }
+  showFollowed();
   keepUp();
 }
 
@@ -211,88 +203,6 @@ function keepUp() {
   const player = players.find(p => String(p.Uid || p.Name) === following);
   if (player) {
     map.panTo(at(player.X, player.Z), { animate: true, duration: 0.4 });
-  }
-}
-
-/**
- * Who is online, down the right hand side.
- *
- * Health and food come from the server, which already knows them, so nothing is
- * asked of anyone to show them. Clicking a card follows that player until the map
- * is dragged.
- *
- * Nothing here is rebuilt. Cards are made once and then written into, so the
- * panel keeping up with the world never disturbs what is on the screen.
- */
-function drawWho() {
-  const seen = new Set();
-
-  for (const player of players) {
-    const uid = String(player.Uid || player.Name);
-    seen.add(uid);
-    patchCard(cards.get(uid) || newCard(uid), player);
-  }
-
-  for (const [uid, card] of cards) {
-    if (!seen.has(uid)) {
-      card.element.remove();
-      cards.delete(uid);
-      if (following === uid) following = null;
-    }
-  }
-}
-
-/** A card, built once. What changes on it afterwards is set, not rebuilt. */
-function newCard(uid) {
-  const element = document.createElement('div');
-  element.className = 'card';
-
-  const face = document.createElement('div');
-  face.className = 'face';
-  const details = document.createElement('div');
-  const name = document.createElement('div');
-  name.className = 'name';
-  const hp = bar('hp');
-  const food = bar('food');
-  details.append(name, hp.wrap, food.wrap);
-  element.append(face, details);
-  element.addEventListener('click', () => follow(uid));
-  who.append(element);
-
-  const card = { element, face, name, hp, food, look: null, named: null };
-  cards.set(uid, card);
-  return card;
-}
-
-/**
- * Brings one card up to date.
- *
- * Every field is compared before it is written. The panel shares the two second
- * beat the map data arrives on, and a player who is walking changes their
- * position and their food on every one of them — so rebuilding a card whenever
- * anything about its player moved meant rebuilding all of them, always. Setting a
- * width does not disturb the screen; replacing an element does.
- */
-function patchCard(card, player) {
-  if (card.named !== player.Name) {
-    card.named = player.Name;
-    card.name.textContent = player.Name;
-  }
-
-  const look = `${portraitSrc(player)}|${player.Name}`;
-  if (card.look !== look) {
-    card.look = look;
-    card.face.textContent = '';
-    card.face.append(portrait(player));
-  }
-
-  fill(card.hp, 'health', player.Health, player.MaxHealth);
-  fill(card.food, 'food', player.Saturation, player.MaxSaturation);
-
-  const [x, z] = said(player.X, player.Z);
-  const title = `${player.Name} — ${x}, ${player.Y}, ${z}`;
-  if (card.element.title !== title) {
-    card.element.title = title;
   }
 }
 

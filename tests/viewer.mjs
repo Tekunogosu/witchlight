@@ -94,7 +94,7 @@ const frames = new Function(`
 // Keeping the marker window on screen. A bar dragged past an edge cannot be
 // grabbed again, and the only way back is reloading the page, so the clamp being
 // backwards in any one of four directions is a window somebody loses.
-const WINDOW_WIDE = 232;
+const WINDOW_WIDE = 266;
 const windows = new Function(`
   const windowsAt = new Map();
   let innerWidth = 0, innerHeight = 0;
@@ -341,6 +341,16 @@ check(`the form sends ${sent.length} fields and the service reads ${reads.length
   sent.length === reads.length && sent.length > 0);
 check(`and they are the same words: ${sent.join(' ')}`, sent.join() === reads.join());
 
+// The form is not the only thing that asks for a change. A switch in the marker
+// list builds one from a marker the page already has, and a field left out of
+// that body is a marker that comes back white, or unnamed, or at the origin —
+// silently, and only for the edits that do not go through the form.
+const rebuilt = source.slice(source.indexOf('const asked = {'),
+                             source.indexOf('};', source.indexOf('const asked = {')));
+const again = [...rebuilt.matchAll(/^\s*([A-Z]\w*):/gm)].map(found => found[1]).sort();
+check(`a marker rebuilt from one the page holds sends the same ${again.length} fields`,
+  again.join() === reads.join(), `${again.join(' ')} against ${reads.join(' ')}`);
+
 console.log('\nevery element the scripts reach for is on the page');
 // The page is markup in one file and behaviour in another, so an element renamed
 // in one and not the other is `null.textContent` on the first line that touches
@@ -360,6 +370,35 @@ check('the style', /href="\/viewer\.css\?v=/.test(page));
 check('the scripts', /src="\/viewer\.js\?v=/.test(page));
 check('leaflet, before them', page.indexOf('/leaflet.js') < page.indexOf('/viewer.js'));
 check('and the values they open on', /window\.witchlight = \{/.test(page));
+
+console.log('\nnothing shows a window except the class that shows a window');
+// `.window` hides with `display: none` and `.window.open` shows with it, so a
+// later rule that sets `display` on a window and does not say `.open` outranks
+// both — and the window is on the screen whatever class it wears. That was two
+// windows nobody could close: the mark removed the class and changed nothing.
+{
+  const windows = [...page.matchAll(/id="([\w-]+)" class="window"/g)].map(found => found[1]);
+  check(`the page has ${windows.length} windows`, windows.length > 0);
+
+  // Comments out first: one sitting above a rule lands in that rule's selector,
+  // and a comment mentioning `.open` would then vouch for a rule that does not.
+  const rules = style.replace(/\/\*[\s\S]*?\*\//g, ' ');
+  const loose = [];
+  for (const [, selector, body] of rules.matchAll(/([^{}]+)\{([^}]*)\}/g)) {
+    if (!/(^|[;\s])display\s*:/.test(body)) continue;
+    for (const one of selector.split(',').map(part => part.trim())) {
+      for (const id of windows) {
+        // The window itself, rather than something inside it: the id has to be
+        // in the last compound of the selector.
+        if (!new RegExp(`#${id}(?![\\w-])[^\\s>+~]*$`).test(one)) continue;
+        if (one.includes('.open')) continue;
+        loose.push(`${one} sets display on #${id}`);
+      }
+    }
+  }
+  check('and none of them is shown by a rule that ignores .open',
+    loose.length === 0, loose.join('; '));
+}
 
 console.log('\nno colour in the stylesheet is defined as itself');
 // Six were. A custom property that names itself is invalid at computed-value

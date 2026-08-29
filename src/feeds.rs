@@ -58,8 +58,9 @@ impl State {
         serde_json::json!({
             "Name": who.as_ref().map(|who| who.name.clone()),
             "Uid": who.as_ref().map(|who| who.uid.clone()),
-            "MarkersPublic": self.rules.public,
-            "PublicMarkersEditable": self.rules.public_editable,
+            "MarkersPublic": self.rules.markers_public,
+            "PublicMarkersEditable": self.rules.markers_editable,
+            "PlayersPublic": self.rules.players_public,
             "Waiting": self.pending.waiting(),
         })
         .to_string()
@@ -68,19 +69,14 @@ impl State {
     /// Which marker icons exist, so the viewer draws a marker it can and a plain
     /// shape for one it cannot rather than a hole where a picture should be.
     pub fn icons(&self) -> String {
-        let Ok(entries) = std::fs::read_dir(self.data.join("icons")) else {
-            return "[]".to_owned();
-        };
-
-        let mut names: Vec<String> = entries
-            .flatten()
-            .filter_map(|entry| {
-                let path = entry.path();
+        let names: Vec<String> = crate::files::listing(&self.data.join("icons"))
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|path| {
                 (path.extension()? == "svg").then_some(path.file_stem()?.to_str()?.to_owned())
             })
             .filter(|name| is_stored_name(name))
             .collect();
-        names.sort();
 
         serde_json::to_string(&names).unwrap_or_else(|_| "[]".to_owned())
     }

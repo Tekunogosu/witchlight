@@ -37,7 +37,19 @@
   </filter>
 </defs></svg>
 <div id="map"></div>
-<div id="who"></div>
+<!-- Who is online. The tabs sort what is already here rather than asking for
+     anything different: everybody the server shares, or the people in a group
+     with you. -->
+<div id="who">
+  <div class="tabs" role="tablist" aria-label="Which players are listed">
+    <button class="tab on" type="button" role="tab" data-who="all"
+            aria-selected="true" aria-controls="who-list">All<span class="tally"></span></button>
+    <button class="tab" type="button" role="tab" data-who="group"
+            aria-selected="false" aria-controls="who-list">Group<span class="tally"></span></button>
+  </div>
+  <div id="who-list" role="tabpanel"></div>
+  <p id="who-said" class="note"></p>
+</div>
 <div id="corner"></div>
 <div id="settings"><h2>Show</h2></div>
 <div id="compose" class="window">
@@ -91,10 +103,60 @@
   </div>
   <p class="note">What a marker starts as, by what you clicked. Pick one to change
      it.</p>
+  <div class="find">
+    <span class="chrome masked mark-magnifying-glass" aria-hidden="true"></span>
+    <input id="preset-find" type="search" autocomplete="off" placeholder="find a preset"
+           aria-label="Find a preset by name or pattern">
+  </div>
   <div id="preset-list"></div>
   <p id="preset-said"></p>
   <div class="deed">
     <button id="preset-new" class="go" type="button">Create</button>
+  </div>
+</div>
+
+<!-- Every marker there is, as a list. The map says where each one is; this says
+     what there is, which is the question a map cannot answer once there are
+     forty of them spread over a million blocks. Split by who can see it, because
+     "who else is looking at this" is the thing somebody checks a marker for. -->
+<div id="directory" class="window">
+  <div class="bar">
+    <h2>Markers</h2>
+    <button class="shut" type="button" title="Close" aria-label="Close"><span class="chrome masked mark-x" aria-hidden="true"></span></button>
+  </div>
+  <div class="tabs" role="tablist" aria-label="Which markers are listed">
+    <button class="tab on" type="button" role="tab" data-tab="all"
+            aria-selected="true" aria-controls="marker-list">All<span class="tally"></span></button>
+    <button class="tab" type="button" role="tab" data-tab="public"
+            aria-selected="false" aria-controls="marker-list">Public<span class="tally"></span></button>
+    <button class="tab" type="button" role="tab" data-tab="private"
+            aria-selected="false" aria-controls="marker-list">Private<span class="tally"></span></button>
+  </div>
+  <div class="find">
+    <span class="chrome masked mark-magnifying-glass" aria-hidden="true"></span>
+    <input id="marker-find" type="search" autocomplete="off" placeholder="find a marker"
+           aria-label="Find a marker by name or owner">
+  </div>
+  <!-- Said out loud, because the list was already being sorted and not saying
+       so: the service sends the markers everybody can see and then the ones only
+       you can, so making a marker private moved its row to the bottom. -->
+  <div id="marker-head" class="head">
+    <button class="sort on" type="button" data-sort="name" aria-sort="ascending"
+            title="Sort by name">Name<span class="caret chrome masked mark-caret-up" aria-hidden="true"></span></button>
+    <button class="sort" type="button" data-sort="away" aria-sort="none"
+            title="Sort by how far it is from spawn">Away<span class="caret chrome masked mark-caret-up" aria-hidden="true"></span></button>
+    <button class="sort" type="button" data-sort="owner" aria-sort="none"
+            title="Sort by whose it is">Owner<span class="caret chrome masked mark-caret-up" aria-hidden="true"></span></button>
+    <button class="sort seen" type="button" data-sort="private" aria-sort="none"
+            title="Sort by who can see it" aria-label="Sort by who can see it"><span
+            class="chrome masked mark-lock-simple" aria-hidden="true"></span><span
+            class="caret chrome masked mark-caret-up" aria-hidden="true"></span></button>
+  </div>
+  <div id="marker-list" role="tabpanel"></div>
+  <p id="marker-said"></p>
+  <div class="deed">
+    <button id="marker-hide" type="button">Make all private</button>
+    <button id="marker-show" type="button">Make all public</button>
   </div>
 </div>
 

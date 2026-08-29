@@ -14,7 +14,7 @@ use std::sync::Arc;
 use tiny_http::Server;
 
 use crate::api::Api;
-use crate::config::MarkerRules;
+use crate::config::Rules;
 use crate::error::{Error, Result};
 use crate::facts;
 use crate::net;
@@ -38,7 +38,7 @@ pub fn serve(
     api: Api,
     threads: usize,
     cache_mb: usize,
-    rules: MarkerRules,
+    rules: Rules,
 ) -> Result<()> {
     let state = Arc::new(State::load(data, palette, cache_mb.max(1) * 1024 * 1024, rules)?);
 

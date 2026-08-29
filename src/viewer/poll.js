@@ -43,6 +43,11 @@ async function pollLive() {
   try {
     const live = await (await fetch('/live.json')).json();
     players = live.Players || [];
+    // How many are on, and who of them is in a group with whoever is asking.
+    // Both are worked out by the mod and passed through per viewer, because a
+    // browser cannot be asked to hide what it has already been handed.
+    online = Number.isFinite(live.Online) ? live.Online : players.length;
+    grouped = new Set(live.Grouped || []);
     showWhen(live.World);
     const waypoints = live.Waypoints || [];
 
@@ -125,7 +130,11 @@ async function pollWorld() {
 recall();
 applyScales();
 buildSettings();
+buildWho();
+buildWindows();
 buildCompose();
+buildPresets();
+buildDirectory();
 buildProfile();
 started(pollMe(), 'reading who is signed in');
 for (const setting of Object.values(settings)) setting.apply(setting.on);

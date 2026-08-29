@@ -25,6 +25,16 @@ const said = (x, z) => settings.absolute.on
   ? [Math.round(x), Math.round(z)]
   : [Math.round(x - spawn.x), Math.round(z - spawn.z)];
 
+/** A position the reader typed, in the numbers the world itself uses.
+ *
+ *  The inverse of `said`, and beside it: the marker form uses both directions in
+ *  one round trip, so one of them drifting from the other puts a marker a spawn
+ *  away from where it was typed. They are one translation and they are checked as
+ *  a pair, which is a poor thing to have in two files. */
+const meant = (x, z) => settings.absolute.on
+  ? [Math.round(x), Math.round(z)]
+  : [Math.round(x + spawn.x), Math.round(z + spawn.z)];
+
 /**
  * How far past one block per pixel the view may go, as powers of two.
  *
@@ -105,5 +115,20 @@ let chunks = 0;
 /** Blocks along a chunk's edge, which is what the grid is drawn on. */
 let chunkEdge = 0;
 let players = [];
+
+/**
+ * How many are on the server, which is not how many the map may draw.
+ *
+ * An operator can decide that where somebody is standing is their own group's
+ * business. The count is not: it says how busy the server is, which is a fact
+ * about the server rather than about anybody on it — and a map that would not say
+ * it is a map nobody can tell from a dead one.
+ */
+let online = 0;
+
+/** Whose cards the Group tab keeps: the uids the service says share a group with
+ *  whoever is looking, including their own. */
+let grouped = new Set();
+
 /** Marker pictures the service has. A name not in here gets a plain shape. */
 let icons = new Set();

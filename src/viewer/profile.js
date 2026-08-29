@@ -1,8 +1,11 @@
-// Who you are, your presets, and the size of the furniture.
+// Who you are, what you have told the map about yourself, and the size of the
+// furniture.
 //
-// Presets and defaults follow a uid and are kept by the service; sizes are about
-// the screen in front of somebody and stay in this browser. Two stores because
-// they answer to two different questions, not because they arrived separately.
+// Your presets and defaults follow a uid and are kept by the service; sizes are
+// about the screen in front of somebody and stay in this browser. Two stores
+// because they answer to two different questions, not because they arrived
+// separately. The presets themselves are a window of their own — this file owns
+// the reading and writing that window and the marker form both go through.
 
 /**
  * Who you are, and what you have told the map about yourself.
@@ -16,7 +19,6 @@
  */
 
 const profile = document.getElementById('profile');
-const presetPanel = document.getElementById('presets');
 const wantPresets = document.getElementById('want-presets');
 const wantPrivate = document.getElementById('want-private');
 const wantSaid = document.getElementById('want-said');
@@ -103,82 +105,6 @@ function drawProfile() {
 }
 
 /**
- * The presets, as a list to pick from.
- *
- * Names and nothing else. What a preset holds is edited in the marker window,
- * which already asks every one of those questions — two sets of pickers for one
- * choice is two places for it to end up looking different.
- */
-function drawPresets() {
-  const list = document.getElementById('preset-list');
-  list.textContent = '';
-
-  (mine.Presets || []).forEach((preset, which) => {
-    const line = document.createElement('div');
-    line.className = 'preset' + (mode === 'preset' && which === editingPreset ? ' chosen' : '');
-
-    // Drawn as the marker it makes, so the list reads as what it produces.
-    const mark = document.createElement('span');
-    mark.className = 'mark';
-    const shape = document.createElement('i');
-    shape.className = 'masked';
-    shape.style.background = preset.Color || '#ffffff';
-    const url = `url(/icons/${encodeURIComponent(preset.Icon || 'circle')}.svg)`;
-    shape.style.webkitMaskImage = url;
-    shape.style.maskImage = url;
-    mark.append(shape);
-
-    const open = document.createElement('button');
-    open.type = 'button';
-    open.className = 'said';
-    const name = document.createElement('b');
-    name.textContent = preset.Title || '(unnamed)';
-    const pattern = document.createElement('span');
-    pattern.textContent = preset.Pattern || '';
-    open.append(name, pattern);
-    // One of a list of identical rows, so the name it stands for is the only
-    // thing telling a reader — or a test — which one this is.
-    open.setAttribute('aria-label', `Edit preset ${preset.Title || preset.Pattern}`);
-    open.addEventListener('click', () => editPreset(which));
-
-    const drop = document.createElement('button');
-    drop.type = 'button';
-    drop.className = 'shut';
-    drop.append(chromeMark('x'));
-    drop.title = 'Delete this preset';
-    drop.setAttribute('aria-label', `Delete preset ${preset.Title || preset.Pattern}`);
-    drop.addEventListener('click', () => started(dropPreset(which), 'deleting the preset'));
-
-    line.append(mark, open, drop);
-    list.append(line);
-  });
-}
-
-/** Takes one preset away, and closes the form if it was the one open. */
-async function dropPreset(which) {
-  const presets = (mine.Presets || []).slice();
-  const gone = presets.splice(which, 1)[0];
-  if (!gone) return;
-
-  if (mode === 'preset' && editingPreset === which) closeCompose();
-  else if (mode === 'preset' && editingPreset > which) editingPreset--;
-
-  sayPresets('Deleting…');
-  if (await keepMine({ ...mine, Presets: presets })) {
-    drawPresets();
-    sayPresets(`Deleted ${gone.Title || gone.Pattern}.`);
-  } else {
-    sayPresets('The map service is not answering.', true);
-  }
-}
-
-function sayPresets(what, wrong) {
-  const note = document.getElementById('preset-said');
-  note.textContent = what || '';
-  note.classList.toggle('wrong', Boolean(wrong));
-}
-
-/**
  * What the profile window is holding but has not kept.
  *
  * The switches wait for Save. The sliders do not — a size you cannot see is a
@@ -252,17 +178,6 @@ function buildProfile() {
       openWindow(profile, true);
     }
   });
-
-  presetButton.addEventListener('click', () => {
-    if (presetPanel.classList.contains('open')) shutWindow(presetPanel);
-    else {
-      drawPresets();
-      sayPresets('');
-      openWindow(presetPanel, true);
-    }
-  });
-
-  document.getElementById('preset-new').addEventListener('click', newPreset);
 
   document.getElementById('profile-save')
     .addEventListener('click', () => started(keepProfile(), 'keeping your settings'));

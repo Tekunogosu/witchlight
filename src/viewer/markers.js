@@ -62,14 +62,7 @@ function pictureButton(name, colour, chosen, chose) {
   swatch.title = name;
   swatch.setAttribute('aria-label', `Picture ${name}`);
   swatch.setAttribute('aria-pressed', String(chosen));
-
-  const mark = document.createElement('i');
-  mark.className = 'masked';
-  mark.style.background = colour;
-  const url = `url(/icons/${encodeURIComponent(name)}.svg)`;
-  mark.style.webkitMaskImage = url;
-  mark.style.maskImage = url;
-  swatch.append(mark);
+  swatch.append(markFor(name, colour));
   swatch.addEventListener('click', chose);
   return swatch;
 }
@@ -254,6 +247,51 @@ async function updatePreset() {
 
 /** What an edit asked for, so its arrival can be told from the old marker. */
 let changedShape = null;
+
+/**
+ * A marker the page already has, in the words the service reads, with whatever
+ * is being changed about it written over the top.
+ *
+ * The form builds its own from what was typed into it; this builds one from a
+ * marker that already exists, for the changes that are made without opening the
+ * form. Both send every field: serde fills a field it was not sent with that
+ * field's default, so a marker edited by a body that left out its colour comes
+ * back white, and nothing at either end says a word about it.
+ */
+function markerFrom(place, changes) {
+  const asked = {
+    Title: place.Title || UNNAMED,
+    Icon: place.Icon || 'circle',
+    Color: colourOf(place.Color),
+    X: place.X,
+    Y: place.Y,
+    Z: place.Z,
+    Private: Boolean(place.Private),
+  };
+  return { ...asked, ...changes };
+}
+
+/**
+ * Asks the game server to change who may see a marker.
+ *
+ * Nothing waits here. The form waits because somebody is sitting in front of it
+ * with a half-filled window open; a switch in a list is one click among several,
+ * and the marker arriving changed on the next poll is the answer. What comes back
+ * is whether the service took the ask, which is the part that can fail on this
+ * side of the game.
+ */
+async function askPrivacy(place, hidden) {
+  try {
+    const answer = await fetch(`/markers/${encodeURIComponent(place.Key)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(markerFrom(place, { Private: hidden })),
+    });
+    return answer.ok;
+  } catch (error) {
+    return false;
+  }
+}
 
 /** Keeps what this marker is, against whatever was clicked to place it. */
 async function rememberPreset(marker) {

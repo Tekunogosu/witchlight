@@ -89,49 +89,10 @@ const markerPick = document.getElementById('marker-pick');
 const markerSave = document.getElementById('marker-save');
 const saidHere = document.getElementById('said');
 
-/** A position the reader typed, in the numbers the world itself uses. The
- *  inverse of `said`, and it has to stay so or a marker lands a spawn away. */
-const meant = (x, z) => settings.absolute.on
-  ? [Math.round(x), Math.round(z)]
-  : [Math.round(x + spawn.x), Math.round(z + spawn.z)];
-
 /** What the form is saying, and whether it is a complaint. */
 function sayHere(what, wrong) {
   saidHere.textContent = what || '';
   saidHere.classList.toggle('wrong', Boolean(wrong));
-}
-
-/**
- * Whether a preset's pattern names this block.
- *
- * `*` stands for any run of characters and everything else is itself, which is
- * the whole grammar: a pattern is read by whoever typed it, and one that needed
- * escaping rules would be a pattern nobody could check by eye. Matched here
- * rather than by the service, because this is the side holding both the code
- * under the pointer and the presets to try against it.
- */
-function fits(pattern, code) {
-  if (!pattern || !code) return false;
-  const parts = String(pattern).toLowerCase().split('*');
-  const named = String(code).toLowerCase();
-  let reached = 0;
-
-  for (let i = 0; i < parts.length; i++) {
-    const part = parts[i];
-    if (part === '') continue;
-    const found = i === 0 ? (named.startsWith(part) ? 0 : -1) : named.indexOf(part, reached);
-    if (found < 0) return false;
-    reached = found + part.length;
-  }
-  // A pattern not ending in `*` has to reach the end of the code, or `rock-*`
-  // and `rock` would both answer for every rock there is.
-  const last = parts[parts.length - 1];
-  return last === '' || named.endsWith(last);
-}
-
-/** The first preset that names this block, or nothing. */
-function presetFor(code) {
-  return (mine.Presets || []).find(preset => fits(preset.Pattern, code)) || null;
 }
 
 /** Where a new marker starts when nobody has said otherwise: what this person
@@ -144,8 +105,6 @@ function privateByDefault() {
 }
 
 function buildCompose() {
-  for (const panel of [composer, presetPanel, profile]) dragBy(panel);
-
   markerPick.addEventListener('click', () => setPlacing(!placing));
   markerSave.addEventListener('click', () => started(askForMarker(), 'asking for the marker'));
   document.getElementById('marker-cancel').addEventListener('click', closeCompose);
@@ -261,7 +220,7 @@ function editCompose(place) {
 }
 
 /**
- * Opens the form on a preset, beside the list it came from.
+ * Opens the form on a preset that exists, beside the list it came from.
  *
  * The same window, because a preset is a marker with the place left out: it says
  * what a thing is called, what colour it is, which picture it takes and who sees
@@ -271,16 +230,38 @@ function editCompose(place) {
  */
 function editPreset(which) {
   const preset = (mine.Presets || [])[which];
-  if (!preset) return;
+  if (preset) openPreset(preset, which);
+}
 
+/**
+ * Opens the form on a preset that does not exist yet.
+ *
+ * An empty preset carrying the answers a new one starts with, rather than a
+ * second copy of the form-filling below it: what "new" means here is one row that
+ * is not there yet, and everything else about the two is the same.
+ */
+function newPreset() {
+  openPreset({ Color: palette[0], Private: privateByDefault() }, -1);
+  markerPattern.focus();
+}
+
+/**
+ * Fills the form in from a preset, and says which row it will be written to.
+ *
+ * `which` is that row, or -1 for one that does not exist yet — which is the whole
+ * of the difference between making a preset and changing one, and is why they are
+ * not two functions setting the same eleven fields in the same order.
+ */
+function openPreset(preset, which) {
+  const making = which < 0;
   mode = 'preset';
   editing = null;
   editingPreset = which;
   clicked = null;
-  composeTitle.textContent = 'Edit preset';
-  // Said on the button, so it is plain that this changes the preset that was
-  // picked rather than adding another one beside it.
-  markerSave.textContent = 'Update';
+  composeTitle.textContent = making ? 'New preset' : 'Edit preset';
+  // Said on the button, so it is plain whether this changes the preset that was
+  // picked or adds another one beside it.
+  markerSave.textContent = making ? 'Create' : 'Update';
 
   markerName.value = preset.Title || '';
   markerPattern.value = preset.Pattern || '';
@@ -291,38 +272,37 @@ function editPreset(which) {
   markerRemember.checked = false;
   showFields();
   showCompose();
-  besideThePresets();
+  besideWindow(presetPanel);
   drawPresets();
 }
 
-/** Opens the form on a preset that does not exist yet. */
-function newPreset() {
-  mode = 'preset';
-  editing = null;
-  editingPreset = -1;
-  clicked = null;
-  composeTitle.textContent = 'New preset';
-  markerSave.textContent = 'Create';
+/** How far the form sits from the list it was opened beside. */
+const BESIDE_GAP = 10;
 
-  markerName.value = '';
-  markerPattern.value = '';
-  chosenColour = palette[0] || '#ffffff';
-  chosenPicture = 'circle';
-  markerPrivate.checked = privateByDefault();
-  markerPrivate.disabled = false;
-  markerRemember.checked = false;
-  showFields();
-  showCompose();
-  besideThePresets();
-  drawPresets();
-  markerPattern.focus();
-}
-
-/** Puts the form beside the list it was opened from, where there is room. */
-function besideThePresets() {
-  const list = presetPanel.getBoundingClientRect();
-  if (list.width === 0) return;
-  settleWindow(composer, list.right + 10, list.top);
+/**
+ * Puts the form beside the window it was opened from.
+ *
+ * A row is picked in one window and answered in another, and a form that opens
+ * over the list it was picked from hides the rest of it — so the two sit side by
+ * side, and picking a second row does not mean moving a window first. A window
+ * that is not on the screen has no side to be beside.
+ *
+ * Which side depends on where the room is. A list dragged to the right edge has
+ * none on its right, and the clamp that keeps a window reachable would leave the
+ * form hanging off the screen with a finger's width of it showing — so it goes
+ * to the left instead, and only stays on the right when neither side fits.
+ */
+function besideWindow(panel) {
+  const box = panel.getBoundingClientRect();
+  if (box.width === 0) return;
+  const wide = composer.getBoundingClientRect().width;
+  const right = box.right + BESIDE_GAP;
+  const left = box.left - BESIDE_GAP - wide;
+  const roomRight = right + wide <= innerWidth;
+  settleWindow(composer, roomRight || left < 0 ? right : left, box.top);
+  // Opened on purpose and put where it was asked for, so it belongs in front of
+  // whatever it was opened from.
+  raiseWindow(composer);
 }
 
 /** Everything both ways in have in common: draw it, and say whether it can act. */
@@ -377,7 +357,9 @@ function forgetCompose() {
   clicked = null;
   markerPattern.value = '';
   closeFound();
+  // Both lists mark the row they have open, and this form no longer has one.
   drawPresets();
+  drawDirectory();
   markerPrivate.disabled = false;
   markerName.value = '';
   markerX.value = '';

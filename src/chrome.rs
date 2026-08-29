@@ -49,6 +49,8 @@ const ICONS: &[(&str, &str)] = chrome![
     "map-pin-simple" @ "fill",
     // What a marker starts as, saved.
     "bookmarks-simple" @ "fill",
+    // Every marker there is, as a list rather than as pins on a map.
+    "list-bullets" @ "fill",
     // Whoever is looking, beside their name; and standing in for a portrait
     // nobody has sent yet.
     "user" @ "fill",
@@ -56,6 +58,19 @@ const ICONS: &[(&str, &str)] = chrome![
     "person-arms-spread" @ "fill",
     // Shuts a window, and discards a preset. Bold rather than filled — see above.
     "x" @ "bold",
+    // Sits inside a search box. Bold for the reason `x` is: filled, a magnifier
+    // is a disc with a handle, which beside a caret reads as a blot.
+    "magnifying-glass" @ "bold",
+    // Who may see a marker, on the button that changes it. A shut lock is one
+    // its owner keeps; an open one is a marker the server can see. Bold, because
+    // what tells the two apart is the shackle, and the filled weight fills the
+    // gap the shackle leaves — which makes them the same picture twice.
+    "lock-simple" @ "bold",
+    "lock-simple-open" @ "bold",
+    // Which column a list is sorted by, and which way. One mark rather than two:
+    // descending is the same caret turned over, and a second file would be a
+    // second thing to keep pointing the right way.
+    "caret-up" @ "bold",
 ];
 
 /// The icon filed under a name, if the binary carries one.
@@ -76,14 +91,27 @@ mod tests {
         // The page asks for these by name from three files, and a name that
         // reaches nothing is a control with a hole where its mark should be —
         // which looks like a broken build rather than a missing string.
-        for name in ["scan", "gear-six", "map-pin-simple", "bookmarks-simple", "user", "person-arms-spread", "x"] {
+        for name in [
+            "scan",
+            "gear-six",
+            "map-pin-simple",
+            "bookmarks-simple",
+            "list-bullets",
+            "user",
+            "person-arms-spread",
+            "x",
+            "magnifying-glass",
+            "lock-simple",
+            "lock-simple-open",
+            "caret-up",
+        ] {
             assert!(icon(name).is_some(), "the page asks for {name}");
         }
     }
 
     #[test]
     fn a_name_nobody_vendored_is_nothing() {
-        assert!(icon("magnifying-glass").is_none(), "only what is listed is carried");
+        assert!(icon("compass-rose").is_none(), "only what is listed is carried");
         assert!(icon("").is_none(), "and a name that is not one is not a file");
     }
 

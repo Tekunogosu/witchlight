@@ -27,14 +27,20 @@ pub const STYLE: &str = include_str!("viewer/style.css");
 pub const SCRIPT: &str = concat!(
     include_str!("viewer/work.js"),
     include_str!("viewer/frame.js"),
+    include_str!("viewer/mark.js"),
     include_str!("viewer/settings.js"),
     include_str!("viewer/map.js"),
     include_str!("viewer/players.js"),
+    include_str!("viewer/who.js"),
+    include_str!("viewer/corner.js"),
     include_str!("viewer/inspect.js"),
     include_str!("viewer/windows.js"),
+    include_str!("viewer/search.js"),
     include_str!("viewer/compose.js"),
     include_str!("viewer/markers.js"),
     include_str!("viewer/blocks.js"),
+    include_str!("viewer/presets.js"),
+    include_str!("viewer/directory.js"),
     include_str!("viewer/profile.js"),
     include_str!("viewer/poll.js"),
 );
@@ -83,6 +89,39 @@ mod tests {
         assert!(page.contains("/viewer.css?v="), "the page must ask for its style");
         assert!(page.contains("/viewer.js?v="), "and for its scripts");
         assert!(page.contains("/leaflet.js"), "and for the library they extend");
+    }
+
+    #[test]
+    fn every_script_beside_this_one_is_actually_served() {
+        // `include_str!` makes a named file that is missing a build error, and
+        // says nothing at all about a file that exists and is named nowhere. That
+        // one is behaviour written, reviewed and never run: the page loads, and
+        // whatever was in it silently does not happen. Read off the directory,
+        // because the directory is the only copy that can be wrong.
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/viewer");
+        let mut on_disk: Vec<String> = std::fs::read_dir(&dir)
+            .expect("the viewer's own directory")
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".js"))
+            .collect();
+        on_disk.sort();
+
+        let source = include_str!("viewer.rs");
+        let mut joined: Vec<String> = source
+            .match_indices("include_str!(\"viewer/")
+            .filter_map(|(at, _)| {
+                let rest = &source[at + "include_str!(\"viewer/".len()..];
+                rest.split('"').next().map(str::to_owned)
+            })
+            .filter(|name| name.ends_with(".js"))
+            .collect();
+        joined.sort();
+
+        assert_eq!(
+            on_disk, joined,
+            "every script in src/viewer must be in SCRIPT and nothing else may be"
+        );
     }
 
     #[test]

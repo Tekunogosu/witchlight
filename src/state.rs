@@ -19,7 +19,7 @@ use image::RgbImage;
 use crate::auth::Sessions;
 use crate::cache::{At, Cache};
 use crate::columns::{World, columns_dir};
-use crate::config::MarkerRules;
+use crate::config::Rules;
 use crate::error::{Error, Result};
 use crate::files;
 use crate::live::Live;
@@ -63,7 +63,7 @@ pub struct State {
     pub named: Mutex<Option<SystemTime>>,
     /// What the operator has said about who markers belong to. Read here only to
     /// tell the page which controls to offer; the mod is what enforces either.
-    pub rules: MarkerRules,
+    pub rules: Rules,
     /// The palette file's own timestamp.
     pub painted: Mutex<Option<SystemTime>>,
     /// The regions directory's own timestamp, which is the cheap gate. The mod
@@ -93,7 +93,7 @@ pub struct State {
 
 impl State {
     /// Loads what is on disk, without drawing any of it.
-    pub fn load(data: &Path, palette: Palette, cache_bytes: usize, rules: MarkerRules) -> Result<Self> {
+    pub fn load(data: &Path, palette: Palette, cache_bytes: usize, rules: Rules) -> Result<Self> {
         let columns = columns_dir(data);
         Ok(Self {
             world: RwLock::new(World::load(data)?),

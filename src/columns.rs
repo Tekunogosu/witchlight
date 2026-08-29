@@ -315,21 +315,9 @@ impl World {
 
 /// Every region file in a directory, with its coordinates taken from its name.
 pub fn region_files(dir: &Path) -> Result<Vec<PathBuf>> {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(entries) => entries,
-        // The mod makes this directory when it first exports. Until then there is
-        // nothing to read and nothing wrong.
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => return Err(Error::io(format!("reading {}", dir.display()), error)),
-    };
-
-    let mut paths: Vec<PathBuf> = entries
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|path| region_coords(path).is_some())
-        .collect();
-    paths.sort();
-    Ok(paths)
+    let paths = crate::files::listing(dir)
+        .map_err(|error| Error::io(format!("reading {}", dir.display()), error))?;
+    Ok(paths.into_iter().filter(|path| region_coords(path).is_some()).collect())
 }
 
 /// `r.{x}.{z}.msqr`, where the numbers are region coordinates and may be negative.

@@ -5,6 +5,204 @@ two **must match on minor version**: minor is the compatibility generation, move
 whenever the file format or the socket protocol changes. Patch is free to differ,
 and covers anything that changes only one half.
 
+## 0.26.2
+
+**Deploy note:** nothing to do by hand, nothing is cleared, and nothing behaves
+differently. A refactoring pass with no change to what the map does.
+
+**One owner for reading a directory that may not be there yet.** The regions, the
+colour maps and the marker pictures each said "a missing directory is an empty
+one" in their own words, and one of them said it differently enough that an
+unreadable directory read as an empty one. `files::listing` says it once.
+
+**One owner for a test's scratch directory**, which three modules had each
+written out with their own spelling of "empty it first, take it away after".
+
+**The viewer is smaller files, by subject.** The marker mark and the row a list
+shows one in are their own file, because four things draw a mark and two draw a
+row. `meant` sits beside `said` in `frame.js`, being the other direction of one
+translation that is tested as a pair. Which preset names a block moved to the
+presets, being their question and not the form's. The corner furniture left the
+block inspector, which its own heading had been admitting were two subjects.
+
+**The two functions that opened the preset form are one.** Making a preset and
+changing one set the same eleven fields in the same order; what differs is the
+row it will be written to, and that is now the argument.
+
+**Every script beside `viewer.rs` is served, and a test says so.** `include_str!`
+makes a named file that is missing a build error and says nothing about a file
+that exists and is named nowhere — behaviour written, reviewed, and never run.
+
+## 0.26.1
+
+**Deploy note:** nothing to do by hand, and nothing is cleared. The mod half is
+untouched and stays at 0.26.0.
+
+**The marker list no longer rearranges itself when you change who can see a
+marker.** It had no order of its own, so it was showing the order the markers
+arrived in — and they arrive as the ones everybody can see followed by the ones
+only you can. Making a marker private moved its row to the bottom of the list.
+Nothing said that was going to happen, and from the outside it read as the list
+shuffling for no reason.
+
+**A header at the top of the list says what the order is, and changes it.** Name,
+Away, Owner, and the lock column, each sorted either way and marked with a caret
+on the one in force. Name to begin with; the choice is kept in the browser with
+the other things about this screen.
+
+The order is total — ties fall back to the name and then to the marker's own key —
+so nothing moves on a poll that changed nothing, and the only thing that can move
+a row now is the column the list is actually sorted by.
+
+Away is measured from spawn rather than from the middle of the view. Spawn is what
+the coordinates on every row are counted from, and an order that changed every
+time the map was dragged would be the same complaint arriving by a different road.
+
+## 0.26.0
+
+**Deploy note:** both halves go together, as a minor always means. Nothing in the
+format or the protocol changed and no map is cleared — the mod half moves only to
+stay on the same compatibility generation, and its own behaviour is untouched.
+
+**The mark that shuts a window works again, on the two windows where it did not.**
+The presets and the markers windows were laid out by a rule naming them by id, and
+`display` is the property `.window` uses to show and hide — so an id rule setting
+it outranked both `.window` and `.window.open`, and those two windows were on the
+screen whatever class they wore. They opened with the page, they opened in the
+same place every time, and their close mark removed a class that decided nothing.
+
+The rule now says `.open`, and a test fails if any rule ever shows a window
+without saying so. What made this survive a check was the difference between the
+class a window wears and whether it is on the screen; the test looks at the
+second.
+
+**Who may see a marker is a switch in the list.** A lock on every row: shut for a
+marker its owner keeps, open for one the server can see, and a press flips it.
+Somebody else's marker wears the same mark without the button around it — knowing
+who else can see a thing on the map is worth having whether or not it is yours to
+change.
+
+**And a pair of buttons that flip everything you are looking at.** Make all
+private, make all public, each saying the number it would touch. That number is
+what is on the screen rather than what is on the tab: somebody who has typed into
+the search box has narrowed what they are looking at, and a button under a list of
+three that quietly changes forty is a button nobody can trust. Markers already the
+way the button would put them, and markers that are not yours to change, are not
+counted and not touched.
+
+It asks twice. Making a marker public shows somebody's base to the server, which
+is not a thing to do because a pointer was in the wrong place, and making a
+screenful private at once is the same size of surprise from the other direction.
+The second press is on the same button, and changing tab or typing in the search
+box puts it back to asking — a confirmation is about the markers that were on the
+screen when it was given.
+
+Nothing waits on the game here the way the form does. A form is somebody sitting
+in front of a half-filled window; a switch in a list is one click among several,
+and the marker arriving changed on the next poll is the answer.
+
+## 0.25.0
+
+**Deploy note:** both halves go together, as a minor always means, and this one
+means it literally — the channel the mod posts players on changed shape, so a
+mismatched pair shows an empty player list and says so in the service log. No map
+is cleared and no marker is touched. Nothing is hidden that was not hidden before
+unless an operator sets `players_public = false`.
+
+**An operator can decide that where somebody is standing is their own group's
+business.** `players_public` in the settings file, on by default, which is what
+the map has always done. Turned off, a player appears on the map to whoever the
+game has in a group with them and to nobody else.
+
+Vintage Story has no setting of its own to follow here: its server config says
+nothing about who may see whom, and the nearest thing in the world config,
+`allowMap`, decides whether there is a map at all. So this is witchlight's own.
+
+How many are online is still said to everybody, on the tab and in the corner
+readout. That is a fact about the server rather than about anybody on it, and a
+map that would not say it is a map nobody can tell from a dead one.
+
+The sorting is the mod's, the way the markers' already was. It is the half that
+knows what groups the game has people in, and a service holding positions it must
+not send is one bug away from sending them — so what reaches a browser is only
+ever what that browser may see. Group membership is read off players who are on,
+so somebody reading the map while their own player is offline sees what everybody
+sees.
+
+**All and Group above the player list.** Which of the people the server shares
+you want to read down: everybody, or the ones in a group with you. Each tab counts
+what it holds. The dots on the map are not touched by it — which players the map
+draws is what the Players switch is for, and two controls over one thing is one of
+them being ignored.
+
+The panel takes itself off the map when nobody is on at all, rather than showing
+two empty tabs. Where it is showing fewer people than are online it says which of
+the reasons that is, because "the server does not share this" and "nobody from
+your group is on" are not the same thing.
+
+**An All tab on the markers window**, showing both kinds at once and counting
+them, first and open by default. The first question anybody brings to a list of
+markers is which markers there are; who else can see one is the second.
+
+**A window comes to the front when you touch it.** Every window sat at one
+stacking order, which left the markup deciding which of two overlapping ones was
+in front — permanently, and in an order nobody chose. The window written last in
+the page won every time, so **the mark that shuts a window underneath did nothing
+at all**: the click never reached it.
+
+**The marker form opens on whichever side of the list has room for it.** It went
+to the right always, so a list dragged near the right edge opened the form off the
+screen, where the clamp that keeps a window reachable left a finger's width of it
+showing.
+
+**Corners are two pixels rounder**, from one pair of variables rather than a
+number written at each box — the eight places that had written their own now ask,
+including the library's own controls, which had been rounded to the number this
+page used to use.
+
+## 0.24.0
+
+**Deploy note:** both halves go together, as a minor always means. Nothing in the
+format or the protocol changed and no map is cleared — the mod half moves only to
+stay on the same compatibility generation, and its own behaviour is untouched.
+
+**Every marker there is, as a list.** A new window under the presets, on the same
+control: two tabs, one for the markers everybody can see and one for the markers
+only their owner can, each counting what it holds. A row says what the marker is
+called, where it is and whose it is, and picking one puts the map on it. Where the
+marker is yours to change — or public on a server that lets anybody correct a
+public marker — the same click opens the marker window on it, beside the list, and
+what is saved goes back to the marker that was picked rather than making a second
+one beside it.
+
+A map answers where a marker is. It cannot answer what there is, because the
+answer is spread over a million blocks with most of it off the screen, and a
+marker made last week gets found by remembering roughly where somebody was
+standing — which is not finding it at all.
+
+**The presets window is a list you can read down.** A search over names and
+patterns, every other row shaded, the rows scrolling under a heading that stays
+put, and a corner that resizes the window — by dragging it, or with the arrow keys
+once it has the keyboard. The marker window is put beside whichever list it was
+opened from, so picking a second row no longer means moving a window first.
+
+The search filters as it is typed and Escape empties it. A row keeps the place it
+has in what the service holds rather than the place it has on the screen, so
+editing the third visible row edits the preset that is drawn there and not the
+third preset kept.
+
+**A marker whose picture the map has not got is drawn as a diamond rather than as
+nothing.** A mask whose image never loads draws nothing at all, so a preset saved
+against an icon a mod has since taken away vanished out of its own list, and a
+marker naming one was a hole on the map. There is now one place that draws a
+marker's mark — the map, the picker in the form, and both lists all go through it
+— which is what makes the stand-in reach all four.
+
+**Windows measure themselves the way they are told to.** They were content box
+while the number in the stylesheet read as the whole window, so a window asked for
+340 pixels came out 374. Harmless while nothing did arithmetic on it, and a
+thirty-four pixel jump the moment the resize corner did.
+
 ## 0.23.3
 
 **Deploy note:** nothing to do by hand, and nothing is cleared. The mod half is

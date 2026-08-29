@@ -1,6 +1,6 @@
 [package]
 name = "witchlight"
-version = "0.23.3"
+version = "0.26.2"
 edition = "2024"
 description = "Renders and serves a browsable map from Vintage Story world exports"
 license = "MIT"

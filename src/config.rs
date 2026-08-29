@@ -22,11 +22,15 @@ use crate::error::{Error, Result};
 /// one without the other — and because a function taking eight loose arguments is
 /// a function taking a settings file badly.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct MarkerRules {
+pub struct Rules {
     /// Whether a marker nobody has decided about is everyone's.
-    pub public: bool,
+    pub markers_public: bool,
     /// Whether a marker anybody can see is a marker anybody can change.
-    pub public_editable: bool,
+    pub markers_editable: bool,
+    /// Whether where a player is standing is everybody's to see. Enforced by the
+    /// mod; what this decides here is only what the page is told, so that a short
+    /// list of players reads as a server that chose it rather than as a fault.
+    pub players_public: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -100,6 +104,25 @@ pub struct Config {
     /// makes of this only decides whether an edit is offered.
     pub markers_public_editable: bool,
 
+    /// Whether where a player is standing is everybody's to see.
+    ///
+    /// On, which is what a map of a server people play on together is for. An
+    /// operator running a server where being findable is not part of the deal
+    /// turns it off, and then a player appears to their own group and to nobody
+    /// else — how many are on is still said to everyone, because that is a fact
+    /// about the server rather than about anybody on it.
+    ///
+    /// Vintage Story has no setting of its own to follow here. Its server config
+    /// says nothing about who may see whom, and the nearest thing in the world
+    /// config — `allowMap` — decides whether there is a map at all, which is a
+    /// different question. So this is witchlight's own, and it defaults to what
+    /// the map has always done.
+    ///
+    /// The mod reads it and enforces it: it is the half that knows the groups,
+    /// and a service holding positions it must not send is a service one bug away
+    /// from sending them.
+    pub players_public: bool,
+
     /// How many threads render tiles. Zero decides from the machine, capped so
     /// that the game server this usually shares a box with keeps its cores.
     pub threads: usize,
@@ -143,6 +166,7 @@ impl Default for Config {
             api_token: String::new(),
             markers_public: false,
             markers_public_editable: false,
+            players_public: true,
             threads: 0,
             tile_cache_mb: 256,
             autostart: true,
@@ -210,10 +234,14 @@ pub fn default_path() -> PathBuf {
 }
 
 impl Config {
-    /// The marker rules this settings file states.
+    /// What this settings file says about who may see and change what.
     #[must_use]
-    pub fn marker_rules(&self) -> MarkerRules {
-        MarkerRules { public: self.markers_public, public_editable: self.markers_public_editable }
+    pub fn rules(&self) -> Rules {
+        Rules {
+            markers_public: self.markers_public,
+            markers_editable: self.markers_public_editable,
+            players_public: self.players_public,
+        }
     }
 
     /// Loads `path`. A missing file is not an error — the defaults are a working
@@ -321,6 +349,11 @@ impl Config {
              # markers_public_editable lets anybody change a marker anybody can\n\
              # see. Off, so a public marker is readable by all and writable by\n\
              # its owner; on, the server corrects its own map together.\n\
+             # players_public decides whether where somebody is standing is\n\
+             # everybody's to see. On; turn it off and a player shows on the map\n\
+             # to their own group and to nobody else. How many are online is\n\
+             # still said either way. Read and enforced by the mod, which is the\n\
+             # half that knows the groups.\n\
              # threads is how many requests are answered at once; 0 decides.\n\
              # tile_cache_mb is how much memory rendered tiles may hold.\n\
              # autostart is whether the server mod runs this service itself.\n\
@@ -336,32 +369,14 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::files::testing::Scratch;
 
-    /// A directory of one test's own, emptied first so a previous run cannot
-    /// answer for this one, and taken away again afterwards.
-    struct Scratch(PathBuf);
-
-    impl Scratch {
-        fn new(name: &str) -> Self {
-            let at = std::env::temp_dir().join(format!("witchlight-config-{name}"));
-            let _ = std::fs::remove_dir_all(&at);
-            std::fs::create_dir_all(&at).expect("a scratch directory");
-            Self(at)
-        }
-
-        /// A directory holding a palette, which is what makes one a map.
-        fn map(&self, at: &str) -> PathBuf {
-            let path = if at.is_empty() { self.0.clone() } else { self.0.join(at) };
-            std::fs::create_dir_all(&path).expect("a map directory");
-            std::fs::write(crate::palette::path_in(&path), "{}").expect("a palette");
-            path
-        }
-    }
-
-    impl Drop for Scratch {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
+    /// A directory holding a palette, which is what makes one a map.
+    fn map(held: &Scratch, at: &str) -> PathBuf {
+        let path = if at.is_empty() { held.at().to_path_buf() } else { held.at().join(at) };
+        std::fs::create_dir_all(&path).expect("a map directory");
+        std::fs::write(crate::palette::path_in(&path), "{}").expect("a palette");
+        path
     }
 
     fn at(data: &Path) -> Config {
@@ -381,36 +396,36 @@ mod tests {
     fn a_named_directory_is_served_whatever_else_is_on_disk() {
         // The mod names it, because the mod is the half that knows which world is
         // running. Nothing here may talk it out of that.
-        let scratch = Scratch::new("told");
-        scratch.map("one");
-        scratch.map("two");
+        let scratch = Scratch::new("config-told");
+        map(&scratch, "one");
+        map(&scratch, "two");
         let told = PathBuf::from("/somewhere/else");
-        assert_eq!(at(&scratch.0).exports(Some(&told)).expect("the one named"), told);
+        assert_eq!(at(&scratch.at()).exports(Some(&told)).expect("the one named"), told);
     }
 
     #[test]
     fn a_map_directly_inside_is_the_map() {
-        let scratch = Scratch::new("flat");
-        let flat = scratch.map("");
+        let scratch = Scratch::new("config-flat");
+        let flat = map(&scratch, "");
         assert_eq!(at(&flat).exports(None).expect("the map itself"), flat);
     }
 
     #[test]
     fn one_world_inside_needs_nobody_to_type_it_out() {
-        let scratch = Scratch::new("one-world");
-        let world = scratch.map("Ashlands-0c4419ae");
-        assert_eq!(at(&scratch.0).exports(None).expect("the only world"), world);
+        let scratch = Scratch::new("config-one-world");
+        let world = map(&scratch, "Ashlands-0c4419ae");
+        assert_eq!(at(&scratch.at()).exports(None).expect("the only world"), world);
     }
 
     #[test]
     fn several_worlds_inside_is_a_question_rather_than_a_guess() {
-        let scratch = Scratch::new("two-worlds");
-        scratch.map("Ashlands-0c4419ae");
-        scratch.map("New World-3f8a1c04");
+        let scratch = Scratch::new("config-two-worlds");
+        map(&scratch, "Ashlands-0c4419ae");
+        map(&scratch, "New World-3f8a1c04");
         // A folder that is not a map is not offered as one.
-        std::fs::create_dir_all(scratch.0.join("tiles")).expect("a folder");
+        std::fs::create_dir_all(scratch.at().join("tiles")).expect("a folder");
 
-        let complaint = at(&scratch.0).exports(None).expect_err("a question").to_string();
+        let complaint = at(&scratch.at()).exports(None).expect_err("a question").to_string();
         assert!(complaint.contains("2 worlds"), "it says how many: {complaint}");
         assert!(complaint.contains("Ashlands-0c4419ae"), "and names them: {complaint}");
         assert!(complaint.contains("--exports"), "and says what to do: {complaint}");
@@ -420,7 +435,7 @@ mod tests {
     fn nothing_exported_yet_is_the_directory_the_mod_will_fill() {
         // Every server is here on a first run, and refusing to start then is a
         // map service that is down exactly when somebody is watching it.
-        let scratch = Scratch::new("empty");
-        assert_eq!(at(&scratch.0).exports(None).expect("somewhere to look"), scratch.0);
+        let scratch = Scratch::new("config-empty");
+        assert_eq!(at(&scratch.at()).exports(None).expect("somewhere to look"), scratch.at());
     }
 }

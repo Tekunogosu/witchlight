@@ -207,7 +207,7 @@ fn run() -> Result<()> {
             api::Api::resolve(&config.api_bind, &config.api_token),
             config.threads,
             config.tile_cache_mb,
-            config.marker_rules(),
+            config.rules(),
         ),
     }
 }

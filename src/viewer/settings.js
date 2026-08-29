@@ -113,7 +113,13 @@ const settings = {
   markers: { label: 'Markers', on: true, apply: on => layer(places, on) },
   grid: { label: 'Chunk grid', on: false, apply: on => layer(grid, on) },
   panel: { label: 'Player list', on: true, apply: on => { who.style.display = on ? '' : 'none'; } },
-  absolute: { label: 'Absolute coordinates', on: false, apply: () => { say(); reframe(); } },
+  // The corner, the marker form and the list of every marker all say a position,
+  // so all three are rewritten rather than only the two that are on the screen.
+  absolute: {
+    label: 'Absolute coordinates',
+    on: false,
+    apply: () => { say(); reframe(); drawDirectory(); },
+  },
   names: { label: 'Player names', on: true, apply: on => {
     document.body.classList.toggle('no-names', !on);
   } },
@@ -245,7 +251,10 @@ function buildSettings() {
 /** Choices survive a reload; a browser that refuses to remember is not an error. */
 function remember() {
   try {
-    const state = { scales, filter: filterName, vision: visionName };
+    // What order the marker list is in belongs here for the reason the sizes do:
+    // it is one person's answer about one screen, and having to set it again on
+    // every reload is what makes a preference not worth having.
+    const state = { scales, filter: filterName, vision: visionName, sorting };
     for (const [key, setting] of Object.entries(settings)) state[key] = setting.on;
     localStorage.setItem('witchlight.settings', JSON.stringify(state));
   } catch (error) {
@@ -268,6 +277,12 @@ function recall() {
     }
     if (filters[state.filter]) filterName = state.filter;
     if (visions[state.vision]) visionName = state.vision;
+    // Checked against what this build can sort by rather than taken as read: the
+    // name came out of a browser, and a column this build does not have would be
+    // a list that throws on the first marker it is handed.
+    if (state.sorting && sorts[state.sorting.by]) {
+      sorting = { by: state.sorting.by, down: state.sorting.down === true };
+    }
   } catch (error) {
     /* whatever was stored is not usable, so the defaults stand */
   }

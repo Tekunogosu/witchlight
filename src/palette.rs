@@ -306,12 +306,10 @@ fn season_weight(column: &crate::columns::Column, sea_level: i32) -> f32 {
 }
 
 fn load_color_maps(dir: &Path) -> Result<Vec<ColorMap>> {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(entries) => entries,
-        // A world with no tinted blocks is unusual but not an error.
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => return Err(Error::io(format!("reading {}", dir.display()), error)),
-    };
+    // A world with no tinted blocks has no such directory, which is unusual and
+    // not an error.
+    let entries = crate::files::listing(dir)
+        .map_err(|error| Error::io(format!("reading {}", dir.display()), error))?;
 
     // What the mod recorded about each picture's border. Absent where the mod is
     // older than this build, and a border of nothing is what the maps looked like
@@ -323,8 +321,7 @@ fn load_color_maps(dir: &Path) -> Result<Vec<ColorMap>> {
             .unwrap_or_default();
 
     let mut maps = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
+    for path in entries {
         if path.extension().is_none_or(|ext| ext != "png") {
             continue;
         }
