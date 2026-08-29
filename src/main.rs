@@ -54,6 +54,12 @@ struct Args {
     #[arg(short = 'd', long, value_name = "DIR")]
     vs_data: Option<PathBuf>,
 
+    /// The map to serve, named outright. This is how the server mod says which
+    /// world's map this is; by hand it is only needed where the settings keep a
+    /// directory per world and more than one has been exported.
+    #[arg(short = 'e', long, value_name = "DIR")]
+    exports: Option<PathBuf>,
+
     /// Address to listen on when serving.
     #[arg(short, long, value_name = "ADDR")]
     bind: Option<String>,
@@ -65,6 +71,12 @@ struct Args {
     /// How many threads render tiles. 0 decides from the machine.
     #[arg(short = 't', long, value_name = "N")]
     threads: Option<usize>,
+
+    /// Whether each world's map goes in a directory of its own. The mod passes
+    /// this when it writes the settings, because it is the half that can tell
+    /// singleplayer from a dedicated server.
+    #[arg(long, value_name = "BOOL")]
+    per_world: Option<bool>,
 
     /// Write these settings to the configuration file, then carry on.
     #[arg(short = 'S', long)]
@@ -130,7 +142,7 @@ fn run() -> Result<()> {
         }
     }
 
-    let exports = config.exports();
+    let exports = config.exports(args.exports.as_deref())?;
     let palette = Palette::load(&exports)?;
     let world = World::load(&exports)?;
     let (min_x, min_z, max_x, max_z) = world.bounds();
@@ -215,6 +227,9 @@ fn resolve(args: &Args) -> Result<(Config, PathBuf)> {
     }
     if let Some(threads) = args.threads {
         config.threads = threads;
+    }
+    if let Some(per_world) = args.per_world {
+        config.per_world = per_world;
     }
 
     Ok((config, path))

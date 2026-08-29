@@ -5,6 +5,37 @@ two **must match on minor version**: minor is the compatibility generation, move
 whenever the file format or the socket protocol changes. Patch is free to differ,
 and covers anything that changes only one half.
 
+## 0.22.0
+
+**Deploy note:** the settings file gains `map_data` and `per_world`. This build
+reads a 0.21 file unchanged; a 0.21 build refuses one naming settings it has never
+heard of, so both halves go together as a minor bump always means. Nothing changes
+for an existing dedicated server: `per_world` is off there, and a map already on
+disk stays exactly where it is. No map is cleared.
+
+**Each world can keep its own map.** `per_world` files every world's map in a
+directory of its own inside the map folder, named for the world. It is off for a
+dedicated server, which runs one world out of one data path and has no reason to
+move anything. The mod turns it on for singleplayer, where every save shares one
+data path — and one folder between them meant the second world wrote its terrain
+into the first world's map at the same region coordinates, giving a map of two
+worlds at once with nothing anywhere saying so.
+
+Nothing is shared between those directories, including the files that would be
+identical. A palette written once and then left alone costs nothing to keep, while
+one rewritten on every switch between a world with no mods and a world with fifty
+costs a disk.
+
+**`map_data` says where maps are kept**, for a larger disk or a directory a web
+server already serves. Empty is `<vs_data>/witchlight`, which is where it has
+always been.
+
+**`--exports` names the map to serve.** The mod passes it, because the mod is the
+half that knows which world is running. By hand it is needed only where a world
+has been given a directory of its own and more than one has been exported: with
+one, that one is served; with several, the service lists what it found and says
+how to name one, rather than picking.
+
 ## 0.21.1
 
 **The page started eleven things it never waited on, and a failure in any of them

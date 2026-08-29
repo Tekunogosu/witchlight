@@ -54,6 +54,8 @@ own `ModConfig/witchlight.conf`:
 
 ```toml
 vs_data = "/home/vintagestory/data"   # the server's --dataPath
+map_data = ""                         # where maps are kept; empty means <vs_data>/witchlight
+per_world = false                     # a directory per world inside it
 bind = "0.0.0.0:8080"                 # every interface; 127.0.0.1 for this machine only
 api_bind = ""                         # where the mod posts; empty means loopback on a free port
 api_token = ""                        # what it must present; empty means a fresh one each start
@@ -76,9 +78,22 @@ Flags win over the file and stay one-off unless `-S` is given, so a quick look a
 another world does not rewrite your setup. `-p` prints the resolved settings.
 
 `vs_data` is the game's data directory and exports are read from the `witchlight`
-folder inside it. A directory holding `palette.json` directly is accepted too, so
-files copied off a server with `scp` need no second flag. Whichever it picks is
-printed on start.
+folder inside it, unless `map_data` names somewhere else. A directory holding
+`palette.json` directly is accepted too, so files copied off a server with `scp`
+need no second flag. Whichever it picks is printed on start.
+
+`per_world` files each world's map in a directory of its own inside that folder,
+named after the world. A dedicated server runs one world and leaves this off; the
+mod turns it on for singleplayer, where every save shares one data path and would
+otherwise write its terrain into the last world's map. Nothing is shared between
+those directories, not even the files that would be identical — one written once
+and left alone costs nothing to keep, while one rewritten every time you switch
+between a world with no mods and a world with fifty costs a disk.
+
+The mod names the directory outright with `--exports` when it starts this, because
+it is the half that knows which world is running. By hand it is only needed when
+`per_world` is on and more than one world has been exported; with one, that one is
+served, and with several the service says which it found rather than guessing.
 
 It binds every interface by default, so the map is reachable from the rest of your
 network as soon as it starts. On start it prints the addresses it can actually be

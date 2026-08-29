@@ -9,6 +9,8 @@ pub enum Error {
     Parse { path: PathBuf, message: String },
     /// The export is there but has nothing to draw.
     Empty(String),
+    /// The settings do not say enough to act on, and only a person can settle it.
+    Config(String),
 }
 
 impl Error {
@@ -19,6 +21,10 @@ impl Error {
     pub fn parse(path: &Path, message: impl Into<String>) -> Self {
         Self::Parse { path: path.to_owned(), message: message.into() }
     }
+
+    pub fn config(message: impl Into<String>) -> Self {
+        Self::Config(message.into())
+    }
 }
 
 impl fmt::Display for Error {
@@ -26,7 +32,7 @@ impl fmt::Display for Error {
         match self {
             Self::Io { doing, source } => write!(f, "{doing}: {source}"),
             Self::Parse { path, message } => write!(f, "{}: {message}", path.display()),
-            Self::Empty(message) => f.write_str(message),
+            Self::Empty(message) | Self::Config(message) => f.write_str(message),
         }
     }
 }
@@ -35,7 +41,7 @@ impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Io { source, .. } => Some(source),
-            Self::Parse { .. } | Self::Empty(_) => None,
+            Self::Parse { .. } | Self::Empty(_) | Self::Config(_) => None,
         }
     }
 }
