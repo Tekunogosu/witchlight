@@ -38,10 +38,32 @@ function drawColours() {
   }
 }
 
+/**
+ * How bright a colour is, on the scale a screen is measured by.
+ *
+ * The standard's own weighting rather than an average of the three channels:
+ * green carries most of what an eye reads as brightness and blue almost none, so
+ * a plain mean calls a saturated blue as light as a mid grey.
+ */
+function brightness(colour) {
+  const parts = [1, 3, 5].map(from => parseInt(colour.slice(from, from + 2), 16) / 255);
+  const [red, green, blue] = parts.map(one =>
+    one <= 0.03928 ? one / 12.92 : ((one + 0.055) / 1.055) ** 2.4);
+  return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+}
+
+/** Where the ground the pictures are drawn on stops being dark enough to draw a
+ *  dark marker against. Black on the panel's own near-black is a row of holes. */
+const TOO_DARK_TO_READ = 0.06;
+
 /** The pictures the service has, drawn as the markers they will become. */
 function drawPictures() {
   const box = document.getElementById('pictures');
   box.textContent = '';
+  // The pictures are the chosen colour, so a colour near black leaves the picker
+  // showing nothing to pick from. Lifted rather than outlined: what is being
+  // chosen is a silhouette, and a silhouette is read against its ground.
+  box.classList.toggle('lit', brightness(colourOf(chosenColour)) < TOO_DARK_TO_READ);
   const offered = [...icons].sort();
   if (offered.length === 0) offered.push('circle');
   if (!offered.includes(chosenPicture)) chosenPicture = offered[0];
@@ -134,6 +156,15 @@ async function askForMarker() {
     return;
   }
 
+  // Asked for and impossible is worth saying out loud. A marker made from a
+  // right click carries the block it was made on, but one being changed carries
+  // nothing to key a preset to — so the pattern has to be typed, and a mark
+  // pressed to no effect is worse than a mark that says why.
+  if (alsoPreset && markerPattern.value.trim() === '' && !(clicked && clicked.code)) {
+    sayHere('A preset needs a block to start from: type one above.', true);
+    return;
+  }
+
   const [worldX, worldZ] = meant(x, z);
   const marker = {
     // Named here rather than left blank for the game to name. A marker with no
@@ -147,7 +178,7 @@ async function askForMarker() {
     X: worldX,
     Y: Math.round(y),
     Z: worldZ,
-    Private: markerPrivate.checked,
+    Private: privately,
   };
 
   markerSave.disabled = true;
@@ -156,7 +187,7 @@ async function askForMarker() {
   // A preset is this page's own record and lands whatever the game says, so it
   // is kept first: a marker that fails to reach a stopped game server should not
   // also lose the choice to remember what it was for.
-  if (markerRemember.checked) await rememberPreset(marker);
+  if (alsoPreset) await rememberPreset(marker);
 
   let answer;
   try {
@@ -221,7 +252,7 @@ async function updatePreset() {
     Title: markerName.value.trim(),
     Icon: chosenPicture,
     Color: chosenColour,
-    Private: markerPrivate.checked,
+    Private: privately,
   };
   if (making) presets.unshift(kept);
   else presets[editingPreset] = kept;

@@ -8,9 +8,10 @@
 const hud = document.getElementById('hud');
 const waiting = document.getElementById('waiting');
 const hudWhat = document.getElementById('what');
-/** The six readouts, by the name each answers to in `say`. */
+/** The seven readouts, by the name each answers to in `say`. */
 const readout = {
   x: document.getElementById('at-x'),
+  y: document.getElementById('at-y'),
   z: document.getElementById('at-z'),
   scale: document.getElementById('at-scale'),
   level: document.getElementById('at-level'),
@@ -109,7 +110,11 @@ const who = document.getElementById('who');
  * entitled to a different answer.
  */
 const settings = {
-  players: { label: 'Players', on: true, apply: on => layer(people, on) },
+  // Drawn again on the way back, because Leaflet builds every marker a fresh
+  // element when its layer returns and the way a player is looking lives on that
+  // element. Without this they all point north until the next post, which is a
+  // claim about eight people rather than a missing one.
+  players: { label: 'Players', on: true, apply: on => { layer(people, on); if (on) drawPlayers(); } },
   markers: { label: 'Markers', on: true, apply: on => layer(places, on) },
   grid: { label: 'Chunk grid', on: false, apply: on => layer(grid, on) },
   panel: { label: 'Player list', on: true, apply: on => { who.style.display = on ? '' : 'none'; } },

@@ -167,6 +167,10 @@ async function lookUp(x, z) {
  * A column nobody has exported has nothing on it to name, and says that rather
  * than naming a block that is not there. Everything else is what the renderer
  * read for that same pixel, so the line and the colour under it agree.
+ *
+ * The height is not in here. It is a number of the same kind as the pointer's own
+ * two, so it is read with them in the readout rather than said twice in two
+ * places that could disagree.
  */
 function describe() {
   if (!picked) return '';
@@ -180,7 +184,7 @@ function describe() {
     case 'unknown':
       return `block ${told.block} — not in the palette`;
     default:
-      return `${shortCode(told.code)}   y ${told.y}   ` +
+      return `${shortCode(told.code)}   ` +
              `${Math.round(told.temperature)}°C   ${Math.round(told.rainfall * 100)}% rain`;
   }
 }
@@ -190,13 +194,28 @@ function shortCode(code) {
   return String(code ?? '').replace(/^game:/, '');
 }
 
+/**
+ * How high the ground is under the pointer, as the picker was told it.
+ *
+ * The one number in the readout the page cannot work out for itself: x and z are
+ * where the pointer is and arrive with the event, while y is what the column
+ * under it stands at, and only the service's reading of that column knows it. So
+ * it is said while the picker is on and is a dash the rest of the time, rather
+ * than a height left over from wherever the pointer was when the tool was last
+ * armed.
+ */
+function groundY() {
+  return about(picked) && told.y !== undefined ? String(told.y) : '—';
+}
+
 function say() {
   if (!terrain) return;
   const seen = pointer || map.getCenter();
   const [x, z] = said(seen.lng, seen.lat);
   // Written field by field rather than as one line, so that a pointer moving
-  // across the map rewrites two numbers instead of the whole readout.
+  // across the map rewrites three numbers instead of the whole readout.
   readout.x.textContent = x;
+  readout.y.textContent = groundY();
   readout.z.textContent = z;
   readout.scale.textContent = scaleAt(map.getZoom(), NATIVE_ZOOM).toFixed(2);
   readout.level.textContent = levelFor(Math.round(map.getZoom()), NATIVE_ZOOM);

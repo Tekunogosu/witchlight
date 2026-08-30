@@ -64,7 +64,7 @@ const DEEPER = constant(source, /const ZOOM_IN_DEEPER = (\d+)/, 'ZOOM_IN_DEEPER'
 
 const GRID_MIN = constant(source, /const GRID_MIN_PIXELS = (\d+)/, 'GRID_MIN_PIXELS');
 
-const { scaleAt, levelFor, tileKey, zoomFor, gridFloor, chunkLines, portraitSrc } = new Function(`
+const { scaleAt, levelFor, tileKey, zoomFor, gridFloor, chunkLines, portraitSrc, facingOf } = new Function(`
   const GRID_MIN_PIXELS = ${GRID_MIN};
   ${lift('scaleAt')}
   ${lift('levelFor')}
@@ -73,7 +73,8 @@ const { scaleAt, levelFor, tileKey, zoomFor, gridFloor, chunkLines, portraitSrc 
   ${lift('gridFloor')}
   ${lift('chunkLines')}
   ${lift('portraitSrc')}
-  return { scaleAt, levelFor, tileKey, zoomFor, gridFloor, chunkLines, portraitSrc };
+  ${lift('facingOf')}
+  return { scaleAt, levelFor, tileKey, zoomFor, gridFloor, chunkLines, portraitSrc, facingOf };
 `)();
 
 // The two directions of the same translation: what the page shows a reader, and
@@ -303,6 +304,24 @@ check('a picture with no time still resolves to something fetchable',
 const look = source.slice(source.indexOf('const look = '), source.indexOf('if (card.look !== look)'));
 check('the card compares the address rather than the name behind it',
   look.includes('portraitSrc(player)') && !look.includes('player.Portrait'));
+
+console.log('\na player points where the mod says they are looking');
+// Zero is north, which is a real answer and therefore not the one to give when
+// nobody has answered. A mod older than the field says nothing, and a mark that
+// says nothing is the one thing the map can draw that is not a claim.
+check('a bearing is read as it arrives', facingOf({ Facing: 90 }) === 90);
+check('north is a bearing like any other', facingOf({ Facing: 0 }) === 0);
+check('a mod that does not say leaves it unsaid', facingOf({ Name: 'Bo' }) === null);
+check('and so does one that says something that is not an angle',
+  facingOf({ Facing: 'north' }) === null && facingOf({ Facing: null }) === null);
+
+// The mark is the game's own, and the cone is the half of it that points. Turned
+// by the bearing, since the page draws it looking north and north is up.
+const turning = lift('turn');
+check('the mark is turned by the bearing itself',
+  turning.includes('rotate(${facing}deg)'));
+check('and a player with no bearing loses the cone rather than pointing north',
+  turning.includes("classList.toggle('blind'") && style.includes('.pin.blind .cone'));
 
 console.log('\nwhat a reader types means where they meant');
 // The form shows a place the way the corner does and sends it the way the world
@@ -606,6 +625,27 @@ console.log('\nnothing hides a name the rest of the page uses');
   }
   check(`${top.size} names at the top level, none hidden underneath`,
     hiding.size === 0, [...hiding.values()].join(', '));
+}
+
+// A button in the row a window ends with is dressed by what it carries rather
+// than by being a button: a word takes the padding and the border, and a mark
+// takes the square the lists draw it in. A button in that row wearing neither is
+// the browser's own button in the middle of the page — which is how the profile's
+// Cancel and Save came out unstyled the day the rule was named.
+console.log('\nevery button in a window\'s last row says what it is');
+{
+  const dressed = ['word', 'seen', 'keepsake'];
+  const bare = [];
+  for (const row of page.matchAll(/<div class="deed">([\s\S]*?)<\/div>/g)) {
+    for (const button of row[1].matchAll(/<button\b([^>]*)>/g)) {
+      const wears = /class="([^"]*)"/.exec(button[1]);
+      const worn = wears ? wears[1].split(/\s+/) : [];
+      if (!worn.some(one => dressed.includes(one))) {
+        bare.push(/id="([^"]*)"/.exec(button[1])?.[1] || button[0]);
+      }
+    }
+  }
+  check(`${dressed.join(', ')} — and nothing bare`, bare.length === 0, bare.join(', '));
 }
 
 console.log(failed === 0 ? '\nall checks passed' : `\n${failed} FAILED`);

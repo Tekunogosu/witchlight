@@ -99,10 +99,12 @@ accountBar.querySelector('a').append(accountName);
 /**
  * What the world's clock says, beside who is looking at it.
  *
- * Two columns of two: the date over the year, the time over the season. The
- * lower line of each is the quieter one — a year and a season are what the date
+ * Two columns of two: the year over the date, the season over the time. The
+ * upper line of each is the quieter one — a year and a season are what the date
  * and the time are *in*, and saying all four equally loudly makes a reader work
- * out which is which every time they glance at it.
+ * out which is which every time they glance at it. The quiet line goes above the
+ * loud one the way a heading goes above what it heads: the eye lands on the date
+ * and has already passed the year it is in.
  */
 const whenBar = L.DomUtil.create('div', 'leaflet-bar', row);
 whenBar.id = 'when';
@@ -110,12 +112,12 @@ whenBar.id = 'when';
  *  furniture rather than as a control and a label that happen to be adjacent. */
 const whenBox = L.DomUtil.create('div', 'tool clock', whenBar);
 const when = {};
-for (const [top, under] of [['date', 'year'], ['time', 'season']]) {
+for (const [over, said] of [['year', 'date'], ['season', 'time']]) {
   const column = L.DomUtil.create('div', 'when-part', whenBox);
-  when[top] = L.DomUtil.create('b', '', column);
-  when[under] = L.DomUtil.create('span', '', column);
-  when[top].textContent = '—';
-  when[under].textContent = '';
+  when[over] = L.DomUtil.create('span', '', column);
+  when[said] = L.DomUtil.create('b', '', column);
+  when[over].textContent = '';
+  when[said].textContent = '—';
 }
 L.DomEvent.disableClickPropagation(whenBar);
 

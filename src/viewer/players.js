@@ -30,22 +30,24 @@ function drawPlayers() {
     const drawn = drawnPlayers.get(uid);
     if (drawn) {
       drawn.marker.setLatLng(at(player.X, player.Z));
-      // Only the parts that can change: the popup carries their position.
-      drawn.marker.setPopupContent(popupFor(player));
+      // Only the parts that can change: where they are, which way they are
+      // looking, and what the popup says, which is written into the popup that
+      // is already there rather than over the top of it.
+      turn(drawn.marker, player);
+      fillPopup(drawn.saying, player);
       continue;
     }
 
+    const saying = popupFor(player);
     const marker = L.marker(at(player.X, player.Z), {
-      icon: L.divIcon({
-        className: 'player',
-        html: `<i class="pin"></i><span class="tag">${escaped(player.Name)}</span>`,
-      }),
+      icon: pinned('player', `${PLAYER_MARK}<span class="tag">${escaped(player.Name)}</span>`),
       // Above markers: a player is the thing that is moving.
       zIndexOffset: 1000,
     })
-      .bindPopup(popupFor(player))
+      .bindPopup(saying.box)
       .addTo(people);
-    drawnPlayers.set(uid, { marker });
+    turn(marker, player);
+    drawnPlayers.set(uid, { marker, saying });
   }
 
   for (const [uid, drawn] of drawnPlayers) {
@@ -54,6 +56,70 @@ function drawPlayers() {
       drawnPlayers.delete(uid);
     }
   }
+}
+
+/**
+ * A picture hung on the map at a position, with nothing between the two.
+ *
+ * Leaflet's own answer for a picture it did not draw is a twelve pixel box
+ * offset by half of itself, so everything inside one is measured from a corner
+ * six pixels up and to the left of the place it is about — which is where every
+ * mark on this map used to sit. A box of no size puts the position itself where
+ * the stylesheet can find it, and each mark centres itself on it from there.
+ */
+function pinned(className, html) {
+  return L.divIcon({ className, iconSize: [0, 0], html });
+}
+
+/**
+ * The mark a player is drawn as: the game's own, so somebody who has read the
+ * map in the client already knows what it means.
+ *
+ * A circle for the player with a cone over it for the way they are looking, and
+ * the paths are the client's — transcribed from `IconUtil.DrawMapPlayer`, which
+ * is what the game's own world map draws a player with. Each of the two shapes
+ * is filled and outlined, and the two after them fill the insides again to hide
+ * the halves of those outlines that fall where the circle and the cone cross.
+ *
+ * Drawn looking north, because north is up on this map and a bearing of zero is
+ * north. Everything else is the turn `turn` gives it.
+ */
+const PLAYER_MARK = `<svg class="pin" viewBox="0 0 26 39">
+  <path class="shape cone" d="M19.75 14.835938C19.75 7.820313 16.726563 2.132813 13 2.132813C9.273438 2.132813 6.25 7.820313 6.25 14.835938C6.25 21.851563 9.273438 27.539063 13 27.539063C16.726563 27.539063 19.75 21.851563 19.75 14.835938Z"/>
+  <path class="shape" d="M24.015625 25.851563C24.015625 31.933594 19.082031 36.867188 13 36.867188C6.917969 36.867188 1.984375 31.933594 1.984375 25.851563C1.984375 19.769531 6.917969 14.835938 13 14.835938C19.082031 14.835938 24.015625 19.769531 24.015625 25.851563Z"/>
+  <path class="inner" d="M11.558594 34.703125C9.667969 34.386719 7.675781 33.269531 6.339844 31.769531C2.125 27.050781 4 19.707031 10 17.4375C11.214844 16.980469 13.53125 16.816406 14.878906 17.097656C17.867188 17.71875 20.46875 20.09375 21.511719 23.164063C21.960938 24.472656 22.015625 26.71875 21.636719 28.167969C20.519531 32.460938 15.929688 35.433594 11.558594 34.703125Z"/>
+  <path class="inner cone" d="M17.296875 13.511719C17.160156 13.433594 16.519531 13.253906 15.871094 13.105469C13.867188 12.65625 11.019531 12.789063 8.785156 13.433594L8.386719 13.550781L8.492188 12.335938C8.722656 9.628906 9.820313 6.734375 11.15625 5.308594C12.140625 4.25 12.890625 3.988281 13.753906 4.398438C15.496094 5.226563 17.199219 8.871094 17.5625 12.554688C17.621094 13.164063 17.640625 13.660156 17.605469 13.65625C17.570313 13.652344 17.433594 13.589844 17.296875 13.511719Z"/>
+</svg>`;
+
+/**
+ * Which way a player is looking, in degrees clockwise from north, or null where
+ * the mod on the other end does not say.
+ *
+ * The mod turns the game's yaw into a bearing, so this reads a number and does
+ * no arithmetic on it. A mod older than the field says nothing rather than zero,
+ * and zero is north — which is a claim about where somebody is looking that
+ * nobody made.
+ */
+function facingOf(player) {
+  return Number.isFinite(player.Facing) ? player.Facing : null;
+}
+
+/**
+ * Turns a player's mark to the way they are looking.
+ *
+ * The element is asked for each time rather than held: the players are a layer
+ * that can be switched off, and Leaflet builds every marker a fresh element when
+ * it comes back on, which a held one would outlive.
+ */
+function turn(marker, player) {
+  const mark = marker.getElement() && marker.getElement().querySelector('.pin');
+  if (!mark) return;
+
+  const facing = facingOf(player);
+  // Nothing said, so the mark says nothing: the cone comes off and what is left
+  // is the dot this map drew before it could point anywhere.
+  mark.classList.toggle('blind', facing === null);
+  mark.style.transform = facing === null ? '' : `rotate(${facing}deg)`;
 }
 
 /** What the markers looked like last time, so an unchanged set is left alone. */
@@ -91,10 +157,7 @@ function drawPlaces(waypoints) {
     const title = escaped(place.Title || 'marker');
     const [x, z] = said(place.X, place.Z);
     const drawn = L.marker(at(place.X, place.Z), {
-      icon: L.divIcon({
-        className: 'marker',
-        html: `${picture}<span class="tag">${title}</span>`,
-      }),
+      icon: pinned('marker', `${picture}<span class="tag">${title}</span>`),
     })
       .bindPopup(
         `<b class="said-name">${title}${kept}</b>` +
@@ -293,9 +356,58 @@ function fill(meter, what, value, most) {
   meter.wrap.title = most > 0 ? `${what} ${Math.round(value)} of ${Math.round(most)}` : '';
 }
 
+/**
+ * What a click on a player says: who they are, with their own face, and where
+ * they are standing.
+ *
+ * The shape a click on a marker already answers in — a name for a heading and
+ * what is true of it under a rule — because a dot and a mark are two things on
+ * one map and being told about them in two different shapes is the reader's
+ * problem, not the map's.
+ *
+ * Built once and kept. The poll that moves everybody arrives every two seconds,
+ * and a popup written out again each time would throw the picture away and ask
+ * for it back — which is the rule the cards in the panel already follow.
+ */
 function popupFor(player) {
+  const box = document.createElement('div');
+  const head = document.createElement('b');
+  head.className = 'said-name said-head';
+  const face = document.createElement('span');
+  face.className = 'face said-face';
+  const called = document.createElement('span');
+  called.className = 'said-called';
+  head.append(face, called);
+
+  const foot = document.createElement('span');
+  foot.className = 'said-foot';
+  const where = document.createElement('span');
+  where.className = 'said-where';
+  foot.append(where);
+
+  box.append(head, foot);
+  const saying = { box, face, called, where, look: null };
+  fillPopup(saying, player);
+  return saying;
+}
+
+/**
+ * Says who and where, and draws the face again only when it is a different one.
+ *
+ * A portrait is a request, so it is asked for when the picture or the name it
+ * stands in for has changed and at no other time — the same reading the cards
+ * are kept from flickering by.
+ */
+function fillPopup(saying, player) {
   const [x, z] = said(player.X, player.Z);
-  return `<b>${escaped(player.Name)}</b><br>${x}, ${player.Y}, ${z}`;
+  saying.called.textContent = player.Name;
+  saying.where.textContent = `${x}, ${player.Y}, ${z}`;
+
+  const look = `${portraitSrc(player)}|${player.Name}`;
+  if (saying.look === look) return;
+  saying.look = look;
+  saying.face.textContent = '';
+  saying.face.append(portrait(player));
 }
 
 /**

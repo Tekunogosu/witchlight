@@ -5,6 +5,122 @@ two **must match on minor version**: minor is the compatibility generation, move
 whenever the file format or the socket protocol changes. Patch is free to differ,
 and covers anything that changes only one half.
 
+## 0.27.5
+
+**A click on a player says who they are, with their own face.** The popup was a
+name and three numbers with nothing between them; it is the shape a click on a
+marker already answers in — the name a heading, and what is true of it under a
+rule — with the portrait their own client drew beside the name. A dot and a mark
+are two things on one map, and being told about them in two different shapes was
+the reader's problem rather than the map's.
+
+**A face is drawn from one rule wherever it appears.** The player card and the
+profile bar each carried their own copy of what one looks like, and the popup
+would have been a third. What is left in each place is how large it is, which is
+the only thing the three disagree about.
+
+**The profile's Cancel and Save look like buttons again.** Naming the row's
+worded buttons in 0.27.3 reached the two in the marker form and the four in the
+lists, and left the two in the profile wearing the browser's own styling. A check
+now reads every button in a window's last row and fails on one dressed as
+neither a word nor a mark.
+
+## 0.27.4
+
+**The lock is a padlock.** Phosphor's simple lock is a shackle over a rounded
+body, which at fourteen pixels reads as a shopping bag rather than as a lock.
+
+**The two marks a marker form holds are the size of the buttons beside them.**
+Both they and the answers in the marker list are drawn from one box and one mark
+inside it, so the pair cannot come to differ.
+
+**The marker list's last heading sits over its own column.** It was centred with
+its caret rather than by itself, which put it a caret's width to the left of every
+mark it headed, and the list's scrollbar took another sixteen out from under it —
+so the heading holds the same gutter the list does, and centres the mark alone.
+
+## 0.27.3
+
+**Who may see a marker is one mark, drawn the same everywhere it is asked.** A
+lock is a marker its owner keeps and a crowd is one the whole server can see —
+two pictures of two different things, each in a colour of its own, where a shut
+lock against an open one was one picture twice over told apart by a shackle a
+reader had to look for. The marker list and the marker form now draw it from the
+same function, so the answer on the form and the answer in the list cannot come
+to differ, and the title says where it is before it says what a press would do.
+The form's checkbox is gone with it.
+
+**The marker list is a table, and its headings are over their own data.** Four
+columns could be sorted by and only one of them had anything under it: the name
+was a column and the rest — where it is, whose it is, who can see it — were one
+grey line beneath the name. Each has a column now, the heading over it, and the
+coordinates are headed with what they are rather than with what they are sorted
+by. The column that sorts by who can see it wears whichever of the two the list
+currently has at the top.
+
+**A marker being changed can be kept as a preset, like one being made.** The one
+window has always served all four jobs; the choice to remember it was offered on
+only one of them. It is now the presets' own mark beside the privacy mark, and
+asking for a preset with nothing to key it on says so rather than quietly
+dropping it.
+
+**The picker shows what it is offering when the colour chosen is black.** The
+pictures are drawn in the marker's own colour on a panel that is near black, so
+choosing black left thirty holes to choose between. The ground lifts where the
+colour cannot be read against it.
+
+**The marker form ends the way a form ends.** The two states it is holding sit at
+one end of the last row and the two ways out at the other, with cancel beside
+save rather than across the window from it. The name box says what it is instead
+of carrying a heading over it.
+
+## 0.27.2
+
+**The button that takes a marker's coordinates from a click wears a crosshair.**
+It wore the same pin as the button that opens the window it sits in, so one
+picture stood for both starting a marker and choosing where it goes, and the
+inner one had to be worked out from where it sat. A crosshair aims at a place
+rather than standing on one, which is what that button does.
+
+## 0.27.1
+
+**A position is one number in three parts.** The readout at the foot of the map
+said x and z as two labelled columns and left y to the inspector's line, so the
+three numbers a place is made of were read in two places and only ever two of them
+at once. They are one group now — `x, y, z` over `189, 125, -837` — and the
+inspector's line no longer repeats the height. Each number is still held to its
+own width, so the panel cannot twitch as the pointer crosses zero. The height is
+what the picker was told and is a dash while the picker is off, since it is the
+one number of the three the page cannot work out for itself.
+
+**The world's clock reads in the order it is spoken.** The year and the season sat
+under the date and the time they belong to, and two lines of type came to within a
+pixel of the box's own height, so the clock read as text that had outgrown it. The
+quiet line goes above the loud one the way a heading goes above what it heads, and
+the box is now a floor rather than a fixed height — it grows the few pixels that
+put an even margin above and below, and the row centres what stands beside it.
+
+## 0.27.0
+
+**Deploy note: both halves.** Minor is the compatibility generation and it moves
+together, so the mod goes up with the service. Nothing is cleared and no map is
+rebuilt. A server left on the old mod is not broken by this: it says nothing about
+which way anybody is looking, and the map draws a plain dot rather than pointing
+everybody north.
+
+**A player is drawn the way the game's own map draws one** — a dot with a cone
+over it for the way they are looking — so that the map in the browser and the map
+in the client mean the same thing. The picture is the client's own, transcribed
+from `IconUtil.DrawMapPlayer`, and it is turned by the bearing the mod sends. A
+player the mod says nothing about keeps the dot and loses the cone, because zero
+degrees is north and north is an answer nobody gave.
+
+**Every mark sits on the block it names.** Leaflet's answer for a picture it did
+not draw is a twelve pixel box offset by half of itself, and every mark on this
+map was then centred on that box's corner — six pixels up and to the left of the
+place it was about. The marker pictures, the player dots and the names above them
+now agree on where a position is.
+
 ## 0.26.2
 
 **Deploy note:** nothing to do by hand, nothing is cleared, and nothing behaves

@@ -57,8 +57,9 @@
     <h2 id="compose-title">New marker</h2>
     <button class="shut" type="button" title="Close" aria-label="Close"><span class="chrome masked mark-x" aria-hidden="true"></span></button>
   </div>
-  <div class="field"><span>Name</span>
-    <input id="marker-name" type="text" maxlength="128" placeholder="what is here">
+  <div class="field">
+    <input id="marker-name" type="text" maxlength="128" placeholder="Name"
+           aria-label="Marker name">
   </div>
   <div class="field">
     <div id="colours" class="swatches"></div>
@@ -80,19 +81,18 @@
       <input id="marker-z" type="number" aria-label="Marker z" placeholder="z">
       <button id="marker-pick" class="tool" type="button"
               title="Pick the spot on the map" aria-label="Pick the spot on the map"
-              aria-pressed="false"><span class="chrome masked mark-map-pin-simple"
+              aria-pressed="false"><span class="chrome masked mark-crosshair"
               aria-hidden="true"></span></button>
     </div>
   </div>
-  <label class="line" id="remember-line">
-    <input id="marker-remember" type="checkbox">
-    <span>Set as preset for <b id="remember-what">this</b></span>
-  </label>
   <p id="said"></p>
   <div class="deed">
-    <button id="marker-cancel" type="button">Cancel</button>
-    <label class="keep"><input id="marker-private" type="checkbox">Private</label>
-    <button id="marker-save" class="go" type="button">Save</button>
+    <button id="marker-private" class="seen" type="button" aria-pressed="false"></button>
+    <button id="marker-remember" class="keepsake" type="button"
+            aria-pressed="false"><span class="chrome masked mark-bookmarks-simple"
+            aria-hidden="true"></span></button>
+    <button id="marker-cancel" class="word" type="button">Cancel</button>
+    <button id="marker-save" class="word go" type="button">Save</button>
   </div>
 </div>
 
@@ -111,7 +111,7 @@
   <div id="preset-list"></div>
   <p id="preset-said"></p>
   <div class="deed">
-    <button id="preset-new" class="go" type="button">Create</button>
+    <button id="preset-new" class="word go" type="button">Create</button>
   </div>
 </div>
 
@@ -141,22 +141,22 @@
        so: the service sends the markers everybody can see and then the ones only
        you can, so making a marker private moved its row to the bottom. -->
   <div id="marker-head" class="head">
-    <button class="sort on" type="button" data-sort="name" aria-sort="ascending"
+    <button class="sort" type="button" data-sort="name" aria-sort="ascending"
             title="Sort by name">Name<span class="caret chrome masked mark-caret-up" aria-hidden="true"></span></button>
-    <button class="sort" type="button" data-sort="away" aria-sort="none"
-            title="Sort by how far it is from spawn">Away<span class="caret chrome masked mark-caret-up" aria-hidden="true"></span></button>
+    <button class="sort" type="button" data-sort="distance" aria-sort="none"
+            title="Sort by how far it is from spawn">Coords<span class="caret chrome masked mark-caret-up" aria-hidden="true"></span></button>
     <button class="sort" type="button" data-sort="owner" aria-sort="none"
             title="Sort by whose it is">Owner<span class="caret chrome masked mark-caret-up" aria-hidden="true"></span></button>
-    <button class="sort seen" type="button" data-sort="private" aria-sort="none"
+    <button class="sort marked" type="button" data-sort="private" aria-sort="none"
             title="Sort by who can see it" aria-label="Sort by who can see it"><span
-            class="chrome masked mark-lock-simple" aria-hidden="true"></span><span
+            class="chrome masked seen-mark mark-lock" aria-hidden="true"></span><span
             class="caret chrome masked mark-caret-up" aria-hidden="true"></span></button>
   </div>
   <div id="marker-list" role="tabpanel"></div>
   <p id="marker-said"></p>
   <div class="deed">
-    <button id="marker-hide" type="button">Make all private</button>
-    <button id="marker-show" type="button">Make all public</button>
+    <button id="marker-hide" class="word" type="button">Make all private</button>
+    <button id="marker-show" class="word" type="button">Make all public</button>
   </div>
 </div>
 
@@ -177,16 +177,18 @@
   <p id="profile-said"></p>
   <div class="deed">
     <a id="sign-out" href="/logout">Sign out</a>
-    <button id="profile-revert" type="button">Cancel</button>
-    <button id="profile-save" class="go" type="button">Save</button>
+    <button id="profile-revert" class="word" type="button">Cancel</button>
+    <button id="profile-save" class="word go" type="button">Save</button>
   </div>
 </div>
 <div id="version"><span class="name">Witchlight</span> - v__VERSION__</div>
 <div id="hud">
-  <!-- Six numbers in three pairs, each pair answering a different question:
+  <!-- Seven numbers in three groups, each group answering a different question:
        where the pointer is, how the map is drawn, and what the world holds.
        The unit belongs to the label so every value is a bare number, which is
-       what lets a column of them stay still while the pointer moves. -->
+       what lets a column of them stay still while the pointer moves. A place is
+       three numbers and is written as one, since x, y and z are read together
+       and are copied out together. -->
   <!-- Above the readout, not below it. This line comes and goes with the
        picker, and underneath it pushed the six numbers down the screen every
        time it appeared — so the row somebody is reading moved out from under
@@ -195,8 +197,7 @@
   <div id="what"></div>
   <div id="waiting">loading…</div>
   <div id="where">
-    <div class="read wide"><span class="key">x</span><b id="at-x">0</b></div>
-    <div class="read wide"><span class="key">z</span><b id="at-z">0</b></div>
+    <div class="read"><span class="key">x, y, z</span><span class="triple"><b id="at-x" class="wide">0</b>, <b id="at-y">—</b>, <b id="at-z" class="wide">0</b></span></div>
     <div class="read apart wide"><span class="key">px/block</span><b id="at-scale">0</b></div>
     <div class="read"><span class="key">level</span><b id="at-level">0</b></div>
     <div class="read apart wide"><span class="key">chunks</span><b id="at-chunks">0</b></div>

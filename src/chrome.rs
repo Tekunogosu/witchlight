@@ -44,9 +44,13 @@ const ICONS: &[(&str, &str)] = chrome![
     "scan" @ "fill",
     // What the reader has chosen to see.
     "gear-six" @ "fill",
-    // A place: on the button that starts a marker, and again inside the compose
-    // window on the button that takes its coordinates from a click.
+    // A place, on the button that starts a marker.
     "map-pin-simple" @ "fill",
+    // Aims at a place rather than standing on one: the compose window's button
+    // for taking a marker's coordinates from a click. It wore the pin, which is
+    // the mark of the button that opened the window it sits in — one picture for
+    // both left the reader to work out that the inner one meant something else.
+    "crosshair" @ "fill",
     // What a marker starts as, saved.
     "bookmarks-simple" @ "fill",
     // Every marker there is, as a list rather than as pins on a map.
@@ -61,12 +65,13 @@ const ICONS: &[(&str, &str)] = chrome![
     // Sits inside a search box. Bold for the reason `x` is: filled, a magnifier
     // is a disc with a handle, which beside a caret reads as a blot.
     "magnifying-glass" @ "bold",
-    // Who may see a marker, on the button that changes it. A shut lock is one
-    // its owner keeps; an open one is a marker the server can see. Bold, because
-    // what tells the two apart is the shackle, and the filled weight fills the
-    // gap the shackle leaves — which makes them the same picture twice.
-    "lock-simple" @ "bold",
-    "lock-simple-open" @ "bold",
+    // Who may see a marker, in the list and on the button that changes it. A lock
+    // is a marker its owner keeps and a crowd is one the server can see — two
+    // pictures of two different things, where a shut lock against an open one was
+    // one picture twice over, told apart by a shackle a reader had to look for.
+    // Filled, like the marks they stand among.
+    "lock" @ "fill",
+    "users-three" @ "fill",
     // Which column a list is sorted by, and which way. One mark rather than two:
     // descending is the same caret turned over, and a second file would be a
     // second thing to keep pointing the right way.
@@ -95,14 +100,15 @@ mod tests {
             "scan",
             "gear-six",
             "map-pin-simple",
+            "crosshair",
             "bookmarks-simple",
             "list-bullets",
             "user",
             "person-arms-spread",
             "x",
             "magnifying-glass",
-            "lock-simple",
-            "lock-simple-open",
+            "lock",
+            "users-three",
             "caret-up",
         ] {
             assert!(icon(name).is_some(), "the page asks for {name}");

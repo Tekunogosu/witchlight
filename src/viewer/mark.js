@@ -58,6 +58,67 @@ function markFor(picture, colour) {
 }
 
 /**
+ * Who may see a marker, as one mark wherever the question is drawn.
+ *
+ * A lock is a marker its owner keeps and a crowd is a marker the server can see:
+ * two pictures of two different things, each in a colour of its own, so the
+ * answer is read at a glance rather than by looking for a shackle. The marker
+ * list, the form that makes a marker and the form that changes one all ask it,
+ * and one function answers so that the three cannot come to differ about what
+ * private looks like.
+ */
+function seenMark(hidden) {
+  const mark = chromeMark(hidden ? 'lock' : 'users-three');
+  mark.classList.add(hidden ? 'kept' : 'shared');
+  return mark;
+}
+
+/** What the state is, in words. Said whether or not it is anybody's to change,
+ *  because a mark that only says what a click would do never says where it is. */
+function seenWords(hidden) {
+  return hidden ? 'Private' : 'Public';
+}
+
+/**
+ * Says the answer on whatever element is asking it.
+ *
+ * The mark, the colour and the words in one place, so a marker that is private in
+ * the list is private in the form in exactly the same picture. `ours` is whether
+ * the answer is this person's to change, which is the whole of what separates a
+ * control from a label: the title says where it is and then what a press would
+ * do, in that order, because a control marked only with its own consequence
+ * leaves the reader to work the current state back out of it.
+ */
+function dressSeen(box, hidden, name, ours) {
+  box.className = 'seen ' + (hidden ? 'kept' : 'shared');
+  box.textContent = '';
+  box.append(seenMark(hidden));
+  box.title = ours
+    ? `${seenWords(hidden)} — click to make it ${hidden ? 'public' : 'private'}`
+    : (hidden ? 'Private to its owner' : 'Everyone can see this');
+  // One of a list of identical marks, so what it is about is the only thing
+  // telling a reader — or a test — which one this is.
+  box.setAttribute('aria-label', ours
+    ? `${hidden ? 'Make public' : 'Make private'}: ${name}`
+    : `${seenWords(hidden)}: ${name}`);
+  if (box.tagName === 'BUTTON') box.setAttribute('aria-pressed', String(hidden));
+  return box;
+}
+
+/**
+ * The answer as a new element: something to press where `flip` says what a press
+ * does, and a plain label where it is nobody's to change here.
+ */
+function seenControl(hidden, name, flip) {
+  const box = document.createElement(flip ? 'button' : 'span');
+  if (flip) {
+    box.type = 'button';
+    box.addEventListener('click', flip);
+  }
+  return dressSeen(box, hidden, name, Boolean(flip));
+}
+
+/**
  * One row in a list of things to pick from: a mark, a name, and a quieter line
  * under it.
  *
@@ -82,9 +143,15 @@ function listedRow(picture, colour, name, under, shaded) {
   open.className = 'said';
   const named = document.createElement('b');
   named.textContent = name;
-  const quiet = document.createElement('span');
-  quiet.textContent = under;
-  open.append(named, quiet);
+  open.append(named);
+  // A row with nothing to say underneath does not get an empty line to say it
+  // in: the marker list puts what was on that line into columns of its own, and
+  // an empty span there left every row a line taller than it had anything for.
+  if (under) {
+    const quiet = document.createElement('span');
+    quiet.textContent = under;
+    open.append(quiet);
+  }
 
   line.append(mark, open);
   return { line, open };

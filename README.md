@@ -211,7 +211,7 @@ immutable and cached for a year, while the page and both feeds are `no-store`.
 | `/tiles/{x}/{z}.png` | one tile, versioned by `?v=` |
 | `/info.json` | bounds, chunk edge, chunk count, generation |
 | `/block.json?x=&z=` | what is at one block: its code, its surface height, its climate |
-| `/live.json` | players and markers, from memory. A player carries `Portrait`, the name of their picture, and `PortraitAt`, when it was drawn, where they have sent one |
+| `/live.json` | players and markers, from memory. A player carries `Facing`, which way they are looking in degrees clockwise from north, and `Portrait`, the name of their picture, with `PortraitAt`, when it was drawn, where they have sent one |
 | `/icons.json`, `/icons/{name}.svg` | the pictures markers are drawn with |
 | `/portraits/{name}.png` | a picture a player's own client drew of their seraph. Ask with `?v={PortraitAt}`: the name is the player's and does not change when the picture does |
 

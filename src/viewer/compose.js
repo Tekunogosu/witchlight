@@ -27,6 +27,21 @@ let palette = [];
 let chosenColour = '#ffffff';
 let chosenPicture = 'circle';
 
+/**
+ * Who will see it, and whether it is being remembered as well as made.
+ *
+ * The form's own answers rather than the state of two boxes read back out of the
+ * page: both are drawn as the mark that says them, and a mark has no `checked` to
+ * be asked. They sit beside the colour and the picture because they are the same
+ * kind of thing — a choice the form is holding until it is sent.
+ */
+let privately = false;
+let alsoPreset = false;
+
+/** Whether who sees this is this person's to decide. A marker somebody else owns
+ *  is theirs to be seen by whoever they let. */
+let mayKeep = true;
+
 /** Whether the next click on the map names the spot rather than doing nothing. */
 let placing = false;
 
@@ -82,8 +97,6 @@ const markerY = document.getElementById('marker-y');
 const markerZ = document.getElementById('marker-z');
 const markerPrivate = document.getElementById('marker-private');
 const markerRemember = document.getElementById('marker-remember');
-const rememberLine = document.getElementById('remember-line');
-const rememberWhat = document.getElementById('remember-what');
 const markerPattern = document.getElementById('marker-pattern');
 const markerPick = document.getElementById('marker-pick');
 const markerSave = document.getElementById('marker-save');
@@ -106,14 +119,22 @@ function privateByDefault() {
 
 function buildCompose() {
   markerPick.addEventListener('click', () => setPlacing(!placing));
+  markerPrivate.addEventListener('click', () => {
+    if (!mayKeep) return;
+    privately = !privately;
+    showSeen();
+  });
+  // The mark decides whether there is a pattern to fill in, so it redraws the
+  // form rather than only remembering its own state.
+  markerRemember.addEventListener('click', () => {
+    alsoPreset = !alsoPreset;
+    showFields();
+  });
   markerSave.addEventListener('click', () => started(askForMarker(), 'asking for the marker'));
   document.getElementById('marker-cancel').addEventListener('click', closeCompose);
   markerName.addEventListener('keydown', event => {
     if (event.key === 'Enter') started(askForMarker(), 'asking for the marker');
   });
-  // The box decides whether there is a pattern to fill in, so it redraws the
-  // form rather than only remembering its own state.
-  markerRemember.addEventListener('change', showFields);
   buildBlockSearch();
 
   // A right click names the spot, and what is on it names the marker. Both come
@@ -176,14 +197,15 @@ function openCompose(spot, ground) {
     markerName.value = preset.Title || clicked.name || shortCode(clicked.code);
     if (preset.Color) chosenColour = preset.Color;
     if (preset.Icon) chosenPicture = preset.Icon;
-    markerPrivate.checked =
+    privately =
       preset.Private === true || preset.Private === false ? preset.Private : privateByDefault();
   } else {
     markerName.value = clicked ? (clicked.name || shortCode(clicked.code) || '') : '';
-    markerPrivate.checked = privateByDefault();
+    privately = privateByDefault();
   }
 
-  markerRemember.checked = Boolean(mine.PresetsByDefault) && Boolean(clicked && clicked.code);
+  mayKeep = true;
+  alsoPreset = Boolean(mine.PresetsByDefault) && Boolean(clicked && clicked.code);
   // What it would be remembered against, ready to be widened into a pattern.
   markerPattern.value = clicked && clicked.code ? clicked.code : '';
   showFields();
@@ -206,17 +228,14 @@ function editCompose(place) {
   markerZ.value = z;
   chosenColour = place.Color || '#ffffff';
   chosenPicture = place.Icon || 'circle';
-  markerPrivate.checked = Boolean(place.Private);
-  markerRemember.checked = false;
+  privately = Boolean(place.Private);
+  alsoPreset = false;
+  // A marker somebody else owns is theirs to be seen by whoever they let; taking
+  // it private would be taking it off their own map. Set before the form is drawn,
+  // because it is what the mark that says so is drawn from.
+  mayKeep = Boolean(viewer && place.OwnerUid === viewer.Uid);
   showFields();
   showCompose();
-
-  // A marker somebody else owns is theirs to be seen by whoever they let; taking
-  // it private would be taking it off their own map.
-  const ours = viewer && place.OwnerUid === viewer.Uid;
-  markerPrivate.disabled = !ours;
-  document.querySelector('.deed .keep').title =
-    ours ? '' : "Only a marker's owner decides who sees it";
 }
 
 /**
@@ -267,9 +286,9 @@ function openPreset(preset, which) {
   markerPattern.value = preset.Pattern || '';
   chosenColour = preset.Color || '#ffffff';
   chosenPicture = preset.Icon || 'circle';
-  markerPrivate.checked = preset.Private === true;
-  markerPrivate.disabled = false;
-  markerRemember.checked = false;
+  privately = preset.Private === true;
+  mayKeep = true;
+  alsoPreset = false;
   showFields();
   showCompose();
   besideWindow(presetPanel);
@@ -341,11 +360,35 @@ function showCompose() {
  */
 function showFields() {
   const preset = mode === 'preset';
-  rememberLine.style.display = mode === 'new' ? '' : 'none';
-  rememberWhat.textContent = clicked ? (clicked.name || shortCode(clicked.code)) : 'a block';
+  // A preset is already the thing the mark would make, so it is the one mode
+  // that is not offered it. A marker being changed is offered it like a new one:
+  // deciding a block should start this way is a thing somebody works out from a
+  // marker they already have as readily as from one they are making.
+  markerRemember.style.display = preset ? 'none' : '';
   document.getElementById('pattern-field').style.display =
-    preset || (mode === 'new' && markerRemember.checked) ? '' : 'none';
+    preset || alsoPreset ? '' : 'none';
   document.getElementById('place-field').style.display = preset ? 'none' : '';
+  showSeen();
+  showKeepsake();
+}
+
+/** Who will see it, in the marker list's own mark: the same picture in the same
+ *  colour, so the answer on the form and the answer in the list are one answer. */
+function showSeen() {
+  dressSeen(markerPrivate, privately, markerName.value.trim() || 'this marker', mayKeep);
+  markerPrivate.disabled = !mayKeep;
+}
+
+/** Whether this is being remembered as what a block starts as, and what block. */
+function showKeepsake() {
+  const what = clicked ? (clicked.name || shortCode(clicked.code)) : null;
+  const words = alsoPreset
+    ? `Kept as what ${what || 'a block'} starts as — click to stop keeping it`
+    : `Set as what ${what || 'a block'} starts as`;
+  markerRemember.classList.toggle('on', alsoPreset);
+  markerRemember.title = words;
+  markerRemember.setAttribute('aria-label', words);
+  markerRemember.setAttribute('aria-pressed', String(alsoPreset));
 }
 
 function forgetCompose() {
@@ -360,7 +403,8 @@ function forgetCompose() {
   // Both lists mark the row they have open, and this form no longer has one.
   drawPresets();
   drawDirectory();
-  markerPrivate.disabled = false;
+  mayKeep = true;
+  alsoPreset = false;
   markerName.value = '';
   markerX.value = '';
   markerY.value = '';

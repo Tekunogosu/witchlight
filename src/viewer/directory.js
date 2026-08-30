@@ -59,11 +59,14 @@ let listing = 'all';
  *
  * Distance is measured from spawn rather than from the middle of the view. Spawn
  * is what the coordinates on every row are counted from, and an order that
- * changed every time the map was dragged would be the same complaint again.
+ * changed every time the map was dragged would be the same complaint again. The
+ * column is headed with what it holds — the coordinates — rather than with what
+ * it is sorted by, since a place is what a reader looks along that column for and
+ * a distance is not a thing a marker has.
  */
 const sorts = {
   name: { of: place => (place.Title || '').toLowerCase() },
-  away: { of: place => Math.hypot(place.X - spawn.x, place.Z - spawn.z) },
+  distance: { of: place => Math.hypot(place.X - spawn.x, place.Z - spawn.z) },
   owner: { of: place => (place.Owner || '').toLowerCase() },
   private: { of: place => (place.Private ? 1 : 0) },
 };
@@ -110,6 +113,25 @@ function showSort() {
     button.classList.toggle('down', on && sorting.down);
     button.setAttribute('aria-sort', on ? (sorting.down ? 'descending' : 'ascending') : 'none');
   }
+  showSeenHead();
+}
+
+/**
+ * The seen column's own heading, which is a mark rather than a word.
+ *
+ * It wears whichever of the two the list currently has at the top, so a column
+ * headed by a picture says what pressing it did. Off the sort it goes back to the
+ * lock, which is the column's emblem rather than a claim about the order.
+ */
+function showSeenHead() {
+  const head = directory.querySelector('[data-sort="private"]');
+  const kept = sorting.by !== 'private' || sorting.down;
+  head.querySelector('.seen-mark').className =
+    `chrome masked seen-mark mark-${kept ? 'lock' : 'users-three'}`;
+  head.title = sorting.by === 'private'
+    ? `Sorted by who can see it — ${kept ? 'private' : 'public'} first`
+    : 'Sort by who can see it';
+  head.setAttribute('aria-label', head.title);
 }
 
 /**
@@ -165,12 +187,15 @@ function markerRow(place, shaded) {
   const title = place.Title || 'marker';
   const [x, z] = said(place.X, place.Z);
 
-  const where = place.Owner
-    ? `${x}, ${place.Y}, ${z} · ${place.Owner}`
-    : `${x}, ${place.Y}, ${z}`;
-  const { line, open } = listedRow(place.Icon, place.Color, title, where, shaded);
+  const { line, open } = listedRow(place.Icon, place.Color, title, '', shaded);
   if (mode === 'marker' && editing && editing.Key === place.Key) line.classList.add('chosen');
-  const lock = lockFor(place, ours);
+  // A cell apiece, under the heading that sorts by it. They were one grey line
+  // reading `x, y, z · owner` beneath the name, which left three of the four
+  // headings pointing at nothing a reader could find under them.
+  const where = cell('where', `${x}, ${place.Y}, ${z}`);
+  const owner = cell('owner', place.Owner || '—');
+  const seen = seenControl(Boolean(place.Private), title,
+    ours ? () => started(onePrivacy(place, !place.Private), 'changing who sees a marker') : null);
   // One of a list of identical rows, so the marker it stands for is the only
   // thing telling a reader — or a test — which one this is. What the row will
   // do is in the name too, because it is not the same for every row.
@@ -184,43 +209,18 @@ function markerRow(place, shaded) {
     drawDirectory();
   });
 
-  line.append(lock);
+  line.append(where, owner, seen);
   return line;
 }
 
-/**
- * Who may see this marker, as a switch where it is this person's to decide.
- *
- * A shut lock is a marker its owner keeps and an open one is a marker the server
- * can see, which is one picture saying the state and the same picture saying what
- * a click will undo. Somebody else's marker gets the same mark without the button
- * around it: knowing who else can see a thing on the map is worth having whether
- * or not it is yours to change.
- */
-function lockFor(place, ours) {
-  const hidden = Boolean(place.Private);
-  const mark = chromeMark(hidden ? 'lock-simple' : 'lock-simple-open');
-  const title = place.Title || 'marker';
-
-  if (!ours) {
-    const shown = document.createElement('span');
-    shown.className = 'lock';
-    shown.title = hidden ? 'Private to its owner' : 'Everyone can see this';
-    shown.append(mark);
-    return shown;
-  }
-
-  const flip = document.createElement('button');
-  flip.type = 'button';
-  flip.className = 'lock' + (hidden ? ' shut' : '');
-  flip.title = hidden ? 'Make this public' : 'Make this private';
-  // One of a list of identical marks, so the marker it stands for is the only
-  // thing telling a reader — or a test — which one this is.
-  flip.setAttribute('aria-label', `${hidden ? 'Make public' : 'Make private'}: ${title}`);
-  flip.setAttribute('aria-pressed', String(hidden));
-  flip.append(mark);
-  flip.addEventListener('click', () => started(onePrivacy(place, !hidden), 'changing who sees a marker'));
-  return flip;
+/** One cell of a row, said plainly. Its class is what the column is, so the
+ *  stylesheet decides how each of them is read rather than the builder. */
+function cell(column, words) {
+  const box = document.createElement('span');
+  box.className = column;
+  box.textContent = words;
+  box.title = words;
+  return box;
 }
 
 /** Flips one marker, and says what the game server made of it. */
