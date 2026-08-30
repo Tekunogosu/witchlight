@@ -138,12 +138,42 @@ impl Marker {
     }
 }
 
+/// One marker somebody asked to be taken away.
+///
+/// A key and whose ask it was, and nothing else. A removal names a waypoint
+/// rather than describing one, so the nine fields a marker carries would be nine
+/// fields kept in step for a reader that never looks at them — and the mod reads
+/// the waypoint itself before it removes anything anyway.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct Gone {
+    /// The guid of the waypoint to take away.
+    pub key: String,
+    /// Who asked, taken from their session. The mod decides whether they may.
+    pub uid: String,
+}
+
+impl Gone {
+    /// A removal a page asked for, checked the way a change is.
+    ///
+    /// The key reaches the mod as the identity of a waypoint, so it is checked
+    /// for shape rather than taken as a string: a page must not be able to name
+    /// a waypoint this map never named.
+    pub fn asked(uid: &str, key: &str) -> Result<Self, &'static str> {
+        if !named(key) {
+            return Err("that is not a marker this map made");
+        }
+        Ok(Self { key: key.to_owned(), uid: uid.to_owned() })
+    }
+}
+
 /// Everything waiting, in the shape the mod collects it in.
 #[derive(Debug, Default, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct Collected {
     pub make: Vec<Marker>,
     pub change: Vec<Marker>,
+    pub remove: Vec<Gone>,
 }
 
 /// Every marker asked for and not yet collected.
@@ -164,19 +194,25 @@ impl Pending {
         self.hold(|waiting| waiting.make.push(wanted))
     }
 
-    /// Holds one change. Bounded with the rest: the two share a queue because
+    /// Holds one change. Bounded with the rest: the three share a queue because
     /// they share the one thing that empties it.
     pub fn change(&self, edit: Marker) -> bool {
         self.hold(|waiting| waiting.change.push(edit))
     }
 
-    /// Room for one more, and the putting of it. The bound is over both lists,
-    /// because what fills them is one page and what empties them is one ask.
+    /// Holds one removal.
+    pub fn remove(&self, gone: Gone) -> bool {
+        self.hold(|waiting| waiting.remove.push(gone))
+    }
+
+    /// Room for one more, and the putting of it. The bound is over all three
+    /// lists, because what fills them is one page and what empties them is one
+    /// ask.
     fn hold(&self, put: impl FnOnce(&mut Collected)) -> bool {
         let Ok(mut waiting) = self.waiting.lock() else {
             return false;
         };
-        if waiting.make.len() + waiting.change.len() >= MOST_WAITING {
+        if waiting.held() >= MOST_WAITING {
             return false;
         }
         put(&mut waiting);
@@ -200,7 +236,14 @@ impl Pending {
     /// same from a browser and are not the same problem.
     #[must_use]
     pub fn waiting(&self) -> usize {
-        self.waiting.lock().map_or(0, |waiting| waiting.make.len() + waiting.change.len())
+        self.waiting.lock().map_or(0, |waiting| waiting.held())
+    }
+}
+
+impl Collected {
+    /// How many asks this is, whatever kind each of them is.
+    fn held(&self) -> usize {
+        self.make.len() + self.change.len() + self.remove.len()
     }
 }
 
@@ -332,15 +375,36 @@ mod tests {
         assert!(pending.change(edit.clone()));
         assert_eq!(pending.waiting(), 2);
 
+        let gone = Gone::asked("uid-ada", KEY).expect("a removal");
+        assert!(pending.remove(gone.clone()));
+        assert_eq!(pending.waiting(), 3);
+
         let taken = pending.take();
         assert_eq!(taken.make, vec![wanted]);
         assert_eq!(taken.change, vec![edit]);
+        assert_eq!(taken.remove, vec![gone]);
         assert_eq!(pending.waiting(), 0, "collecting empties it");
         let again = pending.take();
         assert!(
-            again.make.is_empty() && again.change.is_empty(),
+            again.make.is_empty() && again.change.is_empty() && again.remove.is_empty(),
             "and a second collection finds nothing"
         );
+    }
+
+    #[test]
+    fn a_removal_names_a_marker_and_who_asked() {
+        let gone = Gone::asked("uid-ada", KEY).expect("a removal");
+        assert_eq!(gone.key, KEY);
+        assert_eq!(gone.uid, "uid-ada", "the owner is the session and never the page");
+    }
+
+    #[test]
+    fn only_a_name_this_map_hands_out_can_be_removed() {
+        // The same rule a change is held to, and for the same reason: what
+        // arrives here reaches the mod as the identity of a waypoint.
+        for key in ["", "not-a-guid", "../../etc/passwd", "9e5738f0303a673da328f19e0d08e7d1"] {
+            assert!(Gone::asked("uid-ada", key).is_err(), "{key:?} must not be taken");
+        }
     }
 
     #[test]
@@ -383,8 +447,9 @@ mod tests {
         );
         assert!(
             !pending.change(Marker::changed("uid-ada", KEY, BODY).expect("a change")),
-            "and the bound is over both, since one page fills them and one ask empties them"
+            "and the bound is over all three, since one page fills them and one ask empties them"
         );
+        assert!(!pending.remove(Gone::asked("uid-ada", KEY).expect("a removal")));
     }
 
     #[test]

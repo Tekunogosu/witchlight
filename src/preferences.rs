@@ -154,6 +154,25 @@ impl Preferences {
         }
         true
     }
+
+    /// Keeps one preset for somebody, and gives back everything they have set.
+    ///
+    /// The whole document goes to and from a browser, which holds the lot and
+    /// puts the lot back. A game client holds none of it: it knows one preset,
+    /// the one somebody has just made in front of them, and a read-modify-write
+    /// spanning a network channel and a game tick would be a document written
+    /// back from whatever it looked like when the window opened.
+    ///
+    /// Keyed on the pattern, so making a preset for a block that already has one
+    /// replaces it rather than laying a second one that can never be reached —
+    /// which is the rule the map's own form follows.
+    pub fn keep_one(&self, uid: &str, preset: Preset) -> Person {
+        let mut person = self.of(uid);
+        person.presets.retain(|held| held.pattern != preset.pattern);
+        person.presets.insert(0, preset);
+        self.set(uid, person);
+        self.of(uid)
+    }
 }
 
 #[must_use]
@@ -203,6 +222,28 @@ mod tests {
     #[test]
     fn nobody_is_not_a_person() {
         assert!(!store().set("", ferns()), "a session with no uid sets nothing");
+    }
+
+    #[test]
+    fn one_preset_kept_from_a_game_client_replaces_the_one_it_names() {
+        let preferences = store();
+        preferences.set("uid-ada", ferns());
+
+        let moss = Preset {
+            pattern: "game:*moss*".to_owned(),
+            title: "Moss".to_owned(),
+            ..Preset::default()
+        };
+        let held = preferences.keep_one("uid-ada", moss.clone());
+        assert_eq!(held.presets, vec![moss.clone(), ferns().presets[0].clone()],
+            "a new one goes to the front and leaves the rest alone");
+
+        let widened = Preset { title: "Mossy".to_owned(), ..moss };
+        let held = preferences.keep_one("uid-ada", widened.clone());
+        assert_eq!(held.presets, vec![widened, ferns().presets[0].clone()],
+            "and one for a block that already has a preset replaces it");
+
+        assert_eq!(held.private_by_default, Some(true), "nothing else they set moves");
     }
 
     #[test]

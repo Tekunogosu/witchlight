@@ -185,6 +185,12 @@ html, body { margin: 0; height: 100%; overflow: hidden;
    against a corner, so growing one moves nothing else, and a transform keeps
    borders and text crisp at any size without a second set of dimensions. */
 :root { --scale-people: 1; --scale-panel: 1; --scale-tools: 1; }
+/* How large a marker is drawn on its block, how large its name is drawn above it,
+   and how much larger again a marker the list has found is drawn. The first two
+   are somebody's answers about their own eyes and move on a slider; the third is
+   a fixed step above whatever they set, because what it says is "this one of
+   them", which is a comparison rather than a size. */
+:root { --mark-scale: 1; --mark-name-scale: 1; --mark-found: 1.65; }
 /* Which build is serving this page, quiet enough to read past: the only
    question it answers is whether the half someone is looking at is the half
    they just deployed. No box — a shadow keeps it legible over pale terrain
@@ -247,6 +253,11 @@ html, body { margin: 0; height: 100%; overflow: hidden;
                   margin: 0; font: inherit; font-size: var(--font-md);
                   color: var(--text); background: none; border: 1px solid transparent;
                   border-radius: var(--round-sm); cursor: pointer; }
+/* A slider in a panel this narrow reads down rather than across: the label takes
+   the line and the track takes the one under it, where the profile window has
+   room to set the two side by side. */
+#access-panel .slide { display: block; padding: var(--gap-1) 0; }
+#access-panel .slide input { margin-top: var(--gap-1); }
 #access-panel button:hover { background: var(--surface-bar); color: #fff; }
 #access-panel button[aria-pressed="true"] { background: var(--surface-on);
                                        border-color: var(--accent); color: var(--text-strong); }
@@ -310,7 +321,7 @@ html, body { margin: 0; height: 100%; overflow: hidden;
 .window .shut .chrome { width: 13px; height: 13px; }
 #compose { left: 260px; top: 92px; width: 266px; }
 #presets { left: 300px; top: 130px; width: 374px; }
-#directory { left: 340px; top: 150px; width: 430px; }
+#directory { left: 340px; top: 150px; width: 490px; }
 #profile { left: 50%; top: 90px; width: 334px; }
 /* The two windows that list things somebody may have a great many of. Their own
    height goes to the list rather than to the window, so the heading, the search
@@ -435,6 +446,7 @@ html, body { margin: 0; height: 100%; overflow: hidden;
 .mark-person-arms-spread { -webkit-mask-image: url(/chrome/person-arms-spread.svg);
                            mask-image: url(/chrome/person-arms-spread.svg); }
 .mark-x { -webkit-mask-image: url(/chrome/x.svg); mask-image: url(/chrome/x.svg); }
+.mark-trash { -webkit-mask-image: url(/chrome/trash.svg); mask-image: url(/chrome/trash.svg); }
 
 #pictures { max-height: 108px; overflow-y: auto; padding: 3px;
             background: var(--bg); border: 1px solid var(--line);
@@ -487,8 +499,28 @@ html, body { margin: 0; height: 100%; overflow: hidden;
 /* The form's two states sit at one end and the two ways out at the other: what
    is being decided, and what is being done about it. Cancel is beside Save
    rather than across the row from it, because the choice between them is one
-   choice and a reader should not have to cross the window to make it. */
-#compose .deed #marker-cancel { margin-left: auto; }
+   choice and a reader should not have to cross the window to make it.
+
+   The split is an element rather than a margin on whichever button happens to
+   be first of the far group: the bin comes and goes with what the form is open
+   on, and a margin hung on it would take the gap away with it. */
+.deed .gap { flex: 1; }
+/* Taking away what the form is open on. A mark rather than a word, in the row's
+   own square, because it sits among two words and a third would read as a third
+   equal choice — and this one is not: it is the one with no way back.
+
+   Quiet until it is armed. The first press says what a second would do and the
+   mark goes to the warning colour, which is the rule the list's bulk buttons
+   already follow. */
+.deed .drop { flex: none; display: grid; place-items: center;
+              width: var(--seen-box); height: var(--seen-box); padding: 0;
+              color: var(--text-off); cursor: pointer; background: none;
+              border: none; border-radius: var(--round-sm); }
+.deed .drop .chrome { width: var(--seen-mark); height: var(--seen-mark); }
+.deed .drop:hover { color: var(--warn); background: var(--surface-bar); }
+.deed .drop.armed { color: var(--warn); box-shadow: inset 0 0 0 1px var(--warn); }
+.deed .drop[disabled] { color: var(--line); cursor: default; }
+.deed .drop[disabled]:hover { color: var(--line); background: none; }
 /* A button with a word on it, which is what the row mostly holds. Named rather
    than reached for as every button in the row: the two that wear a mark instead
    are the shape they are wherever they are drawn — see `.seen` — and this padding
@@ -563,7 +595,7 @@ html, body { margin: 0; height: 100%; overflow: hidden;
    twice without drifting. The name takes what is left; the rest are held to what
    they hold, and the mark a marker wears has no heading of its own, so the name
    is what stands over it. */
-#directory { --marker-cols: 22px minmax(0, 1fr) 118px 62px var(--seen-box); }
+#directory { --marker-cols: 22px minmax(0, 1fr) 112px 64px 58px var(--seen-box); }
 #marker-head, #marker-list .listed { grid-template-columns: var(--marker-cols); }
 /* The heading is not inside the list it heads, so it has to be told about the
    list's scrollbar: both hold the gutter, and the columns stay under their own
@@ -573,10 +605,18 @@ html, body { margin: 0; height: 100%; overflow: hidden;
 #marker-head .sort:first-child { grid-column: 1 / 3; }
 /* What each column holds, quieter than the name it is read beside. The
    coordinates are figures in a column, so they are set in the one width. */
-#marker-list .where, #marker-list .owner { min-width: 0; font-size: 11px;
-                                           color: var(--text-dim); overflow: hidden;
-                                           text-overflow: ellipsis; white-space: nowrap; }
-#marker-list .where { font-variant-numeric: tabular-nums; }
+#marker-list .where, #marker-list .away, #marker-list .owner {
+    min-width: 0; font-size: 11px; color: var(--text-dim); overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+/* Figures in a column, so they are set in the one width and read down rather
+   than across. How far away something is is a figure aligned to the right,
+   because what a reader compares is the size of the number. */
+#marker-list .where, #marker-list .away { font-variant-numeric: tabular-nums; }
+#marker-list .away { text-align: right; padding-right: var(--gap-1); }
+/* A column of magnitudes is read up its right edge, so the heading sits over that
+   edge and its caret hangs off the word's left rather than pushing the word in —
+   the same arrangement the marked heading uses, for the same reason. */
+#marker-head [data-sort="away"] { flex-direction: row-reverse; }
 .sort { display: flex; align-items: center; gap: 3px; min-height: 22px;
         padding: 0 var(--gap-1); font: inherit; font-size: var(--font-sm);
         letter-spacing: .07em; text-transform: uppercase; color: var(--text-dim);
@@ -716,10 +756,30 @@ button.seen[disabled]:hover { background: none; }
 .marker .masked { display: block; width: 18px; height: 18px; margin: -9px 0 0 -9px;
                   filter: drop-shadow(0 0 1px #000) drop-shadow(0 0 2px #000a); }
 .marker .diamond { width: 11px; height: 11px; margin: -6px 0 0 -6px; }
+/* Grown rather than resized. The negative margins above already centre the mark
+   on the block it names, and a transform scales about that same point — so one
+   number moves both the picture and the plain diamond that stands in for one,
+   and neither leaves the block it is about. */
+.marker .masked, .marker .diamond { transform: scale(var(--mark-scale));
+                                    transition: transform .12s ease-out; }
+/* The markers the list is currently showing, while something is typed in its
+   search box. A search narrows a hundred markers to three and then leaves the
+   reader to find those three on the map, which is the question they opened the
+   list to stop asking. */
+.marker.found .masked, .marker.found .diamond {
+    transform: scale(calc(var(--mark-scale) * var(--mark-found))); }
 body.no-names .tag { display: none; }
 /* A marker's name is off by default and worn permanently when it is on: a map
-   with forty markers on it is forty labels, which is a map you cannot see. */
-.marker .tag { display: none; color: var(--text-strong); bottom: 11px; }
+   with forty markers on it is forty labels, which is a map you cannot see.
+
+   It is sized and lifted by the two the reader sets. The lift is the mark's own
+   half-height plus a couple of pixels, so a name clears the mark it belongs to at
+   any size rather than sitting across a large one — at the default that is the
+   eleven pixels it always was, by arithmetic rather than by a number typed
+   twice. */
+.marker .tag { display: none; color: var(--text-strong);
+               font-size: calc(11px * var(--mark-name-scale));
+               bottom: calc(2px + 9px * var(--mark-scale)); }
 /* Clear of the mark rather than across it: a player's mark stands taller than
    the dot it grew out of, because it has a direction to point in. */
 .player .tag { bottom: 15px; }

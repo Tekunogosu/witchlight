@@ -634,7 +634,7 @@ console.log('\nnothing hides a name the rest of the page uses');
 // Cancel and Save came out unstyled the day the rule was named.
 console.log('\nevery button in a window\'s last row says what it is');
 {
-  const dressed = ['word', 'seen', 'keepsake'];
+  const dressed = ['word', 'seen', 'keepsake', 'drop'];
   const bare = [];
   for (const row of page.matchAll(/<div class="deed">([\s\S]*?)<\/div>/g)) {
     for (const button of row[1].matchAll(/<button\b([^>]*)>/g)) {

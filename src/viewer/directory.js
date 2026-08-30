@@ -57,19 +57,80 @@ let listing = 'all';
  * it is somebody's to change. Nothing about a marker changing can move a row now
  * except the thing the list is actually sorted by.
  *
- * Distance is measured from spawn rather than from the middle of the view. Spawn
- * is what the coordinates on every row are counted from, and an order that
- * changed every time the map was dragged would be the same complaint again. The
- * column is headed with what it holds — the coordinates — rather than with what
- * it is sorted by, since a place is what a reader looks along that column for and
- * a distance is not a thing a marker has.
+ * The coordinates column is ordered by how far its place is from spawn, which is
+ * what every coordinate on the row is counted from. It is headed with what it
+ * holds rather than with what it is sorted by, since a place is what a reader
+ * looks along that column for.
+ *
+ * How far away a marker is has a column of its own, and it is measured from
+ * wherever the reader's own player is standing — which is the question somebody
+ * looking at a list of places is actually asking. The order is taken when the
+ * list is drawn and left alone while they walk: a list that resorted itself
+ * every two seconds would move the row out from under the hand reaching for it.
  */
 const sorts = {
   name: { of: place => (place.Title || '').toLowerCase() },
-  distance: { of: place => Math.hypot(place.X - spawn.x, place.Z - spawn.z) },
+  spawn: { of: place => Math.hypot(place.X - spawn.x, place.Z - spawn.z) },
+  // A reader who is not in the world is at no distance from anything, and those
+  // rows go to the end rather than to the front of a list about distance.
+  away: { of: place => awayFrom(place) ?? Infinity },
   owner: { of: place => (place.Owner || '').toLowerCase() },
   private: { of: place => (place.Private ? 1 : 0) },
 };
+
+/**
+ * Where whoever is looking is standing, or nothing.
+ *
+ * Their own player among the ones the service is sending. Nobody signed in, and
+ * anybody whose player is not on the server, is standing nowhere — which is an
+ * answer rather than a zero, since a zero is a claim about a place.
+ */
+function whereIAm() {
+  if (!viewer || !viewer.Uid) return null;
+  return players.find(player => player.Uid === viewer.Uid) || null;
+}
+
+/**
+ * How far a marker is from the reader, in blocks across the ground.
+ *
+ * Across the ground and not through it: the map is looked at from above, the
+ * walk is along the surface, and a marker two hundred blocks down a shaft is not
+ * two hundred blocks away in any sense a reader means.
+ */
+function awayFrom(place) {
+  const standing = whereIAm();
+  return standing ? Math.hypot(place.X - standing.X, place.Z - standing.Z) : null;
+}
+
+/** How far away, in the fewest characters that still say it. A column of figures
+ *  is read by its shape, and five digits in it is a column of noise. */
+function saidAway(blocks) {
+  return blocks < 1000 ? String(Math.round(blocks)) : `${(blocks / 1000).toFixed(1)}k`;
+}
+
+/**
+ * Says how far one marker is, on the cell that holds the answer.
+ *
+ * Written into the cell rather than the row being built again: a position
+ * arrives every two seconds, and a list redrawn on that beat would take the row
+ * under the pointer with it.
+ */
+function fillAway(box, place) {
+  const blocks = awayFrom(place);
+  box.textContent = blocks === null ? '—' : saidAway(blocks);
+  box.title = blocks === null
+    ? 'Sign in, and be in the world, to see how far away this is'
+    : `${Math.round(blocks)} blocks away`;
+}
+
+/** Says how far away every marker on the screen is, as the reader moves. */
+function showDistances() {
+  const held = new Map(listed.map(one => [one.Key, one]));
+  for (const box of document.querySelectorAll('#marker-list .away')) {
+    const one = held.get(box.dataset.key);
+    if (one) fillAway(box, one);
+  }
+}
 
 /** Which of them the list is in, and which way round. */
 let sorting = { by: 'name', down: false };
@@ -153,16 +214,23 @@ function drawDirectory() {
 
   const kind = listings[listing];
   const held = listed.filter(kind.holds);
+  // What the search found, for the map to draw larger. Only while something is
+  // typed: an empty box is the whole list, and a map with every marker singled
+  // out has singled out none of them.
+  const finding = markerFind.value.trim() !== '';
+  const found = new Set();
   let drawn = 0;
 
   for (const place of inOrder(held)) {
     if (!looksLike(markerFind.value, place.Title, place.Owner)) continue;
     list.append(markerRow(place, drawn % 2 === 1));
+    if (finding && place.Key) found.add(place.Key);
     drawn += 1;
   }
 
   showSort();
   showBulk();
+  showFound(found);
 
   if (drawn > 0) return;
   nothingFound(list, held.length === 0
@@ -193,6 +261,12 @@ function markerRow(place, shaded) {
   // reading `x, y, z · owner` beneath the name, which left three of the four
   // headings pointing at nothing a reader could find under them.
   const where = cell('where', `${x}, ${place.Y}, ${z}`);
+  // Filled by the one function that says how far away something is, because the
+  // poll that moves the reader writes into this same cell every two seconds.
+  const away = document.createElement('span');
+  away.className = 'away';
+  away.dataset.key = place.Key || '';
+  fillAway(away, place);
   const owner = cell('owner', place.Owner || '—');
   const seen = seenControl(Boolean(place.Private), title,
     ours ? () => started(onePrivacy(place, !place.Private), 'changing who sees a marker') : null);
@@ -209,7 +283,7 @@ function markerRow(place, shaded) {
     drawDirectory();
   });
 
-  line.append(where, owner, seen);
+  line.append(where, away, owner, seen);
   return line;
 }
 

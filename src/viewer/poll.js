@@ -68,6 +68,9 @@ async function pollLive() {
     }
 
     drawPlayers();
+    // How far away every listed marker is moves with the reader rather than with
+    // the markers, so it is written on this beat rather than on a redraw.
+    showDistances();
     drawWho();
     keepUp();
     drawPlaces(waypoints);

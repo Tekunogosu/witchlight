@@ -5,6 +5,73 @@ two **must match on minor version**: minor is the compatibility generation, move
 whenever the file format or the socket protocol changes. Patch is free to differ,
 and covers anything that changes only one half.
 
+## 0.28.1
+
+**Deploy note:** the service half only; the mod stays at 0.28.1. Nothing is
+cleared.
+
+**Marker size is a slider, and marker names have one of their own.** It was three
+named steps — normal, large, largest — which is three guesses at a judgement about
+one person's eyes and one person's screen. Both run from a little under the game's
+own size to three times it, and a marker's name is lifted by the size of the mark
+it belongs to, so it clears a large one instead of sitting across it.
+
+**Every size the page can be set to comes from one table.** The three in the
+profile window were written out in the markup *and* looped over in the scripts,
+which is two places to keep a slider's range in step, and the marker sizes were a
+third mechanism beside them. There is one table now; a slider is an entry in it,
+and which panel offers it is a field. Somebody who had chosen one of the three
+named marker sizes keeps the size they chose.
+
+## 0.28.0
+
+**Deploy note: both halves.** Minor is the compatibility generation and it moves
+together, so the mod goes up with the service. Nothing is cleared and no map is
+rebuilt.
+
+**A marker can be deleted from the map.** The form that changes one has a bin
+beside its Cancel: the first press says what a second would do and the second asks
+the game server, which is the rule the list's bulk buttons already follow. There
+is no way back from it, and there is no way to reach it except from a marker that
+already exists and is yours. `DELETE /markers/{key}` carries no body — a removal
+names a waypoint rather than describing one — and the page watches for the marker
+to *stop* arriving, which is the same watch an edit uses read the other way round.
+
+**Only a marker's owner may delete it.** The operator's `public_markers_editable`
+lets somebody correct a marker they can see, which is not the same permission as
+taking it off the map of the person who made it. The mod decides it against the
+waypoint itself, so a refusal shows up as the marker still being there.
+
+**The marker list says how far away each one is.** A new Distance column, measured
+from wherever that reader's own player is standing, which is the question somebody
+looking at a list of places is actually asking. It is written into the cell on
+every poll rather than by redrawing the list, so the number keeps up with a
+walking player without the row moving out from under the hand reaching for it —
+the order is taken when the list is drawn and left alone. The Coords column keeps
+its own sort, which is distance from spawn, since spawn is what every coordinate
+on the row is counted from.
+
+**Markers the search has found are drawn larger on the map.** A name typed into
+the list narrows a hundred markers to three and then leaves the reader to find
+those three on the map, which is the question they opened the list to stop asking.
+Only while something is typed: an empty box is the whole list, and a map with
+every marker singled out has singled out none of them.
+
+**Markers can be drawn larger for good.** *Marker size* joins the colour and
+colour-vision settings in the accessibility panel — normal, large, largest. It is
+a multiplier over the size the game itself draws a mark at, so where a mark sits on
+its block and the shadow it is read against are answered once and scale with it.
+The search's own step sits on top of whatever is set.
+
+**The mod can read and keep one person's presets.** Two new addresses on the API
+channel, `POST /presets/of` and `POST /presets/keep`, so a marker made from inside
+the game can start from the same presets the map's own form uses. A game client
+has no session and no browser; the mod is the only party that knows which uid is
+which player, which is the trust minting a login word already needs. `keep` takes
+one preset and merges it on its pattern rather than replacing the document, since
+the game side knows the one preset made in front of somebody and nothing else
+about what they have kept.
+
 ## 0.27.5
 
 **A click on a player says who they are, with their own face.** The popup was a

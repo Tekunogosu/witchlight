@@ -62,6 +62,10 @@ const ICONS: &[(&str, &str)] = chrome![
     "person-arms-spread" @ "fill",
     // Shuts a window, and discards a preset. Bold rather than filled — see above.
     "x" @ "bold",
+    // Takes a marker away, on the form that was opened to change it. Filled, and
+    // a lid over a body rather than the simple bin, because at fourteen pixels
+    // the plain one is a rounded rectangle and reads as a note.
+    "trash" @ "fill",
     // Sits inside a search box. Bold for the reason `x` is: filled, a magnifier
     // is a disc with a handle, which beside a caret reads as a blot.
     "magnifying-glass" @ "bold",
@@ -106,6 +110,7 @@ mod tests {
             "user",
             "person-arms-spread",
             "x",
+            "trash",
             "magnifying-glass",
             "lock",
             "users-three",

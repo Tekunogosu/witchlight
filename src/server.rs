@@ -49,6 +49,7 @@ pub fn serve(
         Arc::clone(&state.live),
         Arc::clone(&state.sessions),
         Arc::clone(&state.pending),
+        Arc::clone(&state.preferences),
         data,
     ) {
         eprintln!("witchlight: {error}");

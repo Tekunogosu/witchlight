@@ -147,19 +147,95 @@ const settings = {
 };
 
 /**
- * How large the page draws itself, in three parts.
+ * How large the page draws each part of itself.
  *
- * Kept beside the other view settings and for the same reason: this is one
- * person's answer about one screen, and the same person on a phone wants a
- * different one. What follows them between machines is what they set about
- * markers, which lives on the service against their uid.
+ * One table for every size somebody can set, because they are one kind of
+ * answer: about the screen in front of them rather than about their account, and
+ * kept in this browser for that reason. What follows them between machines is
+ * what they set about markers themselves, which lives on the service against
+ * their uid.
+ *
+ * Each entry says what it is called, which custom property carries it, the range
+ * it may be set to, and which panel offers it. The sliders are built from this
+ * rather than written out in the markup, so adding a size is an entry here and
+ * nothing else — the three that were written out in both places had to be kept
+ * in step by hand.
+ *
+ * The two the accessibility panel offers are about a marker. One is eighteen
+ * pixels of silhouette, which is the size the game itself draws and is small for
+ * anybody reading a screen at arm's length; its name is eleven, which is smaller
+ * still. Both are multipliers rather than second sets of sizes, so where a mark
+ * sits on its block and where its name sits above the mark are answered once and
+ * scale with them.
  */
-const scales = { people: 1, panel: 1, tools: 1 };
+const scales = {
+  people: { label: 'Player list', css: '--scale-people', at: 1, least: 0.7, most: 1.8 },
+  panel: { label: 'Windows', css: '--scale-panel', at: 1, least: 0.7, most: 1.8 },
+  tools: { label: 'Map buttons', css: '--scale-tools', at: 1, least: 0.7, most: 1.8 },
+  mark: { label: 'Markers', css: '--mark-scale', at: 1, least: 0.6, most: 3, panel: 'access' },
+  markName: {
+    label: 'Marker names', css: '--mark-name-scale', at: 1, least: 0.6, most: 3, panel: 'access',
+  },
+};
 
 function applyScales() {
-  for (const [part, size] of Object.entries(scales)) {
-    document.documentElement.style.setProperty(`--scale-${part}`, String(size));
+  for (const scale of Object.values(scales)) {
+    document.documentElement.style.setProperty(scale.css, String(scale.at));
   }
+}
+
+/**
+ * One size slider, wherever it is shown.
+ *
+ * Built rather than written out, so the range a size may be set to is stated
+ * once — in the table — rather than in the markup as well, where the two used to
+ * be able to disagree about what a slider was allowed to reach.
+ */
+function sliderFor(part) {
+  const scale = scales[part];
+  const label = document.createElement('label');
+  label.className = 'slide';
+  label.append(document.createTextNode(scale.label));
+
+  const slider = document.createElement('input');
+  slider.id = `scale-${part}`;
+  slider.type = 'range';
+  slider.min = String(scale.least);
+  slider.max = String(scale.most);
+  slider.step = '0.05';
+  slider.value = String(scale.at);
+  // One of a row of identical sliders, so what it sizes is the only thing that
+  // tells a reader — or a test — which one this is.
+  slider.setAttribute('aria-label', `${scale.label} size`);
+  // `change` rather than `input`: a range fires `change` when the hand lets go,
+  // which is exactly the moment a window may safely resize under it.
+  slider.addEventListener('change', () => takeScale(part, Number(slider.value)));
+
+  label.append(slider);
+  return label;
+}
+
+/** The sliders one panel offers, in the order the table gives them. */
+function slidersIn(which) {
+  return Object.entries(scales)
+    .filter(([, scale]) => (scale.panel || 'profile') === which)
+    .map(([part]) => sliderFor(part));
+}
+
+/**
+ * Takes a size, once the hand has let go of the slider.
+ *
+ * Kept as it is set rather than waiting for a Save, because the whole of what a
+ * size slider is for is seeing the answer. Where the profile window sits is
+ * worked out again straight after: it may have just changed size, and a window
+ * grown against the edge of the screen has to be pulled back to stay reachable.
+ */
+function takeScale(part, size) {
+  scales[part].at = size;
+  applyScales();
+  remember();
+  const held = windowsAt.get(profile);
+  if (held) settleWindow(profile, held.x, held.y);
 }
 
 function layer(group, on) {
@@ -231,6 +307,14 @@ function buildSettings() {
     access.append(button);
   }
 
+  // The marker sizes were three named steps and are a pair of sliders: what is
+  // large enough is a judgement about one person's eyes and one person's screen,
+  // and three guesses at it are three ways to be nearly right.
+  const sized = document.createElement('h2');
+  sized.textContent = 'Size';
+  access.append(sized);
+  access.append(...slidersIn('access'));
+
   accessBar.append(access);
   applyFilter();
   applyVision();
@@ -259,7 +343,9 @@ function remember() {
     // What order the marker list is in belongs here for the reason the sizes do:
     // it is one person's answer about one screen, and having to set it again on
     // every reload is what makes a preference not worth having.
-    const state = { scales, filter: filterName, vision: visionName, sorting };
+    const sizes = {};
+    for (const [part, scale] of Object.entries(scales)) sizes[part] = scale.at;
+    const state = { scales: sizes, filter: filterName, vision: visionName, sorting };
     for (const [key, setting] of Object.entries(settings)) state[key] = setting.on;
     localStorage.setItem('witchlight.settings', JSON.stringify(state));
   } catch (error) {
@@ -273,12 +359,18 @@ function recall() {
     for (const [key, setting] of Object.entries(settings)) {
       if (typeof state[key] === 'boolean') setting.on = state[key];
     }
-    for (const part of Object.keys(scales)) {
+    // The three named marker sizes this replaced, so somebody who had chosen one
+    // keeps what they chose. Read before the sizes below, so a size set on the
+    // slider since wins over the name it grew out of.
+    const named = { normal: 1, large: 1.4, largest: 1.9 };
+    if (named[state.marks]) scales.mark.at = named[state.marks];
+
+    for (const [part, scale] of Object.entries(scales)) {
       const size = Number(state.scales && state.scales[part]);
-      // Bounded on the way in as well as on the slider: what is stored here came
-      // from a browser and a page drawn at a hundredth of size cannot be reached
-      // to put right.
-      if (Number.isFinite(size) && size >= 0.7 && size <= 1.8) scales[part] = size;
+      // Bounded on the way in as well as on the slider, and by the same two
+      // numbers: what is stored here came from a browser, and a page drawn at a
+      // hundredth of size cannot be reached to put right.
+      if (Number.isFinite(size) && size >= scale.least && size <= scale.most) scale.at = size;
     }
     if (filters[state.filter]) filterName = state.filter;
     if (visions[state.vision]) visionName = state.vision;

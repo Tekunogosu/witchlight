@@ -98,8 +98,9 @@ function drawProfile() {
       : `Following the server default, which is ${viewer && viewer.MarkersPublic ? 'public' : 'private'}.`)
     : 'Run /witchlight login in the game to keep settings.';
 
-  for (const part of Object.keys(scales)) {
-    document.getElementById(`scale-${part}`).value = String(scales[part]);
+  for (const [part, scale] of Object.entries(scales)) {
+    const slider = document.getElementById(`scale-${part}`);
+    if (slider) slider.value = String(scale.at);
   }
   draftProfile();
 }
@@ -117,22 +118,6 @@ let draft = null;
 /** Reads the switches into a draft, so what is shown is what Save will keep. */
 function draftProfile() {
   draft = { presets: wantPresets.checked, private: wantPrivate.checked };
-}
-
-/**
- * Takes a size, once the hand has let go of the slider.
- *
- * Kept as it is set rather than waiting for Save, because the whole of what a
- * size slider is for is seeing the answer. Where the window sits is worked out
- * again straight after: it just changed size, and a window grown against the
- * edge of the screen has to be pulled back to stay reachable.
- */
-function takeScale(part, size) {
-  scales[part] = size;
-  applyScales();
-  remember();
-  const held = windowsAt.get(profile);
-  if (held) settleWindow(profile, held.x, held.y);
 }
 
 function sayProfile(what, wrong) {
@@ -190,11 +175,7 @@ function buildProfile() {
     });
   }
 
-  for (const part of Object.keys(scales)) {
-    const slider = document.getElementById(`scale-${part}`);
-    slider.value = String(scales[part]);
-    // `change` rather than `input`: a range fires `change` when the hand lets
-    // go, which is exactly the moment the window may safely resize under it.
-    slider.addEventListener('change', () => takeScale(part, Number(slider.value)));
-  }
+  // The sizes this window offers, built from the one table that holds every
+  // size — see `scales`. The accessibility panel builds its own two the same way.
+  document.getElementById('profile-scales').append(...slidersIn('profile'));
 }

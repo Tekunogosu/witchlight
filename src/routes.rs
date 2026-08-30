@@ -7,7 +7,7 @@ use tiny_http::{Method, Request};
 
 use crate::error::Error;
 use crate::http::{self, Reply};
-use crate::pending::Marker;
+use crate::pending::{Gone, Marker};
 use crate::preferences::Person;
 use crate::state::State;
 use crate::urls;
@@ -66,7 +66,14 @@ pub fn route(request: &mut Request, state: &State) -> Reply {
 /// The addresses whose shape carries a name or a position in it.
 fn stored(request: &mut Request, state: &State, path: &str) -> Reply {
     if let Some(key) = urls::marker_key(path) {
-        return changed(request, state, key);
+        // Which of the three a marker's own address means is the method and
+        // nothing else, so the one place that knows a marker by name is also the
+        // one place that says what may be done to it.
+        return match *request.method() {
+            Method::Put => changed(request, state, key),
+            Method::Delete => removed(request, state, key),
+            _ => http::text(405, "a marker is changed with a put and taken away with a delete"),
+        };
     }
 
     if let Some(name) = urls::icon_name(path) {
@@ -147,10 +154,6 @@ fn made(request: &mut Request, state: &State) -> Reply {
 /// decided here is only that they are somebody: the service knows who owns what
 /// from a post that is seconds old, so the gate is the half holding the waypoint.
 fn changed(request: &mut Request, state: &State, key: &str) -> Reply {
-    if *request.method() != Method::Put {
-        return http::text(405, "a marker is changed with a put");
-    }
-
     let (who, body) = match asked(request, state, "change a marker") {
         Ok(both) => both,
         Err(refusal) => return refusal,
@@ -162,6 +165,31 @@ fn changed(request: &mut Request, state: &State, key: &str) -> Reply {
     };
 
     if !state.pending.change(edit) {
+        return http::text(503, "the game server is not collecting markers");
+    }
+
+    accepted(key)
+}
+
+/// A marker somebody asked to be taken away.
+///
+/// No body: a removal names a waypoint rather than describing one. Whether this
+/// person may is the mod's to answer against the waypoint itself, exactly as it
+/// is for a change — what is decided here is only that they are somebody.
+///
+/// Accepted, not done, like the other two. The page watches for the marker to
+/// stop arriving, which is the only honest confirmation there is.
+fn removed(request: &mut Request, state: &State, key: &str) -> Reply {
+    let Some(who) = state.sessions.who(&http::cookies(request)) else {
+        return unknown("delete a marker");
+    };
+
+    let gone = match Gone::asked(&who.uid, key) {
+        Ok(gone) => gone,
+        Err(why) => return http::text(400, why),
+    };
+
+    if !state.pending.remove(gone) {
         return http::text(503, "the game server is not collecting markers");
     }
 

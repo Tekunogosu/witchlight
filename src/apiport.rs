@@ -17,6 +17,7 @@ use crate::error::{Error, Result};
 use crate::http::{self, Reply};
 use crate::live::Live;
 use crate::pending::Pending;
+use crate::preferences::{Person, Preferences, Preset};
 use crate::urls;
 
 /// Everything the mod may reach, gathered so the listener carries one value
@@ -25,6 +26,7 @@ struct Channel {
     live: Arc<Live>,
     sessions: Arc<Sessions>,
     pending: Arc<Pending>,
+    preferences: Arc<Preferences>,
     api: Api,
 }
 
@@ -34,6 +36,7 @@ pub fn serve(
     live: Arc<Live>,
     sessions: Arc<Sessions>,
     pending: Arc<Pending>,
+    preferences: Arc<Preferences>,
     exports: &Path,
 ) -> Result<()> {
     // Before the bind rather than after the failure: a file naming a listener
@@ -61,7 +64,7 @@ pub fn serve(
     api.publish(exports, address.port());
     println!("witchlight: taking live data on {address}");
 
-    let channel = Channel { live, sessions, pending, api };
+    let channel = Channel { live, sessions, pending, preferences, api };
     std::thread::spawn(move || {
         for mut request in server.incoming_requests() {
             let response = posted(&mut request, &channel);
@@ -109,8 +112,28 @@ fn posted(request: &mut Request, channel: &Channel) -> Reply {
         // and so comes to collect. Emptied by the asking; see `Pending::take`.
         "/markers/pending" => http::json(
             &serde_json::to_string(&channel.pending.take())
-                .unwrap_or_else(|_| r#"{"Make":[],"Change":[]}"#.to_owned()),
+                .unwrap_or_else(|_| r#"{"Make":[],"Change":[],"Remove":[]}"#.to_owned()),
         ),
+
+        // What somebody has set for themselves, for the half of the mod that
+        // makes a marker from in game. The map's own form reads and writes the
+        // whole document over the public port under a session cookie; a game
+        // client has no session and no browser, so the mod asks on its behalf —
+        // it is the only party that knows which uid is which player, which is
+        // the same trust minting a login word already needs.
+        "/presets/of" => match uid_asked(&body) {
+            Some(uid) => http::json(&said(&channel.preferences.of(&uid))),
+            None => http::text(400, "expected {\"Uid\":…}"),
+        },
+
+        // One preset, made in front of somebody in game. Merged here rather than
+        // read, changed and written back over two hops: a whole document written
+        // from what it looked like when a window opened is a document that loses
+        // whatever else moved in between.
+        "/presets/keep" => match preset_asked(&body) {
+            Some((uid, preset)) => http::json(&said(&channel.preferences.keep_one(&uid, preset))),
+            None => http::text(400, "expected {\"Uid\":…, \"Preset\":{\"Pattern\":…}}"),
+        },
 
         "/live/players" => taken(channel.live.set_players(body)),
         "/live/world" => taken(channel.live.set_world(body)),
@@ -130,6 +153,38 @@ fn taken(ok: bool) -> Reply {
             "expected what this build posts: an array of players, or markers sorted by who may see them",
         )
     }
+}
+
+/// What one person has set, as the mod reads it.
+fn said(person: &Person) -> String {
+    serde_json::to_string(person).unwrap_or_else(|_| "{}".to_owned())
+}
+
+/// Whose settings the mod is asking about.
+fn uid_asked(body: &str) -> Option<String> {
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "PascalCase")]
+    struct Asked {
+        uid: String,
+    }
+
+    let asked: Asked = serde_json::from_str(body).ok()?;
+    (!asked.uid.is_empty()).then_some(asked.uid)
+}
+
+/// Whose preset this is and what it says. A preset with nothing to match is
+/// refused here rather than stored and never reached.
+fn preset_asked(body: &str) -> Option<(String, Preset)> {
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "PascalCase")]
+    struct Asked {
+        uid: String,
+        preset: Preset,
+    }
+
+    let asked: Asked = serde_json::from_str(body).ok()?;
+    (!asked.uid.is_empty() && !asked.preset.pattern.trim().is_empty())
+        .then_some((asked.uid, asked.preset))
 }
 
 /// Who the mod is asking a login word for.

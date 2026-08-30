@@ -215,7 +215,7 @@ immutable and cached for a year, while the page and both feeds are `no-store`.
 | `/icons.json`, `/icons/{name}.svg` | the pictures markers are drawn with |
 | `/portraits/{name}.png` | a picture a player's own client drew of their seraph. Ask with `?v={PortraitAt}`: the name is the player's and does not change when the picture does |
 
-The page polls `/info.json` every 5 seconds and `/live.json` every 2. It asks with
+The page polls `/info.json` and `/live.json` every 2 seconds. It asks with
 `?since=` and gets back the tiles that actually changed, so a server where someone
 is building repaints one square rather than the map, and each tile is swapped only
 once its replacement has decoded — the old one stays up meanwhile, so the map never
@@ -230,7 +230,7 @@ the owner is the only thing that says whose it is.
 from a CDN, so the service stays one file that works offline and tells nobody who
 is looking at the map. The marks its furniture wears are vendored beside it, from
 [Phosphor](https://phosphoricons.com/): filled silhouettes, which is what the
-game's own waypoint marks are, so the two read as one set. Only the six the page
+game's own waypoint marks are, so the two read as one set. Only the marks the page
 uses are compiled in, and `src/chrome.rs` is the list. See `src/vendor/README.md`
 for the exact releases both came from and how to move version.
 
@@ -243,6 +243,22 @@ the block's code, the height a player standing on it would read, and the climate
 that column was generated with. A column nobody has exported says so instead of
 naming a block that is not there. The reading is the same one the renderer made
 for that pixel, so the words and the colour underneath them always agree.
+
+The **marker list** answers what there is, which a map cannot once there are forty
+markers spread over a million blocks. Split by who can see each one, searched by
+name or owner, and ordered by any of its columns — a name, how far the place is
+from spawn, how far it is from wherever that reader is standing, whose it is, or
+who can see it. The distance from the reader is rewritten on every poll as they
+walk; the order is taken when the list is drawn and left alone, since a list that
+resorted itself every two seconds would move the row out from under the hand
+reaching for it. Typing in its search box draws the markers it found **larger on
+the map**, which is the other half of finding one.
+
+Markers can also be drawn larger for good — *Marker size*, in the accessibility
+panel, beside the colour and colour-vision settings. It multiplies the size the
+game itself draws a mark at, so where a mark sits on its block and the shadow it
+is read against scale with it, and the search's own step sits on top of whatever
+is set.
 
 The **chunk grid** outlines the chunks the export names, which the game puts at 32
 blocks. It is off until switched on, faint enough to read the terrain through, and

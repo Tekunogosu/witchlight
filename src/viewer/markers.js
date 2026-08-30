@@ -226,6 +226,49 @@ async function askForMarker() {
 }
 
 /**
+ * Asks for whatever the form is open on to be taken away.
+ *
+ * A preset is this page's own record, so it goes at once and the list behind is
+ * drawn again. A marker is the game's, so this asks and then waits — for the
+ * marker to stop arriving, which is the same watch an edit uses read the other
+ * way round and the only honest confirmation either of them has.
+ */
+async function askToDelete() {
+  if (mode === 'preset') {
+    if (editingPreset >= 0) await dropPreset(editingPreset);
+    return;
+  }
+  if (!editing) return;
+
+  markerSave.disabled = true;
+  markerDrop.disabled = true;
+  sayHere('Asking the game server to delete it…');
+
+  let answer;
+  try {
+    answer = await fetch(`/markers/${encodeURIComponent(editing.Key)}`, { method: 'DELETE' });
+  } catch (error) {
+    return refused('The map service is not answering.');
+  }
+  if (!answer.ok) {
+    return refused(await answer.text().catch(() => 'That was refused.'));
+  }
+
+  awaiting = editing.Key;
+  removing = true;
+  changedShape = null;
+  askedAt = Date.now();
+  sayHere('Waiting for the game server to delete it…');
+}
+
+/** The ask did not even reach the game, so the form is somebody's again. */
+function refused(why) {
+  sayHere(why, true);
+  markerSave.disabled = false;
+  markerDrop.disabled = false;
+}
+
+/**
  * Writes back the preset this form was opened on.
  *
  * Nothing waits on the game here: a preset is this page's own record of what a
@@ -348,25 +391,38 @@ async function rememberPreset(marker) {
 /** The marker asked for has arrived, so the form has nothing left to do. */
 function landed() {
   awaiting = null;
+  removing = false;
   changedShape = null;
   markerSave.disabled = false;
+  markerDrop.disabled = false;
   closeCompose();
 }
 
 /** It has not arrived, and the service says whether anything is collecting. */
 async function lost() {
+  const going = removing;
   awaiting = null;
+  removing = false;
   changedShape = null;
   markerSave.disabled = false;
+  markerDrop.disabled = false;
   await pollMe();
-  sayHere(viewer && viewer.Waiting > 0
-    ? 'The game server has not collected it. Is it running?'
+  if (viewer && viewer.Waiting > 0) {
+    sayHere('The game server has not collected it. Is it running?', true);
+    return;
+  }
+  sayHere(going
+    ? 'The marker was taken but is still there. Try again.'
     : 'The marker was taken but has not appeared. Try again.', true);
 }
 
-/** Whether the marker this page is waiting on is among these. */
+/** Whether what this page is waiting on has happened yet. */
 function arrived(waypoints) {
   const found = waypoints.find(place => place.Key === awaiting);
+  // A marker asked to be taken away has arrived when it stops arriving. The mod
+  // decides for itself whether the person asking may, so a marker that is still
+  // here after the wait is a refusal rather than a slow game server.
+  if (removing) return !found;
   if (!found) return false;
   if (!changedShape) return true;
 

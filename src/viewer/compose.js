@@ -49,6 +49,21 @@ let placing = false;
 let awaiting = null;
 let askedAt = 0;
 
+/** Whether what is being waited on is a marker going rather than one coming.
+ *  A removal has arrived when the marker stops arriving, which is the same
+ *  watch read the other way round. */
+let removing = false;
+
+/**
+ * Whether the bin has been pressed once and not yet confirmed.
+ *
+ * Two presses rather than one, the way the bulk buttons in the marker list are.
+ * A marker is somebody's note to themselves about a place they walked to, and
+ * there is no way back from deleting one — so the second press is on the same
+ * mark, where the first one was.
+ */
+let dropArmed = false;
+
 /**
  * What the form is for: a new marker, a marker that exists, or a preset.
  *
@@ -99,6 +114,7 @@ const markerPrivate = document.getElementById('marker-private');
 const markerRemember = document.getElementById('marker-remember');
 const markerPattern = document.getElementById('marker-pattern');
 const markerPick = document.getElementById('marker-pick');
+const markerDrop = document.getElementById('marker-drop');
 const markerSave = document.getElementById('marker-save');
 const saidHere = document.getElementById('said');
 
@@ -121,16 +137,22 @@ function buildCompose() {
   markerPick.addEventListener('click', () => setPlacing(!placing));
   markerPrivate.addEventListener('click', () => {
     if (!mayKeep) return;
+    disarmDrop();
     privately = !privately;
     showSeen();
   });
   // The mark decides whether there is a pattern to fill in, so it redraws the
   // form rather than only remembering its own state.
   markerRemember.addEventListener('click', () => {
+    disarmDrop();
     alsoPreset = !alsoPreset;
     showFields();
   });
-  markerSave.addEventListener('click', () => started(askForMarker(), 'asking for the marker'));
+  markerDrop.addEventListener('click', armOrDelete);
+  markerSave.addEventListener('click', () => {
+    disarmDrop();
+    started(askForMarker(), 'asking for the marker');
+  });
   document.getElementById('marker-cancel').addEventListener('click', closeCompose);
   markerName.addEventListener('keydown', event => {
     if (event.key === 'Enter') started(askForMarker(), 'asking for the marker');
@@ -324,8 +346,78 @@ function besideWindow(panel) {
   raiseWindow(composer);
 }
 
+/**
+ * The bin, pressed.
+ *
+ * The first press arms it and says what a second would do; the second does it.
+ * Nothing else on the form arms anything, so a mark that is armed is a mark
+ * somebody deliberately pressed a moment ago.
+ */
+function armOrDelete() {
+  // Nothing to take away is nothing to arm. The mark is off the screen then, so
+  // a press can only have come from something other than a hand — and an armed
+  // mark nobody can see is a press stored up against the next window.
+  if (!droppable()) return;
+
+  if (!dropArmed) {
+    dropArmed = true;
+    showDrop();
+    sayHere(`Press the bin again to delete ${namedHere()}.`);
+    return;
+  }
+  dropArmed = false;
+  showDrop();
+  started(askToDelete(), 'deleting what the form is open on');
+}
+
+/** Puts the bin back to asking rather than confirming. */
+function disarmDrop() {
+  if (!dropArmed) return;
+  dropArmed = false;
+  showDrop();
+}
+
+/** What the form is open on, in the words somebody would use for it. */
+function namedHere() {
+  const called = markerName.value.trim();
+  if (mode === 'preset') return called ? `the preset ${called}` : 'this preset';
+  return called || 'this marker';
+}
+
+/**
+ * Whether the form is open on something this person could take away.
+ *
+ * A marker being made does not exist yet, and a marker somebody else owns is
+ * theirs — the operator's setting lets other people *correct* a public marker,
+ * which is not the same permission as taking it off its owner's map. A preset is
+ * this person's own record and is theirs to drop whenever it exists.
+ *
+ * One owner for the question, because the mark being on the screen and the mark
+ * doing anything when pressed must be the same answer.
+ */
+function droppable() {
+  if (mode === 'marker') return Boolean(editing && viewer && editing.OwnerUid === viewer.Uid);
+  if (mode === 'preset') return editingPreset >= 0;
+  return false;
+}
+
+/** The mark itself: whether it is offered, and whether it has been asked once. */
+function showDrop() {
+  markerDrop.style.display = droppable() ? '' : 'none';
+  markerDrop.classList.toggle('armed', dropArmed);
+  const words = dropArmed
+    ? `Press again to delete ${namedHere()}`
+    : `Delete ${namedHere()}`;
+  markerDrop.title = words;
+  markerDrop.setAttribute('aria-label', words);
+  markerDrop.setAttribute('aria-pressed', String(dropArmed));
+}
+
 /** Everything both ways in have in common: draw it, and say whether it can act. */
 function showCompose() {
+  // A confirmation belongs to the window it was given in, and this is a
+  // different one however it was opened.
+  dropArmed = false;
   openWindow(composer);
   showFields();
   drawColours();
@@ -370,6 +462,7 @@ function showFields() {
   document.getElementById('place-field').style.display = preset ? 'none' : '';
   showSeen();
   showKeepsake();
+  showDrop();
 }
 
 /** Who will see it, in the marker list's own mark: the same picture in the same
@@ -394,6 +487,8 @@ function showKeepsake() {
 function forgetCompose() {
   setPlacing(false);
   awaiting = null;
+  removing = false;
+  dropArmed = false;
   mode = 'new';
   editing = null;
   editingPreset = -1;

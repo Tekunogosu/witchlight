@@ -91,6 +91,14 @@
     <button id="marker-remember" class="keepsake" type="button"
             aria-pressed="false"><span class="chrome masked mark-bookmarks-simple"
             aria-hidden="true"></span></button>
+    <!-- What the row ends with is pushed to the far side by this rather than by a
+         margin on whichever button happens to be first of them: the bin comes and
+         goes with what the form is open on, and a margin hung on it would take the
+         gap with it. -->
+    <span class="gap"></span>
+    <button id="marker-drop" class="drop" type="button"
+            title="Delete this marker" aria-label="Delete this marker"><span
+            class="chrome masked mark-trash" aria-hidden="true"></span></button>
     <button id="marker-cancel" class="word" type="button">Cancel</button>
     <button id="marker-save" class="word go" type="button">Save</button>
   </div>
@@ -143,8 +151,10 @@
   <div id="marker-head" class="head">
     <button class="sort" type="button" data-sort="name" aria-sort="ascending"
             title="Sort by name">Name<span class="caret chrome masked mark-caret-up" aria-hidden="true"></span></button>
-    <button class="sort" type="button" data-sort="distance" aria-sort="none"
+    <button class="sort" type="button" data-sort="spawn" aria-sort="none"
             title="Sort by how far it is from spawn">Coords<span class="caret chrome masked mark-caret-up" aria-hidden="true"></span></button>
+    <button class="sort" type="button" data-sort="away" aria-sort="none"
+            title="Sort by how far it is from where you are standing">Distance<span class="caret chrome masked mark-caret-up" aria-hidden="true"></span></button>
     <button class="sort" type="button" data-sort="owner" aria-sort="none"
             title="Sort by whose it is">Owner<span class="caret chrome masked mark-caret-up" aria-hidden="true"></span></button>
     <button class="sort marked" type="button" data-sort="private" aria-sort="none"
@@ -169,10 +179,10 @@
   <label class="line"><input id="want-presets" type="checkbox">New markers become presets by default</label>
   <label class="line"><input id="want-private" type="checkbox">New markers are private by default</label>
   <p id="want-said" class="note"></p>
+  <!-- Filled from the one table that holds every size the page can be set to,
+       so a slider's range is stated where the size is and not here as well. -->
   <div class="field"><span>Size</span>
-    <label class="slide">Player list<input id="scale-people" type="range" min="0.7" max="1.8" step="0.05"></label>
-    <label class="slide">Windows<input id="scale-panel" type="range" min="0.7" max="1.8" step="0.05"></label>
-    <label class="slide">Map buttons<input id="scale-tools" type="range" min="0.7" max="1.8" step="0.05"></label>
+    <div id="profile-scales"></div>
   </div>
   <p id="profile-said"></p>
   <div class="deed">

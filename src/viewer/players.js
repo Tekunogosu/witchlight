@@ -126,6 +126,16 @@ function turn(marker, player) {
 let drawnPlaces = null;
 
 /**
+ * The mark drawn for each marker, by key.
+ *
+ * Held so that singling one out is a class on an element rather than the whole
+ * set being torn down and built again. What the list has found changes on every
+ * keystroke and the markers themselves change a few times an hour, so the two
+ * must not share a redraw.
+ */
+const drawnMarks = new Map();
+
+/**
  * Draws the markers, when they are not the ones already drawn.
  *
  * Markers change a few times an hour and arrive every two seconds. Rebuilding
@@ -138,15 +148,12 @@ function drawPlaces(waypoints) {
     return;
   }
   drawnPlaces = shape;
-  // The list of every marker there is shows this same set, so it is drawn from
-  // the same moment they changed rather than from a clock of its own.
-  listed = waypoints;
-  drawDirectory();
 
   // Every marker is about to be replaced, including whichever one a hover had
   // opened; a wait to close a marker that no longer exists closes nothing.
   forgetHovered();
   places.clearLayers();
+  drawnMarks.clear();
   for (const place of waypoints) {
     const picture = markFor(place.Icon, colourOf(place.Color)).outerHTML;
     // Every death marker is titled "You died here", so the owner is the only
@@ -191,6 +198,38 @@ function drawPlaces(waypoints) {
       L.DomEvent.stopPropagation(event);
       if (mayEdit(place)) editCompose(place);
     });
+
+    if (place.Key) drawnMarks.set(place.Key, drawn);
+  }
+
+  // The list of every marker there is shows this same set, so it is drawn from
+  // the same moment they changed rather than from a clock of its own — and it is
+  // drawn after the marks rather than before them, because what it finds is what
+  // the map draws larger.
+  listed = waypoints;
+  drawDirectory();
+}
+
+/**
+ * Draws the markers a search has found larger than the rest.
+ *
+ * A name typed into the list narrows a hundred markers to three, and then the
+ * reader has to find those three on the map — which is the question they opened
+ * the list to stop asking. So the answer is put back on the map: while there is
+ * something in the box the marks the list is showing stand out, and an empty box
+ * is every marker the size it was.
+ *
+ * Told which keys rather than working them out again. The list has already
+ * decided — its tab, its search, its own rules — and a second answer here would
+ * be a second set of rules for what "found" means.
+ */
+function showFound(keys) {
+  for (const [key, drawn] of drawnMarks) {
+    const element = drawn.getElement();
+    // A marker on a layer that is switched off has no element to dress. It gets
+    // a fresh one when the layer comes back, and this runs again on the next
+    // poll, so nothing stays wrongly sized for longer than that.
+    if (element) element.classList.toggle('found', keys.has(key));
   }
 }
 
