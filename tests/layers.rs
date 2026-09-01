@@ -13,7 +13,8 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 /// The modules that know nothing about maps, and must go on knowing nothing.
-const UTILITIES: [&str; 7] = ["http", "urls", "cache", "net", "files", "random", "error"];
+const UTILITIES: [&str; 8] =
+    ["http", "urls", "cache", "net", "files", "random", "error", "log"];
 
 /// Which modules a file reaches for.
 fn reaches(module: &str) -> BTreeSet<String> {
@@ -37,10 +38,8 @@ fn a_utility_reaches_for_nothing_but_another_utility() {
     let allowed: BTreeSet<String> = UTILITIES.iter().map(|name| (*name).to_owned()).collect();
 
     for module in UTILITIES {
-        let reached: Vec<String> = reaches(module)
-            .into_iter()
-            .filter(|name| !allowed.contains(name))
-            .collect();
+        let reached: Vec<String> =
+            reaches(module).into_iter().filter(|name| !allowed.contains(name)).collect();
 
         assert!(
             reached.is_empty(),

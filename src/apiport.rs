@@ -19,6 +19,7 @@ use crate::live::Live;
 use crate::pending::Pending;
 use crate::preferences::{Person, Preferences, Preset};
 use crate::urls;
+use crate::log::{say, warn};
 
 /// Everything the mod may reach, gathered so the listener carries one value
 /// rather than four.
@@ -62,14 +63,14 @@ pub fn serve(
         .ok_or_else(|| listening("the listener has no address"))?;
 
     api.publish(exports, address.port());
-    println!("witchlight: taking live data on {address}");
+    say!("taking live data on {address}");
 
     let channel = Channel { live, sessions, pending, preferences, api };
     std::thread::spawn(move || {
         for mut request in server.incoming_requests() {
             let response = posted(&mut request, &channel);
             if let Err(error) = request.respond(response) {
-                eprintln!("witchlight: API response failed: {error}");
+                warn!("API response failed: {error}");
             }
         }
     });

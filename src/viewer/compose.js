@@ -49,6 +49,15 @@ let placing = false;
 let awaiting = null;
 let askedAt = 0;
 
+/**
+ * What was handed to the game and not yet seen back.
+ *
+ * Kept rather than read off the page, because the form is closed the moment the
+ * game takes the ask and closing it empties every field. This is what a failure
+ * is put back up from.
+ */
+let handedOver = null;
+
 /** Whether what is being waited on is a marker going rather than one coming.
  *  A removal has arrived when the marker stops arriving, which is the same
  *  watch read the other way round. */
@@ -228,8 +237,10 @@ function openCompose(spot, ground) {
 
   mayKeep = true;
   alsoPreset = Boolean(mine.PresetsByDefault) && Boolean(clicked && clicked.code);
-  // What it would be remembered against, ready to be widened into a pattern.
-  markerPattern.value = clicked && clicked.code ? clicked.code : '';
+  // What it would be remembered against, with the block's variant number already
+  // widened into a wildcard — which is what makes one preset answer for a whole
+  // family of blocks rather than for the one that happened to be underfoot.
+  markerPattern.value = widened(clicked && clicked.code);
   showFields();
   showCompose();
 }
@@ -486,6 +497,7 @@ function showKeepsake() {
 
 function forgetCompose() {
   setPlacing(false);
+  showPresetPick(false);
   awaiting = null;
   removing = false;
   dropArmed = false;
@@ -509,6 +521,60 @@ function forgetCompose() {
 
 function closeCompose() {
   shutWindow(composer);
+}
+
+/**
+ * Closes the form because the marker is with the game now, rather than because
+ * somebody shut it.
+ *
+ * The difference is the whole of why this exists. Shutting the form by hand is
+ * somebody saying they have stopped waiting, and `forgetCompose` reads it that
+ * way and drops the watch. A marker handed over is still worth watching — the
+ * watch is the only thing that ever reports a failure — so it is lifted over the
+ * close and put back.
+ *
+ * The button is freed here rather than when the marker lands, because the point
+ * of closing early is to mark the next thing: a Save that stays greyed until the
+ * game answers is the same wait in a different place.
+ */
+function handedToTheGame() {
+  const watch = { key: awaiting, going: removing, shape: changedShape, at: askedAt };
+  closeCompose();
+  awaiting = watch.key;
+  removing = watch.going;
+  changedShape = watch.shape;
+  askedAt = watch.at;
+  markerSave.disabled = false;
+}
+
+/**
+ * Puts the form back up on a marker the game never made.
+ *
+ * Left alone where the form is already open on something else: somebody who has
+ * moved on to the next marker is not helped by an old one landing on top of it,
+ * and what is said names the marker either way.
+ */
+function putTheFormBack() {
+  const held = handedOver;
+  handedOver = null;
+  if (!held || composer.classList.contains('open')) return;
+
+  if (held.editing) {
+    editCompose(held.editing);
+  } else {
+    openCompose({ x: held.marker.X, y: held.marker.Y, z: held.marker.Z }, held.ground);
+  }
+
+  // Over the top of whatever opening it worked out for itself: a preset may name
+  // the block this was made on, and what somebody actually typed is the thing
+  // they are being handed back.
+  markerName.value = held.marker.Title === UNNAMED ? '' : held.marker.Title;
+  chosenColour = held.marker.Color;
+  chosenPicture = held.marker.Icon;
+  privately = held.marker.Private;
+  alsoPreset = held.alsoPreset;
+  markerPattern.value = held.pattern;
+  showFields();
 }
 
 /** Which numbers the coordinate fields are in, said where they are typed. */

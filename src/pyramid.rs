@@ -358,17 +358,17 @@ mod tests {
     #[test]
     fn a_tile_with_no_level_above_it_cannot_be_grown() {
         let at = Scratch::new("pyramid-nothing-above");
-        assert!(from_above(&at.at(), 0, 5, 5, 8, 3).is_none());
+        assert!(from_above(at.at(), 0, 5, 5, 8, 3).is_none());
     }
 
     #[test]
     fn a_missing_tile_is_grown_from_its_parents_own_quarter() {
         let at = Scratch::new("pyramid-own-quarter");
-        write(&at.at(), 1, 3, 3, &quarters(8)).expect("the parent stores");
+        write(at.at(), 1, 3, 3, &quarters(8)).expect("the parent stores");
 
         // Level 1 tile (3, 3) covers level 0 tiles (6, 7) in both axes.
         for (x, z, want) in [(6, 6, 0u8), (7, 6, 1), (6, 7, 2), (7, 7, 3)] {
-            let grown = from_above(&at.at(), 0, x, z, 8, 3).expect("the parent serves");
+            let grown = from_above(at.at(), 0, x, z, 8, 3).expect("the parent serves");
             assert_eq!(grown.dimensions(), (8, 8));
             assert!(
                 grown.pixels().all(|pixel| pixel.0[0] == want),
@@ -383,12 +383,12 @@ mod tests {
         // the sixteenth of it this tile actually covers.
         let at = Scratch::new("pyramid-gap");
         let grandparent = tile(8, |x, z| [u8::try_from(z * 8 + x).unwrap(), 0, 0]);
-        write(&at.at(), 2, 1, 1, &grandparent).expect("the grandparent stores");
+        write(at.at(), 2, 1, 1, &grandparent).expect("the grandparent stores");
 
         // Level 2 tile (1, 1) covers level 0 tiles (4..=7); (5, 6) is one across
         // and two down inside it, so the 2x2 patch at (2, 4), each pixel grown
         // fourfold.
-        let grown = from_above(&at.at(), 0, 5, 6, 8, 3).expect("the grandparent serves");
+        let grown = from_above(at.at(), 0, 5, 6, 8, 3).expect("the grandparent serves");
         assert_eq!(grown.get_pixel(0, 0).0[0], grandparent.get_pixel(2, 4).0[0]);
         assert_eq!(grown.get_pixel(7, 7).0[0], grandparent.get_pixel(3, 5).0[0]);
     }
@@ -398,11 +398,11 @@ mod tests {
         // The quarter comes from subtracting the ancestor's origin, which is the
         // step that goes wrong when a coordinate is negative.
         let at = Scratch::new("pyramid-negative");
-        write(&at.at(), 1, -1, -1, &quarters(8)).expect("the parent stores");
+        write(at.at(), 1, -1, -1, &quarters(8)).expect("the parent stores");
 
         // Level 1 tile (-1, -1) covers level 0 tiles (-2, -1) in both axes.
         for (x, z, want) in [(-2, -2, 0u8), (-1, -2, 1), (-2, -1, 2), (-1, -1, 3)] {
-            let grown = from_above(&at.at(), 0, x, z, 8, 3).expect("the parent serves");
+            let grown = from_above(at.at(), 0, x, z, 8, 3).expect("the parent serves");
             assert_eq!(grown.get_pixel(0, 0).0[0], want, "level 0 ({x}, {z})");
         }
     }
@@ -567,7 +567,7 @@ mod tests {
         build(&at, 3, 0, 0);
 
         let regions = HashMap::from([((0, 0), exported_before(built))]);
-        assert!(behind(&at.at(), &regions, 3).is_empty());
+        assert!(behind(at.at(), &regions, 3).is_empty());
     }
 
     #[test]
@@ -577,7 +577,7 @@ mod tests {
         build(&at, 2, 0, 0);
 
         let regions = HashMap::from([((0, 0), built + std::time::Duration::from_secs(60))]);
-        assert_eq!(behind(&at.at(), &regions, 2), vec![(0, 0)]);
+        assert_eq!(behind(at.at(), &regions, 2), vec![(0, 0)]);
     }
 
     /// The bug this exists for.
@@ -595,9 +595,9 @@ mod tests {
         build(&at, 2, 0, 0);
         let regions = HashMap::from([((0, 0), exported_before(built))]);
 
-        assert!(behind(&at.at(), &regions, 2).is_empty(), "two levels is current");
+        assert!(behind(at.at(), &regions, 2).is_empty(), "two levels is current");
         assert_eq!(
-            behind(&at.at(), &regions, 3),
+            behind(at.at(), &regions, 3),
             vec![(0, 0)],
             "a third level exists nowhere on disk"
         );
@@ -606,20 +606,20 @@ mod tests {
     #[test]
     fn the_pyramid_is_as_tall_as_the_levels_it_has_written() {
         let at = Scratch::new("pyramid-height");
-        assert_eq!(levels_built(&at.at()), 0, "nothing built yet");
+        assert_eq!(levels_built(at.at()), 0, "nothing built yet");
 
         build(&at, 1, 0, 0);
-        assert_eq!(levels_built(&at.at()), 1);
+        assert_eq!(levels_built(at.at()), 1);
 
         build(&at, 3, 0, 0);
-        assert_eq!(levels_built(&at.at()), 3, "the tallest, not the count");
+        assert_eq!(levels_built(at.at()), 3, "the tallest, not the count");
     }
 
     #[test]
     fn the_stamp_is_not_mistaken_for_a_level() {
         let at = Scratch::new("pyramid-stamp");
-        reset_unless_built_from(&at.at(), 4);
-        assert_eq!(levels_built(&at.at()), 0, "built-by is not a number");
+        reset_unless_built_from(at.at(), 4);
+        assert_eq!(levels_built(at.at()), 0, "built-by is not a number");
     }
 
     #[test]

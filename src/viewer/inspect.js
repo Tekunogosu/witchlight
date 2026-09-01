@@ -183,6 +183,8 @@ function describe() {
       return 'the service is not answering';
     case 'unknown':
       return `block ${told.block} — not in the palette`;
+    case 'uncoloured':
+      return `${shortCode(told.code)} — no colour yet, drawn as bare ground`;
     default:
       return `${shortCode(told.code)}   ` +
              `${Math.round(told.temperature)}°C   ${Math.round(told.rainfall * 100)}% rain`;
@@ -240,10 +242,14 @@ map.on('mousemove', event => {
 map.on('mouseout', () => { pointer = null; forget(); say(); });
 
 // Dragging is choosing to look somewhere else, so it stops following. Zooming is
-// not, so it does not.
+// not, so it does not — it lands on whoever is being followed instead. Where the
+// zoom is aimed is settled before the gesture, in `keeping`; this is what puts the
+// map back on them once it has settled, since they walk on between polls and the
+// middle of the view is only where they were when it was last centred.
 map.on('dragstart', () => {
   if (following !== null) follow(following);
 });
+map.on('zoomend', keepUp);
 map.on('moveend zoomend', writeAddress);
 addEventListener('hashchange', () => {
   const asked = readAddress();

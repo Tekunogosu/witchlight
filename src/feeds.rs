@@ -22,11 +22,11 @@ impl State {
     /// drew — which tiles it needs to fetch again.
     pub fn info(&self, since: Option<u64>) -> String {
         let (min_x, min_z, max_x, max_z) = self.bounds();
-        let spawn = facts::spawn(&self.data);
+        let facts = facts::read(&self.data);
         let mut body = serde_json::json!({
             "minX": min_x, "minZ": min_z, "maxX": max_x, "maxZ": max_z,
             "tile": TILE,
-            "spawnX": spawn.x, "spawnZ": spawn.z,
+            "spawnX": facts.spawn_x, "spawnZ": facts.spawn_z,
             "chunk": self.chunk_edge(),
             "levels": self.levels(),
             "chunks": self.chunks(),
@@ -69,7 +69,7 @@ impl State {
     /// Which marker icons exist, so the viewer draws a marker it can and a plain
     /// shape for one it cannot rather than a hole where a picture should be.
     pub fn icons(&self) -> String {
-        let names: Vec<String> = crate::files::listing(&self.data.join("icons"))
+        let names: Vec<String> = crate::files::listing(&crate::stored::icons_dir(&self.data))
             .unwrap_or_default()
             .iter()
             .filter_map(|path| {
@@ -160,9 +160,9 @@ impl State {
 struct Block {
     x: i32,
     z: i32,
-    /// How the column read against the palette: `painted`, `blank`, `unknown` or
-    /// `unmapped`. The viewer speaks for the first three and stays quiet for the
-    /// last, since there is nothing drawn there to be looking at.
+    /// How the column read against the palette: `painted`, `blank`, `uncoloured`,
+    /// `unknown` or `unmapped`. The viewer speaks for the first four and stays
+    /// quiet for the last, since there is nothing drawn there to be looking at.
     state: &'static str,
     /// The block id this world gave it. Absent where nothing was exported.
     #[serde(skip_serializing_if = "Option::is_none")]

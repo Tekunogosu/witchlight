@@ -22,6 +22,7 @@ use std::path::{Path, PathBuf};
 use tiny_http::Request;
 
 use crate::files;
+use crate::log::warn;
 
 /// What the mod must present to post. Sixteen bytes as hex.
 const TOKEN_BYTES: usize = 16;
@@ -52,14 +53,7 @@ impl Api {
     /// Whether this request carries the token.
     #[must_use]
     pub fn authorized(&self, request: &Request) -> bool {
-        let offered = request
-            .headers()
-            .iter()
-            .find(|header| header.field.equiv("Authorization"))
-            .map(|header| header.value.as_str())
-            .unwrap_or_default();
-
-        presented(offered, &self.token)
+        presented(&crate::http::header(request, "Authorization").unwrap_or_default(), &self.token)
     }
 
     /// Writes down where the mod should post and what to say when it does.
@@ -76,7 +70,7 @@ impl Api {
 
         let path = connection_path(exports);
         if let Err(error) = files::replace_private(&path, body.to_string().as_bytes()) {
-            eprintln!("witchlight: could not write {}: {error}", path.display());
+            warn!("could not write {}: {error}", path.display());
         }
     }
 

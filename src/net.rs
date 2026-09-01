@@ -51,10 +51,7 @@ pub fn publish_addresses(data: &Path, bind: &str, addresses: &[String]) {
         "Version": env!("CARGO_PKG_VERSION"),
     });
 
-    let path = data.join("service.json");
-    if files::replace(&path, body.to_string().as_bytes()).is_err() {
-        eprintln!("witchlight: could not write {}", path.display());
-    }
+    files::publish(&data.join("service.json"), body.to_string().as_bytes());
 }
 
 /// This machine's address on the network it routes through.

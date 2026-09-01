@@ -17,8 +17,18 @@ use crate::error::{Error, Result};
 #[serde(rename_all = "PascalCase")]
 struct RawEntry {
     id: u32,
-    /// Absent for a block with nothing to draw: air, a helper, a shape-only block.
+    /// Absent for a block this palette cannot draw.
     rgb: Option<String>,
+    /// Which kind of colourless an entry with no `rgb` is: true where the block
+    /// genuinely draws nothing — air, an invisible helper — and false where it
+    /// draws something the mod could not work out a colour for.
+    ///
+    /// Absent on a palette written before the mod recorded the difference, and
+    /// that is why it is an option rather than a bool: "this palette says nothing
+    /// about it" has to be tellable from "this palette says it draws", or every
+    /// old palette would report its air as terrain waiting for a colour.
+    #[serde(default)]
+    invisible: Option<bool>,
     #[serde(default)]
     climate_map: Option<String>,
     #[serde(default)]
@@ -51,8 +61,18 @@ pub struct Appearance {
     pub season_map: Option<u16>,
     /// The palette has an entry for this block.
     pub known: bool,
-    /// It has an entry but nothing to draw — air and other invisible blocks.
+    /// It has an entry and the block draws nothing — air and the other
+    /// invisibles. Bare ground on the map is the right picture of it.
     pub invisible: bool,
+    /// It has an entry, the block draws something, and this palette has no colour
+    /// for it.
+    ///
+    /// A different thing from either of the two above, and it used to be filed
+    /// with the invisibles: a block whose colour was missed was painted the same
+    /// near-black as ground nobody has explored, so ground a player had just dug
+    /// read as a hole in the world. The mod repairs these by asking a client;
+    /// until it has, they are painted as ground rather than as absence.
+    pub uncoloured: bool,
 }
 
 impl Appearance {
@@ -61,6 +81,7 @@ impl Appearance {
     fn same_as(&self, other: &Self) -> bool {
         self.known == other.known
             && self.invisible == other.invisible
+            && self.uncoloured == other.uncoloured
             && self.base == other.base
             && self.climate_map == other.climate_map
             && self.season_map == other.season_map
@@ -90,6 +111,13 @@ pub struct Palette {
     /// and rendering it anyway is how a broken palette came to look like a broken
     /// map.
     pub coloured: usize,
+    /// How many blocks draw something this palette has no colour for.
+    ///
+    /// Nothing here can repair one — the colours come off a client's assets, which
+    /// this program cannot reach — so it is said out loud on load and left to the
+    /// mod, which asks a player. Worth saying because it is the difference between
+    /// a map with a hole in it and a map of a world with a hole in it.
+    pub uncoloured: usize,
 }
 
 impl Palette {
@@ -198,21 +226,26 @@ impl Palette {
         // Every entry is marked known, colour or not, so the renderer can tell an
         // invisible block from one this palette has never heard of.
         for (code, entry) in &raw.blocks {
+            // An entry with no colour is one of two things, and only the mod can
+            // say which. Where it has not said — a palette older than the field —
+            // every one of them reads as invisible, which is what every build
+            // before this one drew.
+            let colourless = entry.rgb.is_none();
+            let uncoloured = colourless && entry.invisible == Some(false);
+
             codes[entry.id as usize] = Some(Box::from(code.as_str()));
             by_id[entry.id as usize] = Appearance {
-                base: entry
-                    .rgb
-                    .as_deref()
-                    .and_then(Rgb::parse)
-                    .unwrap_or_default(),
-                invisible: entry.rgb.is_none(),
+                base: entry.rgb.as_deref().and_then(Rgb::parse).unwrap_or_default(),
+                invisible: colourless && !uncoloured,
+                uncoloured,
                 climate_map: index_of(&entry.climate_map),
                 season_map: index_of(&entry.season_map),
                 known: true,
             };
         }
 
-        let coloured = by_id.iter().filter(|a| a.known && !a.invisible).count();
+        let coloured = by_id.iter().filter(|a| a.known && !a.invisible && !a.uncoloured).count();
+        let uncoloured = by_id.iter().filter(|a| a.uncoloured).count();
 
         Ok(Self {
             game_version: raw.game_version,
@@ -220,6 +253,7 @@ impl Palette {
             named: raw.blocks.len(),
             fingerprint: raw.fingerprint,
             coloured,
+            uncoloured,
             by_id,
             codes,
             color_maps,
@@ -230,6 +264,14 @@ impl Palette {
     #[must_use]
     pub fn knows(&self, block: u16) -> bool {
         self.by_id.get(block as usize).is_some_and(|a| a.known)
+    }
+
+    /// Whether the palette knows this block draws something and has no colour for
+    /// it. The state the mod repairs by asking a client, and the one the map must
+    /// not paint as though nothing were there.
+    #[must_use]
+    pub fn uncoloured(&self, block: u16) -> bool {
+        self.by_id.get(block as usize).is_some_and(|a| a.uncoloured)
     }
 
     /// What this block is called in this world — `game:rock-granite`. `None` for
@@ -263,7 +305,7 @@ impl Palette {
         sea_level: i32,
     ) -> Option<Rgb> {
         let appearance = self.by_id.get(block as usize)?;
-        if !appearance.known || appearance.invisible {
+        if !appearance.known || appearance.invisible || appearance.uncoloured {
             return None;
         }
 
@@ -348,4 +390,75 @@ fn load_color_maps(dir: &Path) -> Result<Vec<ColorMap>> {
 
     maps.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(maps)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::files::testing::Scratch;
+
+    /// Writes a palette of these entries and loads it back.
+    ///
+    /// Through the file rather than by building the struct, because what this is
+    /// about is a field the mod writes: a reading taken from a hand-built
+    /// `Palette` would agree with itself whatever the parser did with the JSON.
+    fn loaded(entries: &str, at: &Path) -> Palette {
+        let body = format!(
+            r#"{{"Version":1,"GameVersion":"1.22.7","Source":"client",
+                 "Fingerprint":"abc","Blocks":{{{entries}}}}}"#
+        );
+        std::fs::write(path_in(at), body).expect("a palette to read back");
+        Palette::load(at).expect("it parses")
+    }
+
+    /// Air, bare soil the builder could not colour, and rock that it could.
+    const AIR: &str = r#""game:air":{"Id":0,"Rgb":null,"Invisible":true}"#;
+    const SOIL: &str = r#""game:soil-medium-none":{"Id":1,"Rgb":null,"Invisible":false}"#;
+    const ROCK: &str = r##""game:rock-granite":{"Id":2,"Rgb":"#806040"}"##;
+
+    #[test]
+    fn a_block_that_draws_and_has_no_colour_is_not_the_same_as_air() {
+        // The distinction the whole repair rests on. Both are entries with no
+        // colour, and filing them together is what painted dug ground as though
+        // nobody had ever been there.
+        let held = Scratch::new("palette-uncoloured");
+        let palette = loaded(&format!("{AIR},{SOIL},{ROCK}"), held.at());
+
+        assert!(palette.knows(0) && palette.knows(1) && palette.knows(2));
+        assert!(!palette.uncoloured(0), "air draws nothing and is not waiting on a colour");
+        assert!(palette.uncoloured(1), "soil draws, and this palette has no colour for it");
+        assert!(!palette.uncoloured(2), "rock has one");
+
+        assert_eq!(palette.coloured, 1, "only rock can be painted");
+        assert_eq!(palette.uncoloured, 1, "and only soil is waiting");
+        assert!(!palette.paints_nothing());
+    }
+
+    #[test]
+    fn a_palette_older_than_the_field_reads_as_it_always_did() {
+        // Every colourless entry in one of these is air as far as it can say, and
+        // reading them as terrain waiting on a colour would repaint a working map
+        // the moment this build met an older palette.
+        let held = Scratch::new("palette-older");
+        let old = r#""game:air":{"Id":0,"Rgb":null},"game:soil-medium-none":{"Id":1,"Rgb":null}"#;
+        let palette = loaded(&format!("{old},{ROCK}"), held.at());
+
+        assert!(palette.knows(0) && palette.knows(1));
+        assert!(!palette.uncoloured(0) && !palette.uncoloured(1));
+        assert_eq!(palette.uncoloured, 0);
+    }
+
+    #[test]
+    fn a_palette_that_only_learned_a_colour_is_a_different_palette() {
+        // What decides whether the map is redrawn. A colour arriving for a block
+        // that had none is the whole point of the ask, and a comparison that
+        // could not see it would leave the holes on screen until something else
+        // moved.
+        let (before, after) = (Scratch::new("palette-same-a"), Scratch::new("palette-same-b"));
+        let held = loaded(&format!("{AIR},{SOIL},{ROCK}"), before.at());
+        let filled = r##""game:soil-medium-none":{"Id":1,"Rgb":"#6b6257"}"##;
+
+        assert!(held.same_as(&loaded(&format!("{AIR},{SOIL},{ROCK}"), after.at())));
+        assert!(!held.same_as(&loaded(&format!("{AIR},{filled},{ROCK}"), after.at())));
+    }
 }

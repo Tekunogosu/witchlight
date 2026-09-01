@@ -9,6 +9,7 @@
 //! `witchlight.conf` in the game's `ModConfig` folder, which the mod names with
 //! `--config` so that everything about one server's map sits with that server.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -31,6 +32,66 @@ pub struct Rules {
     /// mod; what this decides here is only what the page is told, so that a short
     /// list of players reads as a server that chose it rather than as a fault.
     pub players_public: bool,
+}
+
+/// Which privilege each `wl` command asks of whoever types it.
+///
+/// A privilege code the game knows — `controlserver`, `chat`, `commandplayer` —
+/// with `admin` and `player` spelled out for the two that answer almost every
+/// server. The mod is the half that enforces it; nothing here reads these, for
+/// the same reason nothing here reads `autostart`.
+///
+/// The split is between commands that change what the server is doing and
+/// commands that answer a question about the person typing them. Exporting the
+/// world, reading the map's whole state and starting or stopping the service are
+/// an operator's; a link to your own page, a marker where you are standing, and
+/// asking a client for the pictures the map draws with are anybody's.
+///
+/// Loosening one of the last three costs less than it looks: what a client sends
+/// back is taken on the same terms whoever asked for it, and only an admin's
+/// palette or icon may replace one already chosen — see the mod's
+/// `PaletteExchange` and `IconExchange`. So these decide who may ask, not who
+/// may repaint the map.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct Commands {
+    /// A link that signs your own browser in as you.
+    pub login: String,
+    /// A marker where you are looking.
+    pub mark: String,
+    /// Asking a client for a picture of its player.
+    pub portrait: String,
+    /// Asking a client for a block colour palette.
+    pub palette: String,
+    /// Asking a client for the pictures markers are drawn with.
+    pub icons: String,
+    /// Writing the surface of every loaded chunk.
+    pub export: String,
+    /// What has been exported, and where the palette came from.
+    pub status: String,
+    /// Starting and stopping the map service.
+    pub service: String,
+}
+
+/// What `admin` is short for.
+pub const ADMIN: &str = "admin";
+
+/// What `player` is short for.
+pub const PLAYER: &str = "player";
+
+impl Default for Commands {
+    fn default() -> Self {
+        Self {
+            login: PLAYER.to_owned(),
+            mark: PLAYER.to_owned(),
+            portrait: PLAYER.to_owned(),
+            palette: PLAYER.to_owned(),
+            icons: PLAYER.to_owned(),
+            export: ADMIN.to_owned(),
+            status: ADMIN.to_owned(),
+            service: ADMIN.to_owned(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -153,6 +214,37 @@ pub struct Config {
     /// never sees. Only an operator knows that address, so only an operator can
     /// set it.
     pub announce_url: String,
+
+    /// Who may run each `wl` command in game.
+    ///
+    /// Last in the file because it is a table, and a table has to come after
+    /// every plain setting or the ones below it read as part of it.
+    pub commands: Commands,
+
+    /// Extra bars on a player's card, beside their health and their food.
+    ///
+    /// A mod that gives players a resource — mana, stamina, a level — keeps it
+    /// on the player's own entity, where the server can already read it. So this
+    /// half needs to know nothing about any mod: an operator names the
+    /// attributes and the mod reads whatever is under them, exactly as it
+    /// already reads the game's own health and hunger.
+    ///
+    /// Each value is `name | value attribute | maximum attribute | colour |
+    /// group`. The key is only a name for the entry, and the entries are read in
+    /// the order they appear in the file.
+    ///
+    /// The group is what the map files the bar under where a reader switches
+    /// bars on and off. Left out, the mod looks for an installed mod whose id
+    /// appears in the attribute's own name and uses that — which answers for a
+    /// mod that names its attributes after itself and for no other, since an
+    /// attribute carries no record of what wrote it.
+    ///
+    /// **A bar is drawn only for a player who actually has it.** A missing
+    /// attribute, or one whose maximum is zero, is a player this does not apply
+    /// to — somebody who has not taken up magic, or a server without the mod —
+    /// and no bar is the right picture of that. Which is also why naming an
+    /// attribute nothing has costs nothing.
+    pub bars: BTreeMap<String, String>,
 }
 
 impl Default for Config {
@@ -172,6 +264,29 @@ impl Default for Config {
             autostart: true,
             announce: true,
             announce_url: String::new(),
+            commands: Commands::default(),
+            // What a stock Rustbound Magic keeps its two bars under, since that
+            // is the mod most likely to be behind this setting being wanted at
+            // all. Named rather than detected: this half never sees a mod, and a
+            // key it has wrong costs a bar that does not draw rather than
+            // anything that breaks. Sorted by key in the file, so `mana` comes
+            // before the experience that raises it.
+            bars: [
+                (
+                    "mana".to_owned(),
+                    "Mana | entitybehavior-resource-currentmana_rm \
+                     | entitybehavior-resource-totalmaxmana_rm | #7c5cff | Rustbound Magic"
+                        .to_owned(),
+                ),
+                (
+                    "mana_exp".to_owned(),
+                    "Magic | entitybehavior-resource-currentexptonextmaxmanalevel_rm \
+                     | entitybehavior-resource-maxexptonextmaxmanalevel_rm | #d8a24a | Rustbound Magic"
+                        .to_owned(),
+                ),
+            ]
+            .into_iter()
+            .collect(),
         }
     }
 }
@@ -362,7 +477,25 @@ impl Config {
              # announce is whether the mod tells a player where the map is when\n\
              # they join. announce_url is what to tell them: empty means the\n\
              # address this works out for itself, which is right on a machine\n\
-             # they can reach directly and wrong behind a proxy or a domain.\n\n{body}"
+             # they can reach directly and wrong behind a proxy or a domain.\n\
+             # [commands] is who may run each `wl` command in game. `admin` and\n\
+             # `player` are the two that answer most servers; any privilege the\n\
+             # game knows — controlserver, chat, commandplayer — works too, and\n\
+             # a name the game does not know is refused to everyone but an\n\
+             # admin, so a typo locks a command rather than opening it. Read by\n\
+             # the mod, which is the half that knows who is an admin.\n\
+             # [bars] adds a bar to each player's card beside their health and\n\
+             # their food, read off that player's own entity — which is where a\n\
+             # mod giving players mana or stamina already keeps it, and which\n\
+             # the server can read without knowing anything about the mod.\n\
+             # Each entry is `name | value attribute | maximum attribute |\n\
+             # colour`, and the key is only a name for the entry. A bar is drawn\n\
+             # only for a player who has that attribute with a maximum above\n\
+             # zero, so one nothing on this server uses simply never appears.\n\
+             # A fifth part groups the bar where a reader switches them on and\n\
+             # off; left out, the mod looks for an installed mod whose id is in\n\
+             # the attribute's own name. The two below are what a stock\n\
+             # Rustbound Magic uses.\n\n{body}"
         )
     }
 }
@@ -384,6 +517,34 @@ mod tests {
     }
 
     #[test]
+    fn the_commands_an_operator_never_touched_are_the_ones_the_mod_would_have_chosen() {
+        let held = Config::default().commands;
+        assert_eq!(held.export, ADMIN, "writing the world is an operator's");
+        assert_eq!(held.status, ADMIN);
+        assert_eq!(held.service, ADMIN, "so is starting and stopping the map");
+        assert_eq!(held.login, PLAYER, "a link to your own page is your own");
+        assert_eq!(held.mark, PLAYER);
+        assert_eq!(held.palette, PLAYER);
+        assert_eq!(held.icons, PLAYER);
+        assert_eq!(held.portrait, PLAYER);
+    }
+
+    #[test]
+    fn the_written_template_reads_back_as_what_wrote_it() {
+        // The table has to serialise after every plain setting, or the settings
+        // below it are read as part of it. This is the check that keeps the
+        // field last rather than a comment asking the next person to.
+        let held = Config {
+            commands: Commands { export: "commandplayer".to_owned(), ..Commands::default() },
+            ..Config::default()
+        };
+        let read: Config =
+            toml::from_str(&held.to_template()).expect("the template this just wrote");
+        assert_eq!(read.commands, held.commands);
+        assert_eq!(read.announce_url, held.announce_url, "and nothing fell into the table");
+    }
+
+    #[test]
     fn map_data_is_the_witchlight_folder_in_the_data_path_unless_told_otherwise() {
         let held = Config { vs_data: PathBuf::from("/srv/vs"), ..Config::default() };
         assert_eq!(held.map_data_dir(), PathBuf::from("/srv/vs/witchlight"));
@@ -400,7 +561,7 @@ mod tests {
         map(&scratch, "one");
         map(&scratch, "two");
         let told = PathBuf::from("/somewhere/else");
-        assert_eq!(at(&scratch.at()).exports(Some(&told)).expect("the one named"), told);
+        assert_eq!(at(scratch.at()).exports(Some(&told)).expect("the one named"), told);
     }
 
     #[test]
@@ -414,7 +575,7 @@ mod tests {
     fn one_world_inside_needs_nobody_to_type_it_out() {
         let scratch = Scratch::new("config-one-world");
         let world = map(&scratch, "Ashlands-0c4419ae");
-        assert_eq!(at(&scratch.at()).exports(None).expect("the only world"), world);
+        assert_eq!(at(scratch.at()).exports(None).expect("the only world"), world);
     }
 
     #[test]
@@ -425,7 +586,7 @@ mod tests {
         // A folder that is not a map is not offered as one.
         std::fs::create_dir_all(scratch.at().join("tiles")).expect("a folder");
 
-        let complaint = at(&scratch.at()).exports(None).expect_err("a question").to_string();
+        let complaint = at(scratch.at()).exports(None).expect_err("a question").to_string();
         assert!(complaint.contains("2 worlds"), "it says how many: {complaint}");
         assert!(complaint.contains("Ashlands-0c4419ae"), "and names them: {complaint}");
         assert!(complaint.contains("--exports"), "and says what to do: {complaint}");
@@ -436,6 +597,6 @@ mod tests {
         // Every server is here on a first run, and refusing to start then is a
         // map service that is down exactly when somebody is watching it.
         let scratch = Scratch::new("config-empty");
-        assert_eq!(at(&scratch.at()).exports(None).expect("somewhere to look"), scratch.at());
+        assert_eq!(at(scratch.at()).exports(None).expect("somewhere to look"), scratch.at());
     }
 }

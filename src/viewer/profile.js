@@ -175,7 +175,4 @@ function buildProfile() {
     });
   }
 
-  // The sizes this window offers, built from the one table that holds every
-  // size — see `scales`. The accessibility panel builds its own two the same way.
-  document.getElementById('profile-scales').append(...slidersIn('profile'));
 }

@@ -29,8 +29,28 @@ function inGroup(player) {
 }
 
 /** The players the panel is currently showing. */
+/**
+ * Who the panel shows, in the order it shows them.
+ *
+ * You first. Everyone else is in whatever order the server holds them, which is
+ * near enough to arrival order and is as good an answer as any — but the one
+ * card anybody looks for first is their own, and on a server with thirty people
+ * on it that is a list you have to read to find yourself in.
+ *
+ * Nobody signed in has no card of their own to lift, and the list is left as it
+ * came.
+ */
 function listedPlayers() {
-  return whoTab === 'group' ? players.filter(inGroup) : players;
+  const shown = whoTab === 'group' ? players.filter(inGroup) : players;
+  const you = viewer && viewer.Uid;
+  if (!you) return shown;
+
+  const yours = shown.findIndex(player => String(player.Uid || player.Name) === String(you));
+  if (yours <= 0) return shown;
+
+  const ordered = shown.slice();
+  ordered.unshift(ordered.splice(yours, 1)[0]);
+  return ordered;
 }
 
 /**
@@ -57,8 +77,17 @@ function drawWho() {
     if (!seen.has(uid)) {
       card.element.remove();
       cards.delete(uid);
-      if (following === uid) following = null;
+      if (following === uid) keeping(null);
     }
+  }
+
+  // Cards sit in the order they were made in, so the order above is a move
+  // rather than a redraw — and only when you are not at the top already, because
+  // moving an element is a change to the page and this panel keeps up with the
+  // world every two seconds.
+  const yours = viewer && viewer.Uid && cards.get(String(viewer.Uid));
+  if (yours && whoList.firstElementChild !== yours.element) {
+    whoList.prepend(yours.element);
   }
 
   for (const tab of who.querySelectorAll('.tab')) {
@@ -66,6 +95,48 @@ function drawWho() {
       tab.dataset.who === 'group' ? players.filter(inGroup).length : players.length;
   }
   sayWho(shown.length);
+}
+
+/**
+ * The bars this server shows beyond health and food, kept up to date.
+ *
+ * Made once per name and then written into, the way the cards themselves are:
+ * this runs every two seconds for everybody on, and a row rebuilt on each beat
+ * would flicker under the eye reading it.
+ *
+ * A bar that stops arriving is taken away rather than left at its last reading —
+ * a player who has spent their last mana still has mana, and one whose mod has
+ * been uninstalled does not.
+ */
+function fillExtra(card, bars) {
+  const seen = new Set();
+
+  for (const reading of bars) {
+    const name = String(reading.Name || '');
+    if (!name) continue;
+    // Noticed whether or not it is wanted, because the switch that turns it off
+    // has to be there to turn back on.
+    noticeBar(reading);
+    if (!barWanted(name)) continue;
+    seen.add(name);
+
+    let meter = card.bars.get(name);
+    if (!meter) {
+      meter = bar('extra');
+      // The colour is the operator's, so it is written on the element rather
+      // than looked up in a style sheet that has never heard of this bar.
+      if (reading.Colour) meter.inner.style.background = reading.Colour;
+      card.bars.set(name, meter);
+      card.extra.append(meter.wrap);
+    }
+    fill(meter, name, reading.Value, reading.Max);
+  }
+
+  for (const [name, meter] of card.bars) {
+    if (seen.has(name)) continue;
+    meter.wrap.remove();
+    card.bars.delete(name);
+  }
 }
 
 /**
@@ -147,7 +218,15 @@ function newCard(uid) {
   element.addEventListener('click', () => follow(uid));
   whoList.append(element);
 
-  const card = { element, face, name, hp, food, look: null, named: null };
+  // Whatever else this server shows for a player goes under the two the game
+  // always has. Built as they turn up rather than up front: which bars a player
+  // carries is a fact about that player — somebody who has never cast a spell
+  // has no mana — and a row of empty bars is a worse answer than no row.
+  const extra = document.createElement('div');
+  extra.className = 'extra-bars';
+  details.append(extra);
+
+  const card = { element, face, name, hp, food, extra, bars: new Map(), look: null, named: null };
   cards.set(uid, card);
   return card;
 }
@@ -176,6 +255,7 @@ function patchCard(card, player) {
 
   fill(card.hp, 'health', player.Health, player.MaxHealth);
   fill(card.food, 'food', player.Saturation, player.MaxSaturation);
+  fillExtra(card, player.Bars || []);
 
   const [x, z] = said(player.X, player.Z);
   const title = `${player.Name} — ${x}, ${player.Y}, ${z}`;

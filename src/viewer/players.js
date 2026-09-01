@@ -286,18 +286,64 @@ function linger(marker) {
 let following = null;
 
 /**
+ * The gestures that change how close you are looking without choosing where.
+ *
+ * Leaflet zooms each of them about the pointer, which is the right answer for a
+ * map somebody is reading and the wrong one for a map that is keeping up with a
+ * player: a wheel turned anywhere but exactly on them walks the view off them a
+ * notch at a time, while the card still says it is following. So while somebody
+ * is followed these zoom about the middle of the view, which is where the follow
+ * has already put them.
+ *
+ * Dragging is not among them and never will be. That is choosing to look
+ * somewhere else, and it ends the follow — see the map's own handlers.
+ */
+const ZOOMS_WITHOUT_CHOOSING = ['scrollWheelZoom', 'touchZoom', 'doubleClickZoom'];
+
+/** What each of those does when nobody is being followed. */
+const zoomsAboutThePointer = Object.fromEntries(
+  ZOOMS_WITHOUT_CHOOSING.map(gesture => [gesture, map.options[gesture]]));
+
+/**
+ * Takes up following somebody, or nobody.
+ *
+ * Written through here rather than assigned, because following is more than a
+ * name held in a variable: it decides which card is lit and what a wheel turn
+ * means. A player who logged out used to clear the name by hand, which left the
+ * map zooming about its middle for nobody.
+ *
+ * Told to Leaflet as an option rather than corrected after the fact, because
+ * Leaflet reads it as each gesture happens — correcting afterwards is a jump on
+ * every notch of the wheel instead of a zoom that goes where it was aimed.
+ */
+function keeping(uid) {
+  following = uid;
+  for (const gesture of ZOOMS_WITHOUT_CHOOSING) {
+    map.options[gesture] = uid === null ? zoomsAboutThePointer[gesture] : 'center';
+  }
+  showFollowed();
+}
+
+/**
  * Keeps the map on one player until somebody drags it.
  *
  * Zooming does not stop it: changing how close you are looking is not the same as
- * choosing to look somewhere else. Dragging is, so that ends it — and so does
- * clicking the same player again.
+ * choosing to look somewhere else, and while this is on it is a way of looking
+ * closer at them rather than at wherever the pointer happens to rest. Dragging is
+ * choosing, so that ends it — and so does clicking the same player again.
  */
 function follow(uid) {
-  following = following === uid ? null : uid;
-  showFollowed();
+  keeping(following === uid ? null : uid);
   keepUp();
 }
 
+/**
+ * Puts the map back on whoever is being followed.
+ *
+ * On every poll, so the view keeps up with them as they walk, and again as a zoom
+ * settles: the middle of the view is where they were when it was last centred,
+ * and zooming about it magnifies however far they have walked since.
+ */
 function keepUp() {
   if (following === null) {
     return;

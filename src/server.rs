@@ -23,6 +23,7 @@ use crate::pyramid;
 use crate::routes;
 use crate::state::State;
 use crate::watch;
+use crate::log::{say, warn};
 
 /// How many threads take requests when the setting says to decide here.
 ///
@@ -52,9 +53,8 @@ pub fn serve(
         Arc::clone(&state.preferences),
         data,
     ) {
-        eprintln!("witchlight: {error}");
-        eprintln!(
-            "witchlight: nobody will show on the map. Set `api_bind` to an address \
+        warn!(
+            "{error} — nobody will show on the map. Set `api_bind` to an address \
              this machine has free."
         );
     }
@@ -66,12 +66,12 @@ pub fn serve(
     let addresses = net::reachable_at(bind);
     for address in &addresses {
         let note = if net::only_here(address) { "  (this machine only)" } else { "" };
-        println!("witchlight: serving on {address}{note}");
+        say!("serving on {address}{note}");
     }
     net::publish_addresses(data, bind, &addresses);
 
     let threads = workers(threads);
-    println!("witchlight: rendering on {threads} threads");
+    say!("rendering on {threads} threads");
 
     settle(&state, data);
     watch::start(&state);
@@ -104,8 +104,8 @@ fn settle(state: &State, data: &Path) {
     // disagree with every number the player can read off their own screen — and
     // nothing on either side would look wrong.
     if !facts::written(data) {
-        println!(
-            "witchlight: no world.json — coordinates will be absolute rather than \
+        say!(
+            "no world.json — coordinates will be absolute rather than \
              counted from spawn, which means the server mod is older than this build"
         );
     }
@@ -115,8 +115,8 @@ fn settle(state: &State, data: &Path) {
     // painted differently would show the right ground in the wrong colours. Both
     // go; both are redrawn from region files that are not in question.
     if pyramid::reset_unless_built_from(data, crate::columns::VERSION) {
-        println!(
-            "witchlight: the stored levels were built by a different format or painter, so they have been cleared — the map redraws as it is asked for"
+        say!(
+            "the stored levels were built by a different format or painter, so they have been cleared — the map redraws as it is asked for"
         );
     }
 
@@ -125,8 +125,8 @@ fn settle(state: &State, data: &Path) {
     // colours are missing, and those are two different things to go and fix.
     let blank = state.palette.read().is_ok_and(|palette| palette.paints_nothing());
     if blank {
-        println!(
-            "witchlight: the palette has no colours at all — the finest zoom will not draw \
+        say!(
+            "the palette has no colours at all — the finest zoom will not draw \
              and the stored levels are whatever the last usable palette left behind. \
              An admin joining the game supplies one."
         );
@@ -139,7 +139,7 @@ fn settle(state: &State, data: &Path) {
     let painting = state.palette.read().ok().map(|palette| palette.fingerprint.clone());
     let repaint = !blank && matches!((&drawn_with, &painting), (Some(was), Some(now)) if was != now);
     if repaint {
-        println!("witchlight: the stored levels were drawn with a different palette — redrawing them");
+        say!("the stored levels were drawn with a different palette — redrawing them");
     }
 
     let levels = state.levels();
@@ -147,11 +147,7 @@ fn settle(state: &State, data: &Path) {
         return;
     };
     let behind = pyramid::behind(data, &regions, levels);
-    println!(
-        "witchlight: {} of {} regions need their levels built",
-        behind.len(),
-        regions.len()
-    );
+    say!("{} of {} regions need their levels built", behind.len(), regions.len());
 
     state.mark_stale(behind);
     if repaint {
@@ -166,7 +162,7 @@ fn answer(server: &Server, state: &State) {
     while let Ok(mut request) = server.recv() {
         let response = routes::route(&mut request, state);
         if let Err(error) = request.respond(response) {
-            eprintln!("witchlight: response failed: {error}");
+            warn!("response failed: {error}");
         }
     }
 }

@@ -46,6 +46,10 @@ function buildBlockSearch() {
   });
   markerPattern.addEventListener('keydown', event => {
     if (event.key === 'Escape') {
+      // Only where there was a list to close. Otherwise this is a press in a
+      // text box like any other, and Escape's other job — shutting the window in
+      // front — is the one it was meant for.
+      if (blockFound.classList.contains('open')) event.stopPropagation();
       closeFound();
       return;
     }

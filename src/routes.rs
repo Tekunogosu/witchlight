@@ -10,6 +10,7 @@ use crate::http::{self, Reply};
 use crate::pending::{Gone, Marker};
 use crate::preferences::Person;
 use crate::state::State;
+use crate::stored;
 use crate::urls;
 use crate::viewer;
 
@@ -21,8 +22,8 @@ pub fn route(request: &mut Request, state: &State) -> Reply {
         "/" => http::html(&viewer::page(state.bounds())),
         "/viewer.css" => http::asset(viewer::STYLE, "text/css"),
         "/viewer.js" => http::asset(viewer::SCRIPT, "application/javascript"),
-        "/leaflet.js" => http::asset(include_str!("vendor/leaflet.js"), "application/javascript"),
-        "/leaflet.css" => http::asset(include_str!("vendor/leaflet.css"), "text/css"),
+        "/leaflet.js" => http::asset(viewer::LEAFLET_JS, "application/javascript"),
+        "/leaflet.css" => http::asset(viewer::LEAFLET_CSS, "text/css"),
 
         // The one address that turns a word into a browser somebody knows. It
         // answers with a redirect so the word leaves the address bar at once:
@@ -77,9 +78,9 @@ fn stored(request: &mut Request, state: &State, path: &str) -> Reply {
     }
 
     if let Some(name) = urls::icon_name(path) {
-        return match std::fs::read(state.data.join("icons").join(format!("{name}.svg"))) {
-            Ok(bytes) => http::svg(&bytes),
-            Err(_) => http::text(404, "no icon by that name"),
+        return match stored::icon(&state.data, name) {
+            Some(bytes) => http::svg(&bytes),
+            None => http::text(404, "no icon by that name"),
         };
     }
 
@@ -94,9 +95,9 @@ fn stored(request: &mut Request, state: &State, path: &str) -> Reply {
     }
 
     if let Some(name) = urls::portrait_name(path) {
-        return match std::fs::read(state.data.join("portraits").join(format!("{name}.png"))) {
-            Ok(bytes) => http::portrait(&bytes),
-            Err(_) => http::text(404, "nobody by that name has sent a picture"),
+        return match stored::portrait(&state.data, name) {
+            Some(bytes) => http::portrait(&bytes),
+            None => http::text(404, "nobody by that name has sent a picture"),
         };
     }
 

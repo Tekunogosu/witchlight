@@ -18,6 +18,7 @@ mod feeds;
 mod files;
 mod http;
 mod live;
+mod log;
 mod net;
 mod palette;
 mod pending;
@@ -28,6 +29,7 @@ mod render;
 mod routes;
 mod server;
 mod state;
+mod stored;
 mod urls;
 mod viewer;
 mod watch;
@@ -108,7 +110,7 @@ fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("witchlight: {error}");
+            warn!("{error}");
             ExitCode::FAILURE
         }
     }
@@ -121,8 +123,8 @@ fn run() -> Result<()> {
     if args.save_config {
         let existed = config_path.exists();
         config.write(&config_path)?;
-        println!(
-            "witchlight: {} settings in {}",
+        say!(
+            "{} settings in {}",
             if existed { "replaced" } else { "wrote" },
             config_path.display()
         );
@@ -138,8 +140,8 @@ fn run() -> Result<()> {
     // become permanent. That is what --save-config is for.
     if args.config.is_none() && !config_path.exists() {
         match Config::default().write(&config_path) {
-            Ok(()) => println!("witchlight: wrote default settings to {}", config_path.display()),
-            Err(error) => eprintln!("witchlight: {error}"),
+            Ok(()) => say!("wrote default settings to {}", config_path.display()),
+            Err(error) => warn!("{error}"),
         }
     }
 
@@ -151,34 +153,45 @@ fn run() -> Result<()> {
     // Printed first and on every run: the quickest way to tell a deployed binary
     // from the one you meant to deploy.
     println!("witchlight {}", env!("CARGO_PKG_VERSION"));
-    println!("witchlight: reading {}", exports.display());
+    say!("reading {}", exports.display());
     if world.is_empty() {
-        println!(
-            "witchlight: nothing exported yet — the map fills in as the server \
+        say!(
+            "nothing exported yet — the map fills in as the server \
              exports, and this page is already serving"
         );
     } else {
-        println!(
-            "witchlight: {} chunks in {} regions, {}x{} blocks",
+        say!(
+            "{} chunks in {} regions, {}x{} blocks",
             world.chunks.len(),
             world.region_count(),
             max_x - min_x,
             max_z - min_z
         );
     }
-    println!(
-        "witchlight: palette from {}, {} blocks, {} colour maps (game {})",
+    say!(
+        "palette from {}, {} blocks, {} colour maps (game {})",
         palette.source,
         palette.named,
         palette.color_maps.len(),
         palette.game_version
     );
+    if palette.uncoloured > 0 {
+        // Said, not warned about. Nothing here can fix it — the colours come off
+        // a client's assets — and the mod goes and asks for them on its own, so
+        // this is the line that lets somebody watching the log see it happen
+        // rather than a fault to act on.
+        say!(
+            "{} of them draw something this palette has no colour for, \
+             and map as bare ground until the server has been given one",
+            palette.uncoloured
+        );
+    }
 
-    let coverage = Renderer::new(&world, &palette, facts::world(&exports).sea_level).coverage();
-    println!("witchlight: surface {}", coverage.summary());
+    let coverage = Renderer::new(&world, &palette, facts::read(&exports).sea_level).coverage();
+    say!("surface {}", coverage.summary());
     if coverage.is_poor() {
-        eprintln!(
-            "witchlight: most of the map has no colour — the palette is probably \
+        warn!(
+            "most of the map has no colour — the palette is probably \
              the server's own. An admin joining the game supplies a better one; \
              see `/witchlight status` on the server."
         );
@@ -191,12 +204,10 @@ fn run() -> Result<()> {
                     "there is nothing to draw yet — the server has exported no regions".to_owned(),
                 ));
             }
-            let renderer = Renderer::new(&world, &palette, facts::world(&exports).sea_level);
+            let renderer = Renderer::new(&world, &palette, facts::read(&exports).sea_level);
             let width = (max_x - min_x).unsigned_abs();
             let image = renderer.render(min_x, min_z, width.max((max_z - min_z).unsigned_abs()));
-            image
-                .save(&out)
-                .map_err(|error| error::Error::parse(&out, error.to_string()))?;
+            image.save(&out).map_err(|error| error::Error::parse(&out, error.to_string()))?;
             println!("wrote {}", out.display());
             Ok(())
         }

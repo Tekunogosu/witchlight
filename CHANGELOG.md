@@ -1,9 +1,329 @@
 # witchlight
 
 The map service. It pairs with the [server mod](../../witchlight-csharp), and the
-two **must match on minor version**: minor is the compatibility generation, moved
-whenever the file format or the socket protocol changes. Patch is free to differ,
-and covers anything that changes only one half.
+two **carry the same version at all times** — they ship as one archive and are one
+release, so a change to either half moves both. The mod's `package.sh` reads this
+version out of the built binary and refuses to package a pair that disagrees,
+which is where that rule is kept rather than in anybody's memory.
+
+A version that moved for the other half says so and lists nothing, which is not an
+omission: it is what "one release" looks like from the side that did not change.
+
+## 0.35.3
+
+**Deploy note:** both halves, upgraded together. Nothing is cleared.
+
+Moved for the mod, which stopped the game's missing-texture checker being painted
+as a colour. This half did not change: the blocks it was drawing white are ones
+the palette had told it were white.
+
+## 0.35.2
+
+**Deploy note:** both halves, upgraded together. Nothing is cleared.
+
+Moved for the mod, which stopped ruins drawing as white patches. This half did
+not change: it was already painting the block it was given, and what changed is
+which block it is given.
+
+## 0.35.1
+
+**Deploy note:** both halves, upgraded together. Nothing is cleared and there is
+nothing to edit. The log reads the same; it is only reliable now.
+
+**Everything this service says goes through one place and one lock.** Two clocks,
+the listener the mod posts on and one thread per request all say things while the
+map is being served, and a message written as two calls was two claims on stdout
+with a gap between them — so a fault and the sentence saying what to do about it
+could arrive with somebody else's news in between. Messages are now one call
+written whole, and no second message starts on either stream until the first has
+finished, which makes a transcript taken with `2>&1` read in the order the run
+happened. The name the service answers to had thirty-five owners and now has one.
+
+**The two messages that were written as two calls are one each.** A map service
+that cannot bind its API channel says so and says what to set in one line, and a
+palette that arrives with no colours in it says so along with the generation it
+dropped.
+
+## 0.35.0
+
+**Deploy note:** both halves, upgraded together. Nothing is cleared. A server
+running Rustbound Magic gets the mana and magic bars on the next restart without
+touching its settings file.
+
+**Bar display never appeared on a server that had upgraded into it.** The section
+builds itself out of the bars a server actually sends, and a settings file
+written before `[bars]` existed sent none — so the whole feature was invisible on
+every server that had one, which is every server that was already running. An
+absent `[bars]` section now means the two the service writes into a fresh file,
+the way an absent `[commands]` has always meant the command defaults. A section
+somebody has emptied still means none, which is the difference between never
+having been asked and having answered.
+
+**Tab walks the presets the name box finds, and Enter takes one.** Tab moves to
+the next and shift-Tab to the last, both wrapping; the arrow keys do the same,
+since that is what a list means everywhere else on this page. Neither takes the
+focus out of the box, so typing carries on where it left off. Enter takes a
+preset only where the keyboard is on one — typing a name and pressing Enter is
+the other half of what the box is for, and it must not turn into whichever preset
+happened to be listed first.
+
+## 0.34.0
+
+**Deploy note:** both halves, upgraded together. Nothing is cleared. A settings
+file that already has a `[bars]` section keeps working — the group is a fifth
+part of an entry and its absence means "nobody said".
+
+**The name box on the marker form searches your presets.** Typing in it narrows
+them under the box and picking one fills the form in; the button beside it is
+still there and still offers the lot. It is faster than reaching for a button
+because the box is already under the pointer, and it is a switch in the settings
+— **Preset name search** — for anybody who would rather type a name and be left
+alone. It stays out of the way while a preset is being edited, since a preset
+offering to fill itself in from itself is a loop rather than a shortcut.
+
+**Bar display, in the settings.** The bars a server adds to a player's card now
+come with a switch each, under the mod they came from. The section builds itself
+out of what the server actually sends, so it is absent on a server that adds
+none and never lists a bar nobody here has. A bar switched off is still offered,
+or there would be no way to switch it back on.
+
+**Whose bar it is cannot be read off the attribute**, so it is asked for instead.
+An entity attribute is a name and a number with no record of what wrote it. Where
+an entry does not name its group the mod looks for an installed mod whose id
+appears in the attribute's own name, which answers for a mod that names its
+attributes after itself — `xskills:level` finds xskills — and for no other.
+Rustbound Magic's `entitybehavior-resource-currentmana_rm` names nothing, which
+is why its entries carry the group outright. What could not be placed is filed
+under a heading that says so rather than under a guess.
+
+**The preset list is scaled with the windows it stands beside.** It kept its own
+size while an accessibility setting grew everything around it, which on a page
+set large reads as a different page.
+
+## 0.33.0
+
+**Deploy note:** both halves, upgraded together. Nothing is cleared. A settings
+file written before this gains no `[bars]` section and shows no extra bars, which
+is what it did yesterday; `witchlight -c <file> -S` writes one, at the cost of the
+comments in that file.
+
+**A player's card can carry whatever else a server gives them.** Health and food
+were the whole of it, because they are the whole of what the game itself keeps. A
+mod that gives players mana, stamina or a level keeps it in the same place — the
+player's own entity, in the watched attributes the server is already holding — so
+the map can show it without knowing anything about the mod, compiling against
+one, or breaking when one is uninstalled.
+
+```toml
+[bars]
+mana = "Mana | entitybehavior-resource-currentmana_rm | entitybehavior-resource-totalmaxmana_rm | #7c5cff"
+```
+
+Each entry is `name | value attribute | maximum attribute | colour`. The two
+written into a fresh settings file are what a stock Rustbound Magic uses, so a
+server running it has the mana and magic bars without editing anything.
+
+**A bar is drawn only for a player who has one.** An attribute that is not there,
+or one whose maximum is still zero, is a player this does not apply to — somebody
+who has never cast a spell, a server without that mod, an entry naming something
+nothing here keeps — and no bar is the honest picture of all three. A mage who has
+spent their last mana still has a bar, at empty, because having none and having
+none left are different sentences.
+
+## 0.32.0
+
+**Deploy note:** both halves, upgraded together. Nothing is cleared. The colours
+of branchy leaves and reeds move, so the tiles holding them redraw once.
+
+**A preset can be picked while making a marker.** The marker form had no way to
+reach them: a preset applied itself when you right-clicked the block its pattern
+named, and that was the whole of it. There is now a button beside the name box
+that opens your presets to the side of the window, and picking one fills the
+form in — name, colour, picture and who sees it, with the pattern carried along
+so saving it as a preset again writes back to the same one. The list is a flyout
+rather than a window because it is a choice made in the middle of filling a form
+in: it hands the answer back and goes. It sits beside the form rather than over
+it, so you watch the fields change.
+
+**And a preset can put a marker down.** Each row in the presets window has a
+dropper beside it now. Pressing it opens the marker form on that preset and arms
+the map, so the one question left — where — is the one a click answers. The way
+round was missing entirely: a preset for a block you are not standing on could
+only be used by finding one of those blocks first.
+
+**Escape shuts the window in front.** One press, one window, down the stack in
+the order they are drawn in, so three windows open take three presses rather than
+one that sweeps the lot. A press something smaller has already answered is left
+alone — a search box empties itself, a block list closes, the preset flyout shuts
+— so Escape means the nearest thing that is open, whatever that is.
+
+**The world clock wears the readout's clothes.** It was a box of its own that
+looked nearly like the one at the bottom of the screen, and nearly is the worst
+of both: two widgets to keep in step, and a page that reads as though it were
+assembled from parts. Both are the same kind of thing — a few values with a quiet
+word over each — so the clock is built from the readout's own pieces now.
+
+## 0.31.0
+
+**Deploy note:** both halves, upgraded together. Nothing is cleared. The map
+redraws where a column's colour changed, which on a played-in world is a handful
+of tiles.
+
+**A block that draws nothing was painted as a world nobody had walked into.** The
+renderer had four answers for a column and gave two of them the same colour: one
+nobody has exported, and one that was exported whose topmost block has nothing to
+show. They are not the same thing. The second is ground — the column is there, its
+height is known, and only the block on top of it has no colour to give — so it now
+takes the bare-earth colour and the slope shading like any other terrain, and only
+a column nobody exported reads as absence. That is the same rule the map already
+followed for ground waiting on a colour, applied to the case it was missing.
+
+Seen as black specks through finished terrain: the invisible placeholders a large
+structure stands beside its real block, and columns a chunk handed back as air
+before it had finished loading. The mod's own half of this is in its 0.31.0 — the
+exporter no longer records those in the first place.
+
+**Saving a marker now closes the window.** It used to stay up until the game
+server confirmed the marker had been made, which is a second or two of a window
+sitting over the map before you can mark the next thing. Waiting is the map's
+business rather than the person's, so the form closes the moment the game takes
+the ask and the Save button is freed with it. It comes back, filled in as it was,
+only if the marker never arrives — and what it says then names the marker, since
+by that point the form may be closed or open on the next one.
+
+**Zooming while following somebody now lands on them, and you are top of the
+player list.** Following already survived a zoom, but Leaflet zooms about the
+pointer, so every notch turned anywhere but exactly on them walked the view off
+them while the card still said it was following. While somebody is followed, the
+three gestures that zoom without choosing where — the wheel, a pinch, a double
+click — zoom about the middle of the view, which is where the follow has already
+put them. And your own card is lifted to the top of the panel: on a server with
+thirty people on it, the one card anybody looks for first is their own.
+
+**A preset starts out naming a family of blocks.** The map's form offers the
+block's code with its variant number widened into a `*`, so one preset covers
+every stage of grass rather than one of them. See the mod's 0.31.0, which offers
+the same starting pattern in the in-game window.
+
+## 0.30.1
+
+**Deploy note:** the viewer is the half that changed; the mod ships at 0.30.1
+alongside it, unchanged. Nothing is cleared and nothing is redrawn.
+
+**Zooming while following somebody walked the map off them.** Clicking a player's
+card keeps the map on them, and the wheel was deliberately left alone — changing
+how close you are looking is not choosing to look somewhere else. But Leaflet
+zooms about the pointer, which is the right answer for a map somebody is reading
+and the wrong one for a map that is keeping up with a player: every notch turned
+anywhere but exactly on them moved the view a little further off, while the card
+went on saying it was following. Measured on the real thing, one notch at the
+edge of an 800x600 map moved the middle seven blocks.
+
+While somebody is followed, the three gestures that zoom without choosing where —
+the wheel, a pinch, a double click — now zoom about the middle of the view, which
+is where the follow has already put them. So a wheel turned anywhere on the map
+zooms into the person you are following. It is told to Leaflet as an option rather
+than corrected afterwards, so the zoom goes where it was aimed instead of jumping
+back on every notch, and the map is put back on them as the zoom settles, since
+they walk on between polls.
+
+Dragging still ends the follow, and so does clicking the same card again.
+
+**A followed player logging out left the map zooming about its middle for
+nobody.** Following was a name held in a variable and cleared by hand in one
+place, which was fine while the name was all it decided. It now decides what a
+wheel turn means as well, so it is written through one function that settles both.
+
+## 0.30.0
+
+**Deploy note:** the change is the mod's; the service moves with it and carries
+one new thing of its own — a `[commands]` section in the settings file. Nothing is
+cleared, no map is redrawn and no palette is thrown away. A settings file written
+before this keeps working exactly as it did: an absent `[commands]` means the
+defaults, which are what the mod was already enforcing.
+
+**Who may run each `wl` command is now the operator's to decide.** It was fixed in
+the code: `login` and `mark` for anybody, everything else for an admin, and no way
+to say otherwise short of rebuilding. A server that wants its moderators to be
+able to export, or wants nobody but an admin to ask a client for anything, now
+says so:
+
+```toml
+[commands]
+login = "player"      # a link to your own page of the map
+mark = "player"       # a marker where you are standing
+portrait = "player"   # ask a client for a picture of its player
+palette = "player"    # ask a client for the map's block colours
+icons = "player"      # ask a client for the marker pictures
+export = "admin"      # write the surface of every loaded chunk
+status = "admin"      # the whole of what state the map is in
+service = "admin"     # start and stop the map service
+```
+
+Those are the defaults, and they draw the line where the old code drew it with two
+exceptions: asking a client for a palette or for the marker pictures no longer
+takes an admin. It never needed one. Whose colours win is decided when the answer
+arrives and not when the ask goes out — an admin's replace what is stored, and
+anybody else's only fill gaps — so requiring an admin to *ask* bought nothing and
+cost a map on every server whose operator does not play on it.
+
+Any privilege the game knows works in place of `admin` and `player`, so a server
+with a moderator role can name it. A name the game does not know is refused to
+everyone but an admin and said in the log: a typo locks a command rather than
+opening it.
+
+`witchlight -c <file> -S` rewrites a settings file with the new section in it, at
+the cost of any comments in that file. Nothing does it unasked, so an upgraded
+server keeps the file it has and the defaults above.
+
+## 0.29.1
+
+**Deploy note:** the service half is the one that changed; the mod ships at 0.29.1
+alongside it, unchanged. Nothing is cleared and nothing is redrawn.
+
+**Every size the page can be set to is set in one place.** How large the player
+list, the windows and the map buttons are drawn was set in the profile window,
+while how large a marker and its name are drawn was set in the accessibility
+panel — on the reasoning that the first three are a preference and the last two
+are about eyes. It is the same question either way, and splitting it meant
+somebody making the page bigger found half the answer with nothing to say the
+other half was behind a different button. All five are under **Size** in the
+accessibility panel now: the markers first, being what is on the map, then the
+interface over it. What anybody has already set is kept — the sizes are stored
+against what they size, not against where the slider was.
+
+The panel scrolls once it is taller than the screen, which three more sliders is
+enough to make it on a short window.
+
+## 0.29.0
+
+**Deploy note:** both halves, upgraded together — pairs with mod 0.29.0, which is
+where the palette's new field and the surface fix come from. Nothing is cleared.
+The stored zoom levels redraw once when the repaired palette arrives, which is the
+usual few seconds of blank map and happens once.
+
+**Ground waiting on a colour is no longer drawn as unexplored ground.** A palette
+entry with no colour meant two things at once — a block that draws nothing, and a
+block whose colour the mod could not work out — and this painted both of them the
+same near-black it paints a world nobody has walked into. Bare soil is in the
+second group, which is the block a player uncovers every time they dig, so the map
+went black in exactly the places the world had changed and stayed that way until
+an admin sent a palette by hand.
+
+The mod now says which kind of colourless an entry is, and there are three
+readings instead of two: a block that draws nothing is left as bare ground, a block
+the palette has never heard of stays loud magenta because that is a bug in the
+export, and a block waiting on a colour is drawn as earth and takes the slope
+shading like any other terrain. A pit dug through it still shows its own shape. A
+palette written before the mod recorded the difference reads exactly as it did
+before, so nothing repaints until a palette that knows the answer arrives.
+
+**The surface line counts them apart.** `96% painted, 4% nothing to draw, 0%
+waiting on a colour, 0% unknown blocks` — the third figure is the one that says
+the map is missing a colour rather than missing terrain, and the count is said on
+load so it is in the log before anyone thinks to ask. Nothing here can repair one;
+the mod asks a player's client, by itself, and this watches the palette change
+under it as it always did.
 
 ## 0.28.1
 

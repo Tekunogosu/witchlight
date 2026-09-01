@@ -29,9 +29,6 @@ const MOST_WAITING: usize = 64;
 /// The most a marker's name may be. Longer is a paragraph, not a name.
 const LONGEST_TITLE: usize = 128;
 
-/// The most an icon's name may be. Longer is not one of the game's.
-const LONGEST_ICON: usize = 64;
-
 /// One marker, as it travels to the mod.
 ///
 /// The same nine fields whether it is a marker being made or one being changed:
@@ -286,20 +283,19 @@ fn css_colour(said: &str) -> Option<String> {
 
 /// An icon name that could be a file this service serves.
 ///
-/// The same rule the icon route applies, and for the same reason: a name arriving
-/// from a page reaches a path, and a path is not a thing to be trusting about.
-/// Empty is the game's own default rather than a refusal — a form nobody chose a
+/// Asked of the one place that decides it, rather than spelled out again: a name
+/// arriving from a page reaches a path, and a rule about paths with two copies is
+/// a rule with two answers. It had two, and they disagreed about capitals — a
+/// marker made with `Gravestone` was stored happily and then drawn as nothing,
+/// because the address that would serve the picture refuses that name.
+///
+/// Empty is the game's own default rather than a refusal: a form nobody chose a
 /// picture on is a plain marker, not an error.
 fn stored_name(said: &str) -> Option<String> {
     if said.is_empty() {
         return Some("circle".to_owned());
     }
-    if said.len() > LONGEST_ICON {
-        return None;
-    }
-    said.chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-        .then(|| said.to_owned())
+    crate::urls::is_stored_name(said).then(|| said.to_owned())
 }
 
 #[cfg(test)]
@@ -332,6 +328,28 @@ mod tests {
         assert_eq!(wanted.uid, "uid-ada");
     }
 
+    /// The claim the icon field rests on.
+    ///
+    /// A picture taken here is a picture the map is about to be asked for at
+    /// `/icons/{name}.svg`, so a name this accepts and that address refuses is a
+    /// marker drawn as a hole. The two rules were written out separately and
+    /// disagreed about capitals, which is exactly that.
+    #[test]
+    fn every_picture_this_takes_is_one_the_map_can_serve() {
+        for name in ["circle", "gravestone", "star1", "my-mod_icon2", "Gravestone", "a/b", ""] {
+            let body = format!(r##"{{"Icon":"{name}","Color":"#ffffff","X":0,"Y":0,"Z":0}}"##);
+            let Ok(taken) = Marker::wanted("uid-ada", &body) else {
+                continue;
+            };
+            assert_eq!(
+                crate::urls::icon_name(&format!("/icons/{}.svg", taken.icon)),
+                Some(taken.icon.as_str()),
+                "{name:?} was taken as {:?}, which the icon route will not serve",
+                taken.icon
+            );
+        }
+    }
+
     #[test]
     fn a_marker_with_no_picture_gets_the_game_s_own() {
         let bare = r##"{"Color":"#ffffff","X":0,"Y":0,"Z":0}"##;
@@ -347,6 +365,7 @@ mod tests {
             (r##"{"Color":"#gggggg","X":0,"Y":0,"Z":0}"##, "a colour that is not hex"),
             (r##"{"Icon":"../secret","Color":"#ffffff","X":0,"Y":0,"Z":0}"##, "a path"),
             (r##"{"Icon":"a/b","Color":"#ffffff","X":0,"Y":0,"Z":0}"##, "a slash"),
+            (r##"{"Icon":"Gravestone","Color":"#ffffff","X":0,"Y":0,"Z":0}"##, "a capital"),
             ("not json at all", "not json"),
         ] {
             assert!(Marker::wanted("uid-ada", body).is_err(), "{why} must not be taken");

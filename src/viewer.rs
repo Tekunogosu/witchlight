@@ -18,6 +18,12 @@
 /// Everything the page looks like.
 pub const STYLE: &str = include_str!("viewer/style.css");
 
+/// The library the page extends. Here rather than at the route that serves it,
+/// so that everything a browser caches under an address is named in one place
+/// and the stamp below can cover all of it.
+pub const LEAFLET_JS: &str = include_str!("vendor/leaflet.js");
+pub const LEAFLET_CSS: &str = include_str!("vendor/leaflet.css");
+
 /// Everything the page does, in the order it is read.
 ///
 /// `work.js` is first because it opens the whole script with `'use strict'` — a
@@ -45,6 +51,38 @@ pub const SCRIPT: &str = concat!(
     include_str!("viewer/poll.js"),
 );
 
+/// What the page asks for its style, its scripts and its library under.
+///
+/// Their content, not this build's version. All four are served `immutable` for a
+/// year, so the address is the only thing that can tell a browser the copy it
+/// already has is stale — and tying that to a number somebody bumps by hand means
+/// a viewer changed without one is a viewer no browser will ever fetch again.
+///
+/// That is not hypothetical. A fix to the window resize shipped, the version did
+/// not move, and every browser that had opened the map once went on running the
+/// script with the bug in it — the fix was correct, served, and unreachable.
+/// Content cannot be forgotten about.
+#[must_use]
+pub fn stamp() -> &'static str {
+    static STAMP: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    STAMP.get_or_init(|| fingerprint(&[STYLE, SCRIPT, LEAFLET_JS, LEAFLET_CSS]))
+}
+
+/// FNV-1a over everything given, spelled in hex.
+///
+/// Not a security boundary — nobody is trying to forge a stylesheet. It only has
+/// to change whenever any byte of the page's assets does, and be the same for the
+/// same bytes so that a rebuild of unchanged sources does not throw away every
+/// browser's cache for nothing.
+fn fingerprint(parts: &[&str]) -> String {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for byte in parts.iter().flat_map(|part| part.bytes()) {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{hash:016x}")
+}
+
 /// The page, with the world's bounds and this build's number filled in.
 ///
 /// The version comes from the build rather than from `/info.json`, so what the
@@ -59,6 +97,7 @@ pub fn page((min_x, min_z, max_x, max_z): (i32, i32, i32, i32)) -> String {
         .replace("__MIN_Z__", &min_z.to_string())
         .replace("__MAX_X__", &max_x.to_string())
         .replace("__MAX_Z__", &max_z.to_string())
+        .replace("__ASSETS__", stamp())
         .replace("__VERSION__", env!("CARGO_PKG_VERSION"))
 }
 
@@ -77,6 +116,55 @@ mod tests {
         // only spelling they use. One left unfilled is `__VERSION__` on screen,
         // or a world whose bounds are a syntax error — both silent until seen.
         assert!(!page.contains("__"), "a placeholder was left unsubstituted in the page");
+    }
+
+    /// The property the whole cache rests on.
+    ///
+    /// Every asset the page names is served `immutable` for a year, so a browser
+    /// asks again only when the address changes. If a changed script can keep its
+    /// address, a fix can be correct, served, and permanently unreachable — which
+    /// is what happened when the address was the build's version number and
+    /// somebody changed the viewer without bumping it.
+    #[test]
+    fn a_changed_viewer_is_a_changed_address() {
+        assert_ne!(
+            fingerprint(&["function draw() {}"]),
+            fingerprint(&["function draw() { }"]),
+            "one byte of difference must reach the address"
+        );
+        // The joined script is one string, so a change in any file it is made of
+        // has to move it whichever file that was.
+        assert_ne!(fingerprint(&["a", "b"]), fingerprint(&["a", "c"]));
+        assert_ne!(fingerprint(&["style", "script"]), fingerprint(&["script", "style"]));
+    }
+
+    #[test]
+    fn unchanged_sources_keep_their_address() {
+        // A rebuild that changed nothing must not throw away every browser's copy
+        // of a third of a megabyte for the sake of it.
+        assert_eq!(fingerprint(&["a", "b"]), fingerprint(&["a", "b"]));
+        assert_eq!(stamp(), stamp());
+        assert_eq!(stamp().len(), 16, "hex, and all of it");
+    }
+
+    /// What a browser is told to keep forever must be addressed by what it is.
+    ///
+    /// The version number is a person's to bump and says what built the page; the
+    /// stamp is the bytes' own and says which bytes. Serving an asset under the
+    /// first is a promise the build cannot keep.
+    #[test]
+    fn every_asset_kept_forever_is_addressed_by_its_content() {
+        let page = page((0, 0, 0, 0));
+        for asset in ["/viewer.css", "/viewer.js", "/leaflet.css", "/leaflet.js"] {
+            assert!(
+                page.contains(&format!("{asset}?v={}", stamp())),
+                "{asset} must be asked for under the stamp"
+            );
+            assert!(
+                !page.contains(&format!("{asset}?v={}", env!("CARGO_PKG_VERSION"))),
+                "{asset} must not be asked for under the version"
+            );
+        }
     }
 
     #[test]

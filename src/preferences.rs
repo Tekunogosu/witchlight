@@ -149,9 +149,7 @@ impl Preferences {
             return false;
         }
 
-        if crate::files::replace(&self.path, body.as_bytes()).is_err() {
-            eprintln!("witchlight: could not write {}", self.path.display());
-        }
+        crate::files::publish(&self.path, body.as_bytes());
         true
     }
 

@@ -53,6 +53,14 @@ const ICONS: &[(&str, &str)] = chrome![
     "crosshair" @ "fill",
     // What a marker starts as, saved.
     "bookmarks-simple" @ "fill",
+    // The same thing offered rather than listed: the button on the marker form
+    // that opens the presets to fill it in from. A stack rather than the simple
+    // pair, so that "the presets" and "one of the presets" are not one picture.
+    "bookmarks" @ "fill",
+    // Take this preset and put it somewhere. A dropper is the mark for lifting
+    // what a thing is made of and applying it elsewhere, which is the whole of
+    // what the button does.
+    "eyedropper" @ "fill",
     // Every marker there is, as a list rather than as pins on a map.
     "list-bullets" @ "fill",
     // Whoever is looking, beside their name; and standing in for a portrait
@@ -95,28 +103,45 @@ pub fn icon(name: &str) -> Option<&'static str> {
 mod tests {
     use super::*;
 
+    /// Every mark the page asks for, read off the page rather than listed here.
+    ///
+    /// The style sheet is what turns a `mark-lock` class into a request for
+    /// `/chrome/lock.svg`, so it is the list of what the binary has to carry. A
+    /// third copy of that list written out in a test is a third thing to keep in
+    /// step, and the one that would have gone stale silently: a mark added to the
+    /// page and forgotten here is a control with a hole where its picture should
+    /// be, which reads as a broken build rather than a missing string.
+    fn asked_for() -> Vec<&'static str> {
+        let mut names: Vec<&str> = crate::viewer::STYLE
+            .match_indices("url(/chrome/")
+            .filter_map(|(at, _)| {
+                crate::viewer::STYLE[at + "url(/chrome/".len()..]
+                    .split(".svg)")
+                    .next()
+                    .filter(|name| !name.is_empty() && !name.contains(['(', ')', '/']))
+            })
+            .collect();
+        names.sort_unstable();
+        names.dedup();
+        names
+    }
+
     #[test]
     fn every_mark_the_furniture_wears_is_carried() {
-        // The page asks for these by name from three files, and a name that
-        // reaches nothing is a control with a hole where its mark should be —
-        // which looks like a broken build rather than a missing string.
-        for name in [
-            "scan",
-            "gear-six",
-            "map-pin-simple",
-            "crosshair",
-            "bookmarks-simple",
-            "list-bullets",
-            "user",
-            "person-arms-spread",
-            "x",
-            "trash",
-            "magnifying-glass",
-            "lock",
-            "users-three",
-            "caret-up",
-        ] {
+        let asked = asked_for();
+        assert!(asked.len() > 5, "the style sheet should name marks: found {asked:?}");
+        for name in asked {
             assert!(icon(name).is_some(), "the page asks for {name}");
+        }
+    }
+
+    #[test]
+    fn nothing_is_carried_that_the_page_never_asks_for() {
+        // An icon in the table nobody draws with is bytes in every binary and a
+        // name nobody will notice has stopped meaning anything.
+        let asked = asked_for();
+        for (name, _) in ICONS {
+            assert!(asked.contains(name), "{name} is carried and the page never asks for it");
         }
     }
 

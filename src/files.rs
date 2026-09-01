@@ -6,6 +6,7 @@
 //! That was spelled out at five call sites, which is five chances to leave one
 //! out; it is one function here and every caller is a thin call against it.
 
+use crate::log::warn;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -68,6 +69,21 @@ fn beside(path: &Path) -> PathBuf {
     let mut name = path.as_os_str().to_owned();
     name.push(".part");
     PathBuf::from(name)
+}
+
+/// Writes `body` where `path` is, and says on the log where it could not.
+///
+/// The three callers that publish a file nobody is standing over — the markers,
+/// what people have set for themselves, the address this answers at — each wrote
+/// the same two lines, and none of them can do anything about a failure beyond
+/// saying it happened. Saying it happened is therefore the whole of what they
+/// wanted, and it belongs with the writing. The reason travels with it: a refused
+/// write with no reason given is a fault nobody can act on, and two of the three
+/// were leaving it out.
+pub fn publish(path: &Path, body: &[u8]) {
+    if let Err(error) = replace(path, body) {
+        warn!("could not write {}: {error}", path.display());
+    }
 }
 
 /// When a file was last written, or nothing where there is no such file.

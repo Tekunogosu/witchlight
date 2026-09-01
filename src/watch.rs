@@ -18,6 +18,7 @@ use crate::columns::Region;
 use crate::files;
 use crate::palette::Palette;
 use crate::state::{State, region_times};
+use crate::log::{say, warn};
 
 /// How often to look for a newer export. The mod writes at most every thirty
 /// seconds, so this is far more attentive than it needs to be and still costs
@@ -103,7 +104,7 @@ impl State {
         if let Ok(mut held) = self.names.write() {
             *held = names;
         }
-        println!("witchlight: block names reloaded from disk — {count} named");
+        say!("block names reloaded from disk — {count} named");
     }
 
     /// Takes a new palette when one appears. Colours change for every tile, so
@@ -145,13 +146,16 @@ impl State {
         // palette arrives. The pyramid is left exactly as it is.
         if blank {
             let generation = self.bump(None);
-            eprintln!(
-                "witchlight: the palette that just arrived has no colours at all \
-                 (source {source}). The stored zoom levels are being kept as they are \
-                 and the finest level will not draw until a usable palette arrives — \
-                 an admin joining the game supplies one."
+            // One message rather than two: this runs on the watcher's clock,
+            // beside threads with lines of their own, and a fault split across
+            // two calls is a fault that arrives in two pieces with somebody
+            // else's news between them.
+            warn!(
+                "the palette that just arrived has no colours at all (source {source}). \
+                 The stored zoom levels are being kept as they are and the finest level \
+                 will not draw until a usable palette arrives — an admin joining the \
+                 game supplies one. Generation {generation}, tiles dropped."
             );
-            println!("witchlight: generation {generation}, tiles dropped");
             return;
         }
 
@@ -160,8 +164,8 @@ impl State {
         }
 
         let generation = self.bump(None);
-        println!(
-            "witchlight: palette reloaded from disk — {named} blocks, source {source} \
+        say!(
+            "palette reloaded from disk — {named} blocks, source {source} \
              (generation {generation}, tiles dropped)"
         );
         self.report_coverage();
@@ -214,11 +218,7 @@ impl State {
         // Coverage is a pass over every column in the world, which is worth it
         // when the palette changes because that changes every tile. A region
         // arriving changes one square, so it is reported by count alone.
-        println!(
-            "witchlight: {} regions reloaded — {} chunks",
-            touched.len(),
-            self.chunks()
-        );
+        say!("{} regions reloaded — {} chunks", touched.len(), self.chunks());
     }
 
     /// Takes the regions whose files have moved, and drops the ones that have

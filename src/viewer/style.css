@@ -179,6 +179,11 @@ html, body { margin: 0; height: 100%; overflow: hidden;
 .bar > i { display: block; height: 100%; }
 .bar.hp > i { background: #e05a5a; }
 .bar.food > i { background: #74a94a; }
+/* Whatever else this server shows for a player. The colour is the operator's and
+   is written on the element, so this is only the fallback for an entry that named
+   none — and the bar is the same shape as the two above it, because a mod's mana
+   is the same kind of thing as the game's health. */
+.bar.extra > i { background: var(--accent); }
 /* How large the page draws itself, in three parts that answer to different
    things: who is online, the windows, and the buttons that work the map.
    Scaled rather than restyled — every one of these is an overlay positioned
@@ -237,6 +242,7 @@ html, body { margin: 0; height: 100%; overflow: hidden;
 #access-panel { position: absolute; left: 0; top: calc(100% + 6px); z-index: 900;
            width: 170px; padding: 10px 12px; background: var(--surface-veil);
            border: 1px solid var(--line); border-radius: var(--round); display: none;
+           max-height: 70vh; overflow-y: auto;
            box-shadow: 0 1px 5px rgba(0, 0, 0, .65); }
 #access-panel.open { display: block; }
 #access-panel label { display: flex; align-items: center; gap: var(--gap-2);
@@ -253,10 +259,11 @@ html, body { margin: 0; height: 100%; overflow: hidden;
                   margin: 0; font: inherit; font-size: var(--font-md);
                   color: var(--text); background: none; border: 1px solid transparent;
                   border-radius: var(--round-sm); cursor: pointer; }
-/* A slider in a panel this narrow reads down rather than across: the label takes
-   the line and the track takes the one under it, where the profile window has
-   room to set the two side by side. */
-#access-panel .slide { display: block; padding: var(--gap-1) 0; }
+/* The track sits under its own label rather than beside it: the panel is 170px
+   wide, and a label and a usable track do not both fit across that.
+   The margin is scoped to the panel because `#access-panel input` — which zeroes
+   it for the checkboxes — outranks a class selector and would otherwise close the
+   gap back up. */
 #access-panel .slide input { margin-top: var(--gap-1); }
 #access-panel button:hover { background: var(--surface-bar); color: #fff; }
 #access-panel button[aria-pressed="true"] { background: var(--surface-on);
@@ -387,6 +394,39 @@ html, body { margin: 0; height: 100%; overflow: hidden;
    dark is a smudge. Escape empties the box, and the mark says so nowhere. */
 .find input::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; }
 #compose .field { margin-bottom: var(--gap-3); }
+/* A field with a control beside it. The box takes what is left, so the button
+   stays the same size whatever the window is dragged to. `relative`, because the
+   flyout it opens is placed against this row rather than against the window —
+   the row is what the choice belongs to. */
+#compose .field.beside { display: flex; align-items: center; gap: var(--gap-1);
+                         position: relative; }
+#compose .field.beside > input { flex: 1; min-width: 0; }
+/* Square, and the height of the box it stands against. */
+.aside { display: grid; place-items: center; width: 30px; height: 30px; flex: none;
+         padding: 0; background: var(--surface-bar); color: var(--text-dim);
+         border: 1px solid var(--line); border-radius: var(--round); cursor: pointer; }
+.aside:hover { color: var(--accent); border-color: var(--accent-soft); }
+.aside[aria-expanded="true"] { color: var(--accent); background: var(--surface-on);
+                               border-color: var(--accent-soft); }
+.aside .chrome { width: 15px; height: 15px; }
+/* Out to the side of the window, not over the form it is feeding: the point of
+   choosing a preset here is to watch it land in the fields, and a list covering
+   them would hide the answer.
+   Fixed, and put where it goes by `placePresetPick`. A window scrolls its own
+   contents, so a list hung off the side of one from the cascade is a list
+   clipped at the window's edge — which is what this looked like when it lived
+   inside the form. Above every window, since it is opened from the one in
+   front. */
+/* Scaled with the windows it stands beside. It is furniture of the same kind, so
+   an accessibility setting that grows one has to grow the other — a list at its
+   own size next to a window at half again reads as a different page. */
+.flyout { display: none; position: fixed; z-index: 2000;
+          transform: scale(var(--scale-panel)); transform-origin: top left;
+          width: 250px; max-width: 60vw; max-height: 260px; overflow-y: auto;
+          padding: var(--gap-1);
+          background: var(--surface-veil); border: 1px solid var(--line);
+          border-radius: var(--round); box-shadow: 0 4px 14px rgba(0, 0, 0, .55); }
+.flyout.open { display: block; }
 #compose .field > span { display: block; font-size: var(--font-sm);
                          letter-spacing: .07em; text-transform: uppercase;
                          color: var(--text-dim); margin-bottom: var(--gap-1); }
@@ -434,6 +474,8 @@ html, body { margin: 0; height: 100%; overflow: hidden;
 .mark-map-pin-simple { -webkit-mask-image: url(/chrome/map-pin-simple.svg); mask-image: url(/chrome/map-pin-simple.svg); }
 .mark-crosshair { -webkit-mask-image: url(/chrome/crosshair.svg); mask-image: url(/chrome/crosshair.svg); }
 .mark-bookmarks-simple { -webkit-mask-image: url(/chrome/bookmarks-simple.svg); mask-image: url(/chrome/bookmarks-simple.svg); }
+.mark-bookmarks { -webkit-mask-image: url(/chrome/bookmarks.svg); mask-image: url(/chrome/bookmarks.svg); }
+.mark-eyedropper { -webkit-mask-image: url(/chrome/eyedropper.svg); mask-image: url(/chrome/eyedropper.svg); }
 .mark-list-bullets { -webkit-mask-image: url(/chrome/list-bullets.svg); mask-image: url(/chrome/list-bullets.svg); }
 .mark-magnifying-glass { -webkit-mask-image: url(/chrome/magnifying-glass.svg);
                          mask-image: url(/chrome/magnifying-glass.svg); }
@@ -544,8 +586,7 @@ html, body { margin: 0; height: 100%; overflow: hidden;
 .note { margin: 0 0 var(--gap-3); font-size: var(--font-md);
         line-height: var(--lead); color: var(--text-dim); }
 .note code { color: var(--text-dim); }
-.slide { display: grid; grid-template-columns: 88px 1fr; gap: var(--gap-2);
-         align-items: center; min-height: 24px; padding: var(--gap-1) 0;
+.slide { display: block; min-height: 24px; padding: var(--gap-1) 0;
          font-size: var(--font-md); color: var(--text); }
 .slide input { accent-color: var(--accent); width: 100%; margin: 0; }
 /* Whoever is looking, in the bar over their own settings. */
@@ -578,6 +619,14 @@ html, body { margin: 0; height: 100%; overflow: hidden;
    across rather than counted down, and anything stronger reads as two kinds of
    row. Written last of the three so that hovering a row, and the row a window is
    open on, both still say so over the top of it. */
+/* Two things a preset row can do rather than one, so the trailing column is a
+   pair. Only this list: a marker row's columns are its own. */
+#preset-list .listed, .flyout .listed { grid-template-columns: 22px 1fr auto auto; }
+.flyout .listed { grid-template-columns: 22px 1fr; }
+.listed .use { background: none; border: none; padding: 4px; cursor: pointer;
+               color: var(--text-off); display: grid; place-items: center; }
+.listed .use:hover { color: var(--accent); }
+.listed .use .chrome { width: 14px; height: 14px; }
 .listed.alt { background: #ffffff08; }
 .listed:hover { background: var(--surface-bar); }
 .listed:hover .said b { color: var(--accent); }
@@ -927,18 +976,21 @@ body.show-marker-names .marker .tag { display: block; }
    floor rather than a height: two lines of type come to within a pixel of 26, and
    a box filled to its own edges reads as text that has outgrown it, so it is let
    grow by the few pixels that put an even margin above and below. */
-#when .clock { display: flex; align-items: center; min-height: 26px; width: auto;
-               padding: 2px 4px; background: var(--surface); color: var(--text);
-               cursor: default; }
-.leaflet-touch #when .clock { min-height: 30px; }
-#when .when-part { display: flex; flex-direction: column; justify-content: center;
-                   padding: 0 7px; min-width: 58px; }
-#when .when-part + .when-part { border-left: 1px solid var(--line); }
-#when b { font-weight: normal; font-size: var(--font-md); line-height: 1.15;
-          color: var(--text); font-variant-numeric: tabular-nums;
-          white-space: nowrap; }
-#when span { font-size: 10px; line-height: 1.1; color: var(--text-off);
-             white-space: nowrap; }
+/* The clock wears the readout's clothes, because it answers the same shape of
+   question: a handful of values, each with a quiet word over it. It was a box of
+   its own that looked nearly like the one at the bottom of the screen, and
+   nearly is the worst of both — two widgets to keep in step and a page that
+   reads as though it were assembled from parts. The columns inside it are the
+   readout's own `.read` and `.key`, so there is one answer to what a labelled
+   value looks like. */
+#when .clock { display: flex; align-items: flex-start; gap: 13px; width: auto;
+               padding: 7px 12px; background: var(--surface-veil); color: var(--text);
+               border: 1px solid var(--line); border-radius: var(--round);
+               box-shadow: 0 1px 5px rgba(0, 0, 0, .65); cursor: default; }
+/* A date and a time are as wide as they are; the readout's fixed digit widths
+   are there to stop a coordinate twitching under a moving pointer, and nothing
+   here moves that fast. */
+#when .read b { min-width: 0; white-space: nowrap; }
 
 /* Shown only to somebody who can act on them — see `showAccount`. Both are
    about markers you own, and owning anything means the game named you. */

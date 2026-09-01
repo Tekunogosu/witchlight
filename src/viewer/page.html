@@ -2,8 +2,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Witchlight</title>
-<link rel="stylesheet" href="/leaflet.css">
-<link rel="stylesheet" href="/viewer.css?v=__VERSION__">
+<link rel="stylesheet" href="/leaflet.css?v=__ASSETS__">
+<link rel="stylesheet" href="/viewer.css?v=__ASSETS__">
 <!-- What a reader who cannot separate two colours is shown instead.
      Daltonisation, not simulation: the map is not made to look the way a colour
      blind reader sees it, it is repainted so that what they cannot tell apart
@@ -57,9 +57,19 @@
     <h2 id="compose-title">New marker</h2>
     <button class="shut" type="button" title="Close" aria-label="Close"><span class="chrome masked mark-x" aria-hidden="true"></span></button>
   </div>
-  <div class="field">
+  <!-- The name, and the presets it could be filled in from. The button sits with
+       the name because a preset's first answer is what the thing is called, and
+       the list it opens is a flyout rather than a second window: it is a choice
+       made inside this form and handed straight back to it. -->
+  <div class="field beside">
     <input id="marker-name" type="text" maxlength="128" placeholder="Name"
            aria-label="Marker name">
+    <button id="marker-preset-pick" class="aside" type="button"
+            title="Fill this in from one of your presets"
+            aria-label="Fill this in from one of your presets"
+            aria-haspopup="listbox" aria-expanded="false" aria-controls="preset-pick">
+      <span class="chrome masked mark-bookmarks" aria-hidden="true"></span>
+    </button>
   </div>
   <div class="field">
     <div id="colours" class="swatches"></div>
@@ -103,6 +113,11 @@
     <button id="marker-save" class="word go" type="button">Save</button>
   </div>
 </div>
+
+<!-- Outside the window it belongs to, and placed against it from script. A
+     window scrolls its own contents, and a list hung off the side of something
+     that scrolls is a list clipped at the edge of it. -->
+<div id="preset-pick" class="flyout" role="listbox" aria-label="Your presets"></div>
 
 <div id="presets" class="window">
   <div class="bar">
@@ -179,11 +194,6 @@
   <label class="line"><input id="want-presets" type="checkbox">New markers become presets by default</label>
   <label class="line"><input id="want-private" type="checkbox">New markers are private by default</label>
   <p id="want-said" class="note"></p>
-  <!-- Filled from the one table that holds every size the page can be set to,
-       so a slider's range is stated where the size is and not here as well. -->
-  <div class="field"><span>Size</span>
-    <div id="profile-scales"></div>
-  </div>
   <p id="profile-said"></p>
   <div class="deed">
     <a id="sign-out" href="/logout">Sign out</a>
@@ -224,5 +234,5 @@ window.witchlight = {
   bounds: { minX: __MIN_X__, minZ: __MIN_Z__, maxX: __MAX_X__, maxZ: __MAX_Z__ },
 };
 </script>
-<script src="/leaflet.js"></script>
-<script src="/viewer.js?v=__VERSION__"></script>
+<script src="/leaflet.js?v=__ASSETS__"></script>
+<script src="/viewer.js?v=__ASSETS__"></script>

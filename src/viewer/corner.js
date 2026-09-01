@@ -112,9 +112,12 @@ whenBar.id = 'when';
  *  furniture rather than as a control and a label that happen to be adjacent. */
 const whenBox = L.DomUtil.create('div', 'tool clock', whenBar);
 const when = {};
-for (const [over, said] of [['year', 'date'], ['season', 'time']]) {
-  const column = L.DomUtil.create('div', 'when-part', whenBox);
-  when[over] = L.DomUtil.create('span', '', column);
+for (const [over, said, apart] of [['year', 'date', false], ['season', 'time', true]]) {
+  // The readout's own parts, not a second set that resembles them: `.read` is a
+  // labelled value and `.read.apart` is the rule between one group and the next,
+  // which is exactly what these two columns are.
+  const column = L.DomUtil.create('div', apart ? 'read apart' : 'read', whenBox);
+  when[over] = L.DomUtil.create('span', 'key', column);
   when[said] = L.DomUtil.create('b', '', column);
   when[over].textContent = '';
   when[said].textContent = '—';

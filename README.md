@@ -63,12 +63,76 @@ markers_public = false                # whether a marker nobody has chosen for i
 autostart = true                      # whether the server mod starts this itself
 announce = true                       # whether it tells joining players where the map is
 announce_url = ""                     # and what to tell them; empty means work it out
+
+[commands]                            # who may run each `wl` command in game
+login = "player"                      # a link to your own page of the map
+mark = "player"                       # a marker where you are standing
+portrait = "player"                   # ask a client for a picture of its player
+palette = "player"                    # ask a client for the map's block colours
+icons = "player"                      # ask a client for the marker pictures
+export = "admin"                      # write the surface of every loaded chunk
+status = "admin"                      # the whole of what state the map is in
+service = "admin"                     # start and stop the map service
 ```
 
-`autostart`, `announce` and `announce_url` are the settings here that this program
-never reads. They say who starts the map and who is told about it, which are
-questions about the pair rather than about either half, so they sit with everything
-else about the map instead of in a file of their own.
+`autostart`, `announce`, `announce_url`, `[commands]` and `[bars]` are the settings
+here that this program never reads. They say who starts the map, who is told about it and who
+may ask it for things, which are questions about the pair rather than about either
+half, so they sit with everything else about the map instead of in a file of their
+own.
+
+`[bars]` adds a bar to each player's card beside their health and their food:
+
+```toml
+[bars]
+mana = "Mana | entitybehavior-resource-currentmana_rm | entitybehavior-resource-totalmaxmana_rm | #7c5cff"
+```
+
+A mod that gives players a resource keeps it on the player's own entity, in the
+same watched attributes the game keeps health and hunger in — so the mod half
+reads a number out of it without knowing anything about the mod that put it
+there, and nothing anywhere compiles against one. Each entry is
+`name | value attribute | maximum attribute | colour | group`; the key names the
+entry and the entries are drawn in the order the file gives them.
+
+The group is what the map files the bar under in **Bar display**, where a reader
+switches bars on and off — the section builds itself from the bars a server has
+actually sent, so it says nothing on a server with none. Left out of the entry,
+the mod looks for an installed mod whose id appears in the attribute's own name
+and uses that. It answers for a mod that names its attributes after itself and
+for no other: an entity attribute is a name and a number with no record of what
+wrote it, so this cannot be worked out properly and the entries that ship name
+their group outright.
+
+**A settings file with no `[bars]` section gets the two written above**, the way
+one with no `[commands]` gets the command defaults — a file written before this
+existed behaves as a fresh one, so upgrading and seeing nothing means the feature
+does not apply rather than that it is broken. A `[bars]` section somebody has
+emptied is them asking for none.
+
+**A bar is drawn only for a player who has one.** A missing attribute, or one
+whose maximum is zero, is a player this does not apply to — somebody who has not
+taken up magic, a server without that mod — and no bar is the right picture of
+that. It is also what makes naming an attribute nothing on this server keeps cost
+nothing. The two entries written on a first run are what a stock
+[Rustbound Magic](https://mods.vintagestory.at/rustboundmagic) uses.
+
+`[commands]` takes `admin`, `player`, or any privilege the game itself knows —
+`controlserver`, `chat`, `commandplayer` and the rest — which is how a server gives
+a command to its moderators rather than to everybody or to nobody. A name the game
+does not know is refused to everyone but an admin and said so in the log, so a typo
+locks a command rather than opening it. The defaults split the commands that change
+what the server is doing from the ones that answer a question about the person
+typing them.
+
+Loosening the last three costs less than it looks. What a client sends back is
+taken on the same terms whoever asked for it: only an admin's palette or marker
+picture may replace one already chosen, and anybody else's fills gaps. So these
+decide who may ask, not who may repaint the map. `wl status` prints the table in
+force, which is the only place a server upgrading into this can see it — a settings
+file written before `[commands]` existed says nothing about it, and nothing here
+rewrites a file an operator owns just to add a section of defaults it is already
+following. `witchlight -c <file> -S` writes one, at the cost of any comments in it.
 
 Set `announce_url` on any server a player cannot reach directly. Left empty, the
 address given out is the one this machine can see for itself, which is right on a
@@ -114,7 +178,7 @@ witchlight 0.2.0
 witchlight: reading /srv/vs/data/witchlight
 witchlight: 635 chunks, 864x1024 blocks
 witchlight: palette from client, 45418 blocks, 26 colour maps (game 1.22.7)
-witchlight: surface 96% painted, 4% nothing to draw, 0% unknown blocks
+witchlight: surface 96% painted, 4% nothing to draw, 0% waiting on a colour, 0% unknown blocks
 witchlight: serving on http://192.168.1.158:8080  (on your network)
 ```
 
@@ -126,18 +190,34 @@ column and classifies it, which separates "no terrain" from "no palette": a map
 reading `0% painted, 100% nothing to draw` has plenty of terrain and no colours for
 it. Below 25% painted it says so explicitly on stderr.
 
+**Waiting on a colour** is a third answer and a narrower one: those columns hold a
+block the palette says draws something and has no colour for. They are painted as
+bare earth rather than as unexplored ground, because they are terrain — the map is
+missing a colour, not the world. The mod repairs them by asking a player's client,
+which is why this is reported rather than warned about; nothing here can fix one.
+
+**Nothing to draw** is painted the same way and counted apart, which is the honest
+picture of it: the column was exported and its height is known, and only the block
+on top has nothing to show — air over a column with nothing under it, or one of
+the invisible placeholders a large structure stands beside its real block. To an
+operator reading coverage the two are different (one colour is being fetched and
+the other will never exist); to anybody looking at the map they are both ground
+whose top cannot be drawn. **Only a column nobody exported reads as absence.**
+Painted otherwise it put black specks through finished terrain, each one reading
+as a hole in a world that has no hole in it.
+
 Reloads are narrated the same way, so a palette arriving mid-session is visible:
 
 ```
 witchlight: palette reloaded from disk — 45418 blocks, source client (generation 7, tiles dropped)
-witchlight: surface 96% painted, 4% nothing to draw, 0% unknown blocks
+witchlight: surface 96% painted, 4% nothing to draw, 0% waiting on a colour, 0% unknown blocks
 ```
 
 ## What it reads
 
 | File | What it is |
 |---|---|
-| `palette.json` | every block: its id in this world, an average colour, and which colour maps tint it |
+| `palette.json` | every block: its id in this world, an average colour or which kind of colourless it is, and which colour maps tint it |
 | `colormaps/*.png` | the game's lookup images, sampled by climate and by season |
 | `columns/r.{x}.{z}.msqr` | per chunk column: top block, its height, the climate there, and the chunk's season |
 | `tiles/{level}/…` | **written here**, the zoom levels above one block per pixel |
@@ -177,6 +257,16 @@ nothing was posted rather than nothing was found. Every interface is written up 
 ## How a pixel is decided
 
 One pixel is one block. The column's block id gives a base colour from the palette.
+
+A block the palette cannot draw is drawn anyway, and which of three ways depends on
+what the palette says about it. A block it has never heard of is **loud magenta**,
+because that is a bug in the export rather than a fact about the world. A block it
+says draws nothing — air, an invisible helper — is left as **bare ground**, which
+is what is there. A block it says draws something and has no colour for is
+**earth**, taking the slope shading like any other terrain: the map is waiting on a
+colour, and the ground a player just dug should read as ground while it waits. The
+three used to be two, and dug soil shared a colour with a world nobody had walked
+into.
 
 Grass, leaves and water ship as **greyscale masks** in the game's assets, so a
 tinted block is multiplied by its colour maps: the climate map sampled at that

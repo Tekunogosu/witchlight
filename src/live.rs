@@ -186,9 +186,7 @@ impl Live {
             return true;
         }
 
-        if crate::files::replace(&self.path, body.as_bytes()).is_err() {
-            eprintln!("witchlight: could not write {}", self.path.display());
-        }
+        crate::files::publish(&self.path, body.as_bytes());
 
         *markers = taken;
         true
@@ -294,11 +292,7 @@ fn sorted(body: &str) -> Option<Markers> {
         body: body.to_owned(),
         colors: array(read.colors.as_deref()),
         open: array(read.public.as_deref()),
-        owned: read
-            .private
-            .into_iter()
-            .map(|(uid, markers)| (uid, array(Some(&markers))))
-            .collect(),
+        owned: arrays(read.private),
     })
 }
 
@@ -306,8 +300,9 @@ fn sorted(body: &str) -> Option<Markers> {
 ///
 /// An array rather than an object is a mod older than this build, which posted
 /// every player to everybody. Refused rather than read that way: the two halves
-/// must match on minor, and quietly showing every position to everybody would be
-/// exactly the thing an operator turned the setting off to prevent.
+/// ship as one release and carry one version, so this is a mis-deployment — and
+/// quietly showing every position to everybody would be exactly the thing an
+/// operator turned the setting off to prevent.
 fn watching(body: &str) -> Option<Seen> {
     if !body.trim_start().starts_with('{') {
         return None;
@@ -317,17 +312,19 @@ fn watching(body: &str) -> Option<Seen> {
     Some(Seen {
         online: read.online,
         open: array(read.public.as_deref()),
-        owned: read
-            .private
-            .into_iter()
-            .map(|(uid, players)| (uid, array(Some(&players))))
-            .collect(),
-        grouped: read
-            .grouped
-            .into_iter()
-            .map(|(uid, uids)| (uid, array(Some(&uids))))
-            .collect(),
+        owned: arrays(read.private),
+        grouped: arrays(read.grouped),
     })
+}
+
+/// One of the mod's by-uid maps, each of its arrays as the text that arrived.
+///
+/// The three the mod posts — whose markers, whose positions, whose group — are
+/// the same shape read the same way, and were three copies of the same four
+/// lines. What is in an array is never looked at here; what this does is make
+/// sure each one is an array at all.
+fn arrays(held: HashMap<String, Box<RawValue>>) -> HashMap<String, String> {
+    held.into_iter().map(|(uid, list)| (uid, array(Some(&list)))).collect()
 }
 
 /// One of the mod's arrays as text, or an empty one where it sent nothing.

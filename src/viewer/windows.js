@@ -65,6 +65,7 @@ function settleWindow(panel, left, top) {
   panel.style.left = `${Math.round(x)}px`;
   panel.style.top = `${Math.round(y)}px`;
   windowsAt.set(panel, { x, y });
+  followTheWindow(panel);
 }
 
 /**
@@ -159,7 +160,7 @@ function growBy(panel) {
       high: panel.offsetHeight,
       x: event.clientX,
       y: event.clientY,
-      scale: scales.panel || 1,
+      scale: scaleOf('panel'),
     };
 
     grip.setPointerCapture(event.pointerId);
@@ -232,6 +233,17 @@ function openWindow(panel, middle) {
   }
 }
 
+/**
+ * Anything placed against a window rather than inside it, moved with it.
+ *
+ * Called wherever a window's position is written, which is one place — see
+ * `settleWindow`. A list beside a window that stayed put while the window was
+ * dragged would be a list beside nothing.
+ */
+function followTheWindow(panel) {
+  if (panel === composer && presetPick.classList.contains('open')) placePresetPick();
+}
+
 function shutWindow(panel) {
   panel.classList.remove('open');
   if (panel === composer) forgetCompose();
@@ -250,6 +262,37 @@ function buildWindows() {
   // with a size nobody can use is a corner that does nothing when pulled.
   for (const panel of [presetPanel, directory]) growBy(panel);
 }
+
+/**
+ * Escape shuts the window in front, one press at a time.
+ *
+ * Down the stack rather than all at once: three windows open are three things
+ * somebody put there, and a key that swept the lot would take two of them away
+ * from a reader who wanted one gone. The one in front is the one being looked
+ * at, so it is the one that goes, and the next press finds the next.
+ *
+ * Which is in front is the number `raiseWindow` deals out, so this reads the
+ * same order the eye does rather than the order the page happens to list them.
+ *
+ * A press already answered by something smaller is left alone: a search box
+ * empties itself, a block list closes, the preset flyout shuts. Each of those
+ * stops the press where it happens, so what reaches here is a press nothing
+ * else wanted.
+ */
+addEventListener('keydown', event => {
+  if (event.key !== 'Escape' || event.defaultPrevented) return;
+
+  let front = null;
+  for (const panel of document.querySelectorAll('.window.open')) {
+    if (!front || Number(panel.style.zIndex || 0) >= Number(front.style.zIndex || 0)) {
+      front = panel;
+    }
+  }
+  if (!front) return;
+
+  event.preventDefault();
+  shutWindow(front);
+});
 
 // A browser narrowed under a window that was near the right edge leaves it off
 // the screen, which is the same unreachable bar arrived at from the other

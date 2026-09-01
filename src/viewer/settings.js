@@ -132,6 +132,11 @@ const settings = {
     document.body.classList.toggle('show-marker-names', on);
   } },
   hover: { label: 'Marker info on hover', on: false, apply: () => {} },
+  // Typing a name is the fastest way to reach a preset, and the box is already
+  // under the pointer — so the list is offered there as well as behind the
+  // button beside it. Somebody who names markers rather than picking them turns
+  // it off and the box is only a box again.
+  presetSearch: { label: 'Preset name search', on: true, apply: () => {} },
   // Not about what is on the map but about what a reader can do with it, so it
   // is switched in the other panel. Still an entry here, because what a reader
   // has chosen is one table however many panels show it.
@@ -155,28 +160,50 @@ const settings = {
  * what they set about markers themselves, which lives on the service against
  * their uid.
  *
- * Each entry says what it is called, which custom property carries it, the range
- * it may be set to, and which panel offers it. The sliders are built from this
- * rather than written out in the markup, so adding a size is an entry here and
- * nothing else — the three that were written out in both places had to be kept
- * in step by hand.
+ * Each entry says what it is called, which custom property carries it, and the
+ * range it may be set to. The sliders are built from this rather than written out
+ * in the markup, so adding a size is an entry here and nothing else — the three
+ * that were written out in both places had to be kept in step by hand.
  *
- * The two the accessibility panel offers are about a marker. One is eighteen
- * pixels of silhouette, which is the size the game itself draws and is small for
- * anybody reading a screen at arm's length; its name is eleven, which is smaller
- * still. Both are multipliers rather than second sets of sizes, so where a mark
- * sits on its block and where its name sits above the mark are answered once and
- * scale with them.
+ * All of them are offered in one place, which is the accessibility panel. Three
+ * of them used to be in the profile window instead, on the reasoning that how
+ * large the interface is drawn is a preference and how large a marker is drawn is
+ * a question about eyes. It is the same question either way, and splitting it
+ * meant somebody making the page bigger found half the answer and had to know
+ * there was another panel holding the rest.
+ *
+ * The order is the order they are shown in: what is on the map first, then what
+ * is drawn over it.
+ *
+ * The marker pair are multipliers rather than second sets of sizes, so where a
+ * mark sits on its block and where its name sits above the mark are answered once
+ * and scale with them. A mark is eighteen pixels of silhouette, which is the size
+ * the game itself draws and is small for anybody reading a screen at arm's
+ * length; its name is eleven, which is smaller still.
  */
 const scales = {
+  mark: { label: 'Markers', css: '--mark-scale', at: 1, least: 0.6, most: 3 },
+  markName: { label: 'Marker names', css: '--mark-name-scale', at: 1, least: 0.6, most: 3 },
   people: { label: 'Player list', css: '--scale-people', at: 1, least: 0.7, most: 1.8 },
   panel: { label: 'Windows', css: '--scale-panel', at: 1, least: 0.7, most: 1.8 },
   tools: { label: 'Map buttons', css: '--scale-tools', at: 1, least: 0.7, most: 1.8 },
-  mark: { label: 'Markers', css: '--mark-scale', at: 1, least: 0.6, most: 3, panel: 'access' },
-  markName: {
-    label: 'Marker names', css: '--mark-name-scale', at: 1, least: 0.6, most: 3, panel: 'access',
-  },
 };
+
+/**
+ * The multiplier one part of the page is currently drawn at.
+ *
+ * The table above holds a description of each size — its label, the CSS variable
+ * it writes, the range a reader may set it to — and `at` is the number in force.
+ * Reading the row where the number was meant is a mistake nothing reports: the
+ * arithmetic divides by an object, gets NaN, and writes `NaNpx`, which a browser
+ * discards without a word. That is exactly what stopped a window being resizable
+ * by its corner, so asking for a multiplier is one function with one answer and
+ * every caller is a thin call against it.
+ */
+function scaleOf(part) {
+  const scale = scales[part];
+  return scale && Number.isFinite(scale.at) ? scale.at : 1;
+}
 
 function applyScales() {
   for (const scale of Object.values(scales)) {
@@ -215,11 +242,9 @@ function sliderFor(part) {
   return label;
 }
 
-/** The sliders one panel offers, in the order the table gives them. */
-function slidersIn(which) {
-  return Object.entries(scales)
-    .filter(([, scale]) => (scale.panel || 'profile') === which)
-    .map(([part]) => sliderFor(part));
+/** Every size the page can be set to, in the order the table gives them. */
+function sizeSliders() {
+  return Object.keys(scales).map(sliderFor);
 }
 
 /**
@@ -250,6 +275,92 @@ function layer(group, on) {
 }
 
 /** A switch, wherever it is shown. */
+/**
+ * The bars this map has seen a server send, and what each is filed under.
+ *
+ * Learnt from the live data rather than declared, because which of them exist is
+ * the server's answer and this page never sees the settings file that decides
+ * it. A bar nobody on this server has is a switch nobody needs.
+ *
+ * Kept by name, since that is what a card's bars are keyed by and what a reader
+ * chose about. The group is only a heading.
+ */
+const barsSeen = new Map();
+
+/** Which bars a reader has switched off, by name. */
+let barsHidden = {};
+
+/** Whether a bar is one this reader wants drawn. */
+function barWanted(name) {
+  return barsHidden[name] !== true;
+}
+
+/**
+ * Takes note of a bar the server sent, and offers a switch for it.
+ *
+ * The panel is redrawn only when the set of them changes, which is on the first
+ * post that carries a new one and never again — a rebuild on every post would
+ * take the switch out from under a pointer twice a second.
+ */
+function noticeBar(reading) {
+  const name = String(reading.Name || '');
+  if (!name || barsSeen.has(name)) return;
+  barsSeen.set(name, String(reading.Group || ''));
+  drawBarSwitches();
+}
+
+/**
+ * The Bar Display section, rebuilt from what has been seen.
+ *
+ * Grouped by what the server said the bar belongs to, with everything it could
+ * not place under a heading that says so rather than under a guess. The whole
+ * section is absent until a bar turns up, because a heading over nothing is a
+ * feature this server does not have described as one it does.
+ */
+function drawBarSwitches() {
+  const panel = document.getElementById('bar-display');
+  if (!panel) return;
+
+  panel.textContent = '';
+  panel.style.display = barsSeen.size === 0 ? 'none' : '';
+  if (barsSeen.size === 0) return;
+
+  const heading = document.createElement('h2');
+  heading.textContent = 'Bar display';
+  panel.append(heading);
+
+  const byGroup = new Map();
+  for (const [name, group] of barsSeen) {
+    if (!byGroup.has(group)) byGroup.set(group, []);
+    byGroup.get(group).push(name);
+  }
+
+  // Named groups first and in the order they were met; the unplaced last, since
+  // "everything else" is only meaningful after the things it is not.
+  const groups = [...byGroup.keys()].filter(group => group !== '');
+  if (byGroup.has('')) groups.push('');
+
+  for (const group of groups) {
+    const under = document.createElement('p');
+    under.className = 'note';
+    under.textContent = group || 'Not from a mod this map could name';
+    panel.append(under);
+
+    for (const name of byGroup.get(group)) {
+      panel.append(switchFor({
+        label: name,
+        on: barWanted(name),
+        apply: on => {
+          if (on) delete barsHidden[name];
+          else barsHidden[name] = true;
+          remember();
+          drawWho();
+        },
+      }));
+    }
+  }
+}
+
 function switchFor(setting) {
   const label = document.createElement('label');
   const box = document.createElement('input');
@@ -277,6 +388,13 @@ function buildSettings() {
   // pinned 92 pixels down the page, which is a guess at where the cog is — one
   // that a scaled toolbar or a second button in the row makes wrong, and which
   // left it floating well below the control it belongs to.
+  // What a server shows for a player beyond health and food, which is nothing
+  // until one turns up — so the section is built empty and fills itself in.
+  const bars = document.createElement('div');
+  bars.id = 'bar-display';
+  bars.style.display = 'none';
+  panel.append(bars);
+
   cogBar.append(panel);
 
   // What the map can be asked to do differently for one pair of eyes: the
@@ -307,13 +425,14 @@ function buildSettings() {
     access.append(button);
   }
 
-  // The marker sizes were three named steps and are a pair of sliders: what is
-  // large enough is a judgement about one person's eyes and one person's screen,
-  // and three guesses at it are three ways to be nearly right.
+  // Every size in one place. What is large enough is a judgement about one
+  // person's eyes and one person's screen, and it is the same judgement about a
+  // marker as about the panel beside it — so the markers come first, being what
+  // is on the map, and the interface follows.
   const sized = document.createElement('h2');
   sized.textContent = 'Size';
   access.append(sized);
-  access.append(...slidersIn('access'));
+  access.append(...sizeSliders());
 
   accessBar.append(access);
   applyFilter();
@@ -345,7 +464,9 @@ function remember() {
     // every reload is what makes a preference not worth having.
     const sizes = {};
     for (const [part, scale] of Object.entries(scales)) sizes[part] = scale.at;
-    const state = { scales: sizes, filter: filterName, vision: visionName, sorting };
+    const state = {
+      scales: sizes, filter: filterName, vision: visionName, sorting, bars: barsHidden,
+    };
     for (const [key, setting] of Object.entries(settings)) state[key] = setting.on;
     localStorage.setItem('witchlight.settings', JSON.stringify(state));
   } catch (error) {
@@ -372,6 +493,9 @@ function recall() {
       // hundredth of size cannot be reached to put right.
       if (Number.isFinite(size) && size >= scale.least && size <= scale.most) scale.at = size;
     }
+    // Only the ones switched off are kept, so a bar this server gains tomorrow
+    // starts on rather than starting hidden because nobody had heard of it.
+    if (state.bars && typeof state.bars === 'object') barsHidden = { ...state.bars };
     if (filters[state.filter]) filterName = state.filter;
     if (visions[state.vision]) visionName = state.vision;
     // Checked against what this build can sort by rather than taken as read: the

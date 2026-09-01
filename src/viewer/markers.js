@@ -221,8 +221,15 @@ async function askForMarker() {
   // A change keeps the marker's own name, so the page has to watch for the
   // marker's shape rather than for a name it has not seen before.
   changedShape = editing ? JSON.stringify(marker) : null;
-  sayHere(editing ? 'Waiting for the game server to change it…'
-                  : 'Waiting for the game server to make it…');
+
+  // Everything the form would have to be rebuilt from, taken before it closes.
+  handedOver = { marker, editing, ground: clicked, alsoPreset, pattern: markerPattern.value };
+
+  // And closed. Waiting for the game to make it is the map's business rather
+  // than the person's: they marked a place, and the next thing they want is to
+  // mark another one — not a window sitting over the map for the second or two
+  // the round trip takes. It comes back only if the marker never arrives.
+  handedToTheGame();
 }
 
 /**
@@ -372,7 +379,7 @@ async function rememberPreset(marker) {
   // What was typed, or failing that what was clicked. Nothing to key it on is
   // not worth stopping a marker over — the marker is the point and the preset is
   // the extra.
-  const pattern = markerPattern.value.trim() || (clicked && clicked.code) || '';
+  const pattern = markerPattern.value.trim() || widened(clicked && clicked.code);
   if (pattern === '') return;
 
   const kept = {
@@ -390,30 +397,43 @@ async function rememberPreset(marker) {
 
 /** The marker asked for has arrived, so the form has nothing left to do. */
 function landed() {
+  // A marker that was handed over closed the form when it was handed over, and
+  // by now somebody may have opened it again on the next one. Only a form still
+  // standing on what it asked for — which is what a deletion leaves — is a form
+  // this has any business closing.
+  const handed = handedOver !== null;
   awaiting = null;
   removing = false;
   changedShape = null;
+  handedOver = null;
   markerSave.disabled = false;
   markerDrop.disabled = false;
-  closeCompose();
+  if (!handed) closeCompose();
 }
 
 /** It has not arrived, and the service says whether anything is collecting. */
 async function lost() {
   const going = removing;
+  // Named, because the form it was asked from is closed by now and may have been
+  // opened again on the next marker — "the marker" is only unambiguous while the
+  // one it means is the one on screen.
+  const named = handedOver && handedOver.marker.Title !== UNNAMED
+    ? `“${handedOver.marker.Title}”`
+    : 'The marker';
   awaiting = null;
   removing = false;
   changedShape = null;
   markerSave.disabled = false;
   markerDrop.disabled = false;
+  putTheFormBack();
   await pollMe();
   if (viewer && viewer.Waiting > 0) {
     sayHere('The game server has not collected it. Is it running?', true);
     return;
   }
   sayHere(going
-    ? 'The marker was taken but is still there. Try again.'
-    : 'The marker was taken but has not appeared. Try again.', true);
+    ? `${named} was taken but is still there. Try again.`
+    : `${named} was taken but has not appeared. Try again.`, true);
 }
 
 /** Whether what this page is waiting on has happened yet. */

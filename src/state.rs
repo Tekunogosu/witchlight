@@ -28,6 +28,7 @@ use crate::pending::Pending;
 use crate::preferences::Preferences;
 use crate::pyramid::{self, TILE};
 use crate::render::{Renderer, UNMAPPED};
+use crate::log::{say, warn};
 
 /// Which tiles one generation changed, as level and coordinates. `None` means
 /// every tile: a new palette recolours the lot, and so does a gap in the history.
@@ -112,7 +113,7 @@ impl State {
             history: Mutex::new(VecDeque::new()),
             stale: Mutex::new(HashSet::new()),
             cache: Mutex::new(Cache::new(cache_bytes)),
-            sea_level: std::sync::atomic::AtomicI32::new(crate::facts::world(data).sea_level),
+            sea_level: std::sync::atomic::AtomicI32::new(crate::facts::read(data).sea_level),
             data: data.to_path_buf(),
             columns,
         })
@@ -126,8 +127,7 @@ impl State {
 
     /// Takes the sea level again, for a world that has said it since start-up.
     pub fn resettle_sea_level(&self) {
-        self.sea_level
-            .store(crate::facts::world(&self.data).sea_level, Ordering::Relaxed);
+        self.sea_level.store(crate::facts::read(&self.data).sea_level, Ordering::Relaxed);
     }
 
     pub fn generation(&self) -> u64 {
@@ -201,7 +201,7 @@ impl State {
         let (Ok(world), Ok(palette)) = (self.world.read(), self.palette.read()) else {
             return;
         };
-        println!("witchlight: surface {}", Renderer::new(&world, &palette, self.sea_level()).coverage().summary());
+        say!("surface {}", Renderer::new(&world, &palette, self.sea_level()).coverage().summary());
     }
 
     /// One tile as PNG bytes, drawn or read as its level requires.
@@ -298,10 +298,7 @@ impl State {
             && let Ok(regions) = self.regions.lock()
         {
             let behind = pyramid::behind(&self.data, &regions, levels);
-            println!(
-                "witchlight: the world now needs {levels} levels — {} regions to rebuild",
-                behind.len()
-            );
+            say!("the world now needs {levels} levels — {} regions to rebuild", behind.len());
             changed.extend(behind);
         }
 
@@ -331,7 +328,7 @@ impl State {
 
                 let parent = pyramid::downsample(&below, TILE, UNMAPPED);
                 if let Err(error) = pyramid::write(&self.data, level, px, pz, &parent) {
-                    eprintln!("witchlight: {error}");
+                    warn!("{error}");
                 }
                 repainted.push((level, px, pz));
             }
@@ -349,10 +346,7 @@ impl State {
         // reloaded are in this list too, so a viewer fetches each changed tile
         // once rather than once per level of the pyramid that touched it.
         let generation = self.bump(Some(repainted.clone()));
-        println!(
-            "witchlight: {} tiles rebuilt across {levels} levels (generation {generation})",
-            repainted.len()
-        );
+        say!("{} tiles rebuilt across {levels} levels (generation {generation})", repainted.len());
     }
 
     /// The level 0 tiles waiting to have their levels rebuilt, and none left

@@ -31,6 +31,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
+use crate::log::warn;
 
 const MAGIC: &[u8; 4] = b"MSQR";
 pub const VERSION: u16 = 4;
@@ -180,18 +181,29 @@ struct Extent {
 }
 
 impl Extent {
-    fn of(chunks: &HashMap<(i32, i32), Chunk>) -> Option<Self> {
-        let mut extent: Option<Self> = None;
-        for &(cx, cz) in chunks.keys() {
-            extent = Some(match extent {
-                None => Self { min: (cx, cz), max: (cx, cz) },
-                Some(held) => Self {
-                    min: (held.min.0.min(cx), held.min.1.min(cz)),
-                    max: (held.max.0.max(cx), held.max.1.max(cz)),
-                },
-            });
+    /// The extent of one chunk on its own.
+    fn around((cx, cz): (i32, i32)) -> Self {
+        Self { min: (cx, cz), max: (cx, cz) }
+    }
+
+    /// The smallest extent holding both of these.
+    fn with(self, other: Self) -> Self {
+        Self {
+            min: (self.min.0.min(other.min.0), self.min.1.min(other.min.1)),
+            max: (self.max.0.max(other.max.0), self.max.1.max(other.max.1)),
         }
-        extent
+    }
+
+    /// The smallest extent holding every one of them, or nothing where there are
+    /// none. One widening, however the pieces arrive: a region's chunks widen it
+    /// the same way one region's reach widens the world's, and the two written
+    /// out separately were two chances to compare the wrong corner.
+    fn covering(all: impl IntoIterator<Item = Self>) -> Option<Self> {
+        all.into_iter().reduce(Self::with)
+    }
+
+    fn of(chunks: &HashMap<(i32, i32), Chunk>) -> Option<Self> {
+        Self::covering(chunks.keys().copied().map(Self::around))
     }
 }
 
@@ -205,6 +217,16 @@ pub struct World {
 }
 
 impl World {
+    /// A world nothing has been exported into yet.
+    ///
+    /// Named rather than written out, so that a field added here is a field the
+    /// tests get too — the last one was added in two places and the second was
+    /// noticed only because it would not compile.
+    #[must_use]
+    pub fn empty() -> Self {
+        Self { edge: 0, chunks: HashMap::new(), regions: HashMap::new() }
+    }
+
     /// Whether anything has been exported yet.
     #[must_use]
     pub fn is_empty(&self) -> bool {
@@ -214,11 +236,7 @@ impl World {
     /// Loads every region in an export directory.
     pub fn load(exports: &Path) -> Result<Self> {
         let dir = columns_dir(exports);
-        let mut world = Self {
-            edge: 0,
-            chunks: HashMap::new(),
-            regions: HashMap::new(),
-        };
+        let mut world = Self::empty();
 
         for path in region_files(&dir)? {
             // One unreadable region costs that square, not the run. A region being
@@ -226,7 +244,7 @@ impl World {
             // picks it up.
             match Region::read(&path) {
                 Ok(region) => world.apply(region),
-                Err(error) => eprintln!("witchlight: skipping {}: {error}", path.display()),
+                Err(error) => warn!("skipping {}: {error}", path.display()),
             }
         }
 
@@ -289,17 +307,7 @@ impl World {
     /// World bounds in blocks: the area worth drawing.
     #[must_use]
     pub fn bounds(&self) -> (i32, i32, i32, i32) {
-        let mut whole: Option<Extent> = None;
-        for extent in self.regions.values().flatten() {
-            whole = Some(match whole {
-                None => *extent,
-                Some(held) => Extent {
-                    min: (held.min.0.min(extent.min.0), held.min.1.min(extent.min.1)),
-                    max: (held.max.0.max(extent.max.0), held.max.1.max(extent.max.1)),
-                },
-            });
-        }
-
+        let whole = Extent::covering(self.regions.values().flatten().copied());
         let Some(whole) = whole.filter(|_| !self.chunks.is_empty()) else {
             return (0, 0, 0, 0);
         };
@@ -356,21 +364,14 @@ mod tests {
     /// this pairing, and it lives here rather than in the page that depends on it.
     #[test]
     fn a_world_worth_drawing_always_knows_its_chunk_edge() {
-        let mut world = World {
-            edge: 0,
-            chunks: HashMap::new(),
-            regions: HashMap::new(),
-        };
+        let mut world = World::empty();
         assert_eq!(world.edge, 0);
         assert_eq!(world.bounds(), (0, 0, 0, 0));
 
         world.apply(region((0, 0), (0, 0)));
         let (min_x, min_z, max_x, max_z) = world.bounds();
         assert!(world.edge > 0, "a world with terrain in it knows how wide a chunk is");
-        assert!(
-            max_x > min_x && max_z > min_z,
-            "and reports bounds the viewer will draw on"
-        );
+        assert!(max_x > min_x && max_z > min_z, "and reports bounds the viewer will draw on");
 
         // The other direction: nothing exported is degenerate bounds, which is
         // what stops the page building a grid it could not fix afterwards.

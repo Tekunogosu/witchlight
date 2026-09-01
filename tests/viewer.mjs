@@ -42,9 +42,21 @@ function lift(name) {
   throw new Error(`${name} is not brace balanced`);
 }
 
-/** Lifts one arrow-function constant, up to the semicolon that ends it. */
+/** Lifts one object constant, brace-matched, so the table is the real one. */
+function liftObject(name) {
+  const at = source.indexOf(`const ${name} = {`);
+  if (at < 0) throw new Error(`the viewer no longer has an object called ${name}`);
+  let depth = 0;
+  for (let i = source.indexOf('{', at); i < source.length; i++) {
+    if (source[i] === '{') depth++;
+    else if (source[i] === '}' && --depth === 0) return `${source.slice(at, i + 1)};`;
+  }
+  throw new Error(`${name} is not brace balanced`);
+}
+
+/** Lifts one single-statement constant, up to the semicolon that ends it. */
 function liftConst(name) {
-  const at = source.indexOf(`const ${name} = (`);
+  const at = source.indexOf(`const ${name} = `);
   if (at < 0) throw new Error(`the viewer no longer has a constant called ${name}`);
   const end = source.indexOf(';', at);
   if (end < 0) throw new Error(`${name} is not terminated`);
@@ -103,6 +115,13 @@ const windows = new Function(`
     style: {},
     getBoundingClientRect: () => ({ width: ${WINDOW_WIDE}, height: 400, left: 0, top: 0 }),
   };
+  // Whatever a window carries with it, lifted rather than stubbed out: the point
+  // of clamping a window on screen is that everything hung off it goes too, and
+  // a settle that quietly stopped calling this would still pass.
+  const composer = { other: true };
+  const presetPick = { classList: { contains: () => false } };
+  const placePresetPick = () => {};
+  ${lift('followTheWindow')}
   ${lift('settleWindow')}
   return (left, top, wide, high) => {
     innerWidth = wide; innerHeight = high;
@@ -114,7 +133,8 @@ const windows = new Function(`
 // Which preset a block gets. `*` stands for any run of characters and everything
 // else is itself; the whole point of a pattern somebody types by hand is that
 // they can check it by eye, so there is no escaping and no other metacharacter.
-const { fits } = new Function(`${lift('fits')} return { fits };`)();
+const { fits, widened } = new Function(
+  `${lift('fits')} ${lift('widened')} return { fits, widened };`)();
 
 // Walking the block list with the arrows. Both ends wrap, and from nowhere the
 // two directions must not both land on the first row — which is what makes the
@@ -142,6 +162,59 @@ const hovering = new Function(`
     click: () => forgetHovered(),
     marker,
     isWaiting: () => hoverTimer !== null,
+  };
+`)();
+
+// Following somebody, and what a wheel turn means while you are. Leaflet zooms
+// about the pointer, so a map that is keeping up with a player walks off them a
+// notch at a time unless it is told otherwise — and told back afterwards, which
+// is the half a player logging out used to skip.
+const followed = new Function(`
+  // A touch gesture this browser does not have, on purpose: putting back what was
+  // there is not the same as putting back \`true\`.
+  const map = { options: { scrollWheelZoom: true, touchZoom: false, doubleClickZoom: true } };
+  let following = null;
+  const showFollowed = () => {};
+  const keepUp = () => {};
+  ${liftConst('ZOOMS_WITHOUT_CHOOSING')}
+  ${liftConst('zoomsAboutThePointer')}
+  ${lift('keeping')}
+  ${lift('follow')}
+  return { zoom: map.options, keeping, follow, whom: () => following };
+`)();
+
+// The bars a server shows for a player beyond health and food. They are made as
+// they turn up and taken away when they stop, because which ones a player has is
+// a fact about that player — and a row of empty bars is a worse answer than none.
+const cards = new Function(`
+  const made = [];
+  const element = (name) => ({
+    className: '', style: {}, title: '', kids: [],
+    append(...more) { this.kids.push(...more); more.forEach(m => { m.parent = this; }); },
+    remove() { if (this.parent) this.parent.kids = this.parent.kids.filter(k => k !== this); },
+  });
+  const document = { createElement: element };
+  // The real noticing and the real filtering, because "a bar switched off is not
+  // drawn but is still offered" is the whole of what the settings section rests
+  // on — and a stub would agree with itself rather than with the page.
+  const barsSeen = new Map();
+  let barsHidden = {};
+  const drawBarSwitches = () => {};
+  ${lift('barWanted')}
+  ${lift('noticeBar')}
+  ${lift('bar')}
+  ${lift('fill')}
+  ${lift('fillExtra')}
+  const card = { extra: element(), bars: new Map() };
+  return {
+    put: bars => fillExtra(card, bars),
+    names: () => [...card.bars.keys()],
+    drawn: () => card.extra.kids.length,
+    widthOf: name => card.bars.get(name)?.inner.style.width,
+    colourOf: name => card.bars.get(name)?.inner.style.background,
+    offered: () => [...barsSeen.entries()].map(([n, g]) => g ? n + '/' + g : n),
+    hide: name => { barsHidden[name] = true; },
+    show: name => { delete barsHidden[name]; },
   };
 `)();
 
@@ -485,6 +558,33 @@ check('dragged past the bottom, the bar stays reachable',
 check('and a smaller browser pulls it back in',
   windows(940, 770, 400, 300).x <= 340 && windows(940, 770, 400, 300).y <= 270);
 
+console.log('\na window is resized by the number a size is set to');
+// The corner divides the distance a hand moved by the scale the window is drawn
+// at. The table holds a row per size and the number is one field of it, so
+// reading the row gives an object: the division yields NaN, `NaNpx` is written
+// to the style, and a browser discards that without a word — a resize handle
+// that answers to nothing at all, with nothing anywhere saying why. Nothing in
+// the arithmetic is wrong, which is why only the answer catches it.
+const scaleOf = new Function(`${liftObject('scales')}
+${lift('scaleOf')}
+return scaleOf;`)();
+
+check('a size in the table reads as a number', Number.isFinite(scaleOf('panel')));
+check('and so does every other one',
+  Object.keys(new Function(`${liftObject('scales')} return scales;`)())
+    .every(part => Number.isFinite(scaleOf(part))));
+check('a part nobody has a size for still divides', scaleOf('no-such-part') === 1);
+
+// The sum the grip does, with the real reader: a hand moved fifty pixels across
+// a window drawn at its ordinary size asks for fifty more pixels of window.
+const WINDOW_FLOOR = 240;
+const grownTo = 340 + (150 - 100) / scaleOf('panel');
+check('a drag of fifty pixels asks for fifty more', grownTo === 390);
+check('so what reaches the style is a length rather than NaN',
+  /^\d+px$/.test(`${Math.round(Math.max(grownTo, WINDOW_FLOOR))}px`));
+check('and the grip asks through that one reader',
+  /scale: scaleOf\('panel'\)/.test(source));
+
 console.log('\nnothing in the page is declared twice');
 // A second `function foo()` at the top level silently replaces the first, and
 // every existing call then reaches the wrong one. That is how the settings
@@ -520,6 +620,34 @@ check('a pattern with no star must reach the end',
 check('a bare star takes everything', fits('*', COPPER));
 check('case is not the point', fits('GAME:ORE-*-NATIVECOPPER-*', COPPER));
 check('nothing matches nothing', !fits('', COPPER) && !fits(COPPER, '') && !fits(null, COPPER));
+
+console.log('\na preset starts out wide enough to name a whole block family');
+// The number in a block code is its variant, so a preset kept against the exact
+// code answers for one stage of grass out of eight. What is offered instead is
+// the same code with the number widened — and what it produces has to be a
+// pattern `fits` reads the wanted way, which is why the two are checked together.
+for (const [code, pattern, also] of [
+  ['game:tallgrass-3', 'game:tallgrass-*', 'game:tallgrass-7'],
+  ['game:leaves-grown7-oak', 'game:leaves-grown*-oak', 'game:leaves-grown1-oak'],
+  ['game:water-still-7', 'game:water-still-*', 'game:water-still-1'],
+]) {
+  check(`${code} widens to ${pattern}`, widened(code) === pattern, widened(code));
+  check(`  and names ${code}`, fits(widened(code), code));
+  check(`  and ${also} with it`, fits(widened(code), also));
+}
+// A preset is still allowed to name exactly one thing, and a code with no
+// variant in it is one — widening it further would be inventing a wish.
+check('a code with no number is its own pattern',
+  widened('game:soil-low-sparse') === 'game:soil-low-sparse');
+check('  and names only itself',
+  fits(widened('game:soil-low-sparse'), 'game:soil-low-sparse')
+  && !fits(widened('game:soil-low-sparse'), 'game:soil-low-none'));
+// The star is a character in a text field, so somebody may put it anywhere —
+// that is the same grammar `fits` already reads, and the default is only where
+// it starts.
+check('a star moved by hand still matches what it names',
+  fits('game:ore-*', COPPER) && fits('*-basalt', COPPER));
+check('nothing widens to nothing', widened('') === '' && widened(null) === '');
 
 console.log("\na marker's details come down on their own");
 {
@@ -646,6 +774,87 @@ console.log('\nevery button in a window\'s last row says what it is');
     }
   }
   check(`${dressed.join(', ')} — and nothing bare`, bare.length === 0, bare.join(', '));
+}
+
+console.log('\na zoom lands on whoever is being followed');
+{
+  const { zoom, keeping, follow, whom } = followed;
+  const pointer = { ...zoom };
+
+  follow('sam');
+  check('following aims every zoom at the middle of the view, where they are',
+    zoom.scrollWheelZoom === 'center'
+    && zoom.touchZoom === 'center'
+    && zoom.doubleClickZoom === 'center',
+    JSON.stringify(zoom));
+  check('  and the map is keeping sam', whom() === 'sam');
+
+  follow('sam');
+  check('clicking them again lets go, and the pointer has the wheel back',
+    zoom.scrollWheelZoom === pointer.scrollWheelZoom
+    && zoom.doubleClickZoom === pointer.doubleClickZoom,
+    JSON.stringify(zoom));
+  check('  including a gesture this browser never had',
+    zoom.touchZoom === false, String(zoom.touchZoom));
+  check('  and nobody is being kept', whom() === null);
+
+  // The one that was wrong: a followed player logging out cleared the name and
+  // left the map zooming about its middle for nobody.
+  follow('sam');
+  keeping(null);
+  check('a followed player logging out gives the wheel back too',
+    zoom.scrollWheelZoom === pointer.scrollWheelZoom && whom() === null,
+    JSON.stringify(zoom));
+
+  follow('sam');
+  follow('robin');
+  check('following somebody else keeps aiming at the middle',
+    whom() === 'robin' && zoom.scrollWheelZoom === 'center');
+}
+
+console.log("\na player's card carries whatever else the server shows for them");
+{
+  cards.put([{ Name: 'Mana', Value: 42, Max: 120, Colour: '#7c5cff', Group: 'Rustbound Magic' }]);
+  check('a bar arrives and is drawn', cards.names().join() === 'Mana' && cards.drawn() === 1);
+  check('  filled to its share', cards.widthOf('Mana') === '35.0%', cards.widthOf('Mana'));
+  check('  in the colour the server asked for',
+    cards.colourOf('Mana') === '#7c5cff', cards.colourOf('Mana'));
+
+  cards.put([
+    { Name: 'Mana', Value: 60, Max: 120, Colour: '#7c5cff', Group: 'Rustbound Magic' },
+    { Name: 'Magic', Value: 25, Max: 100, Colour: '#d8a24a', Group: 'Rustbound Magic' },
+  ]);
+  check('a second joins it', cards.names().join() === 'Mana,Magic' && cards.drawn() === 2);
+  check('  and the first is written into rather than made again',
+    cards.widthOf('Mana') === '50.0%', cards.widthOf('Mana'));
+
+  // Spending the lot is not the same as not having it, and the two used to look
+  // the same from here: an empty bar and no bar are different sentences.
+  cards.put([{ Name: 'Mana', Value: 0, Max: 120, Colour: '#7c5cff', Group: 'Rustbound Magic' }]);
+  check('a bar that stops arriving is taken away',
+    cards.names().join() === 'Mana' && cards.drawn() === 1);
+  check('  while one at empty stays', cards.widthOf('Mana') === '0.0%');
+
+  cards.put([]);
+  check('and a player with none has none', cards.names().length === 0 && cards.drawn() === 0);
+
+  // What the settings section is built from, and what it does when it is used.
+  check('every bar seen is offered, under what it came from',
+    cards.offered().join() === 'Mana/Rustbound Magic,Magic/Rustbound Magic',
+    cards.offered().join());
+
+  cards.hide('Mana');
+  cards.put([
+    { Name: 'Mana', Value: 60, Max: 120, Colour: '#7c5cff', Group: 'Rustbound Magic' },
+    { Name: 'Magic', Value: 25, Max: 100, Colour: '#d8a24a', Group: 'Rustbound Magic' },
+  ]);
+  check('a bar switched off is not drawn', cards.names().join() === 'Magic', cards.names().join());
+  check('  and is still offered, or it could not be switched back on',
+    cards.offered().length === 2);
+
+  cards.show('Mana');
+  cards.put([{ Name: 'Mana', Value: 60, Max: 120, Colour: '#7c5cff', Group: 'Rustbound Magic' }]);
+  check('and switching it back on draws it again', cards.names().join() === 'Mana');
 }
 
 console.log(failed === 0 ? '\nall checks passed' : `\n${failed} FAILED`);

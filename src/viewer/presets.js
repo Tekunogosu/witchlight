@@ -7,6 +7,8 @@
 
 const presetPanel = document.getElementById('presets');
 const presetFind = document.getElementById('preset-find');
+const presetPick = document.getElementById('preset-pick');
+const presetPickButton = document.getElementById('marker-preset-pick');
 
 /**
  * Whether a preset's pattern names this block.
@@ -34,6 +36,29 @@ function fits(pattern, code) {
   // and `rock` would both answer for every rock there is.
   const last = parts[parts.length - 1];
   return last === '' || named.endsWith(last);
+}
+
+/**
+ * The pattern a block code is remembered as, unless somebody says otherwise.
+ *
+ * Block codes carry their variant as a number — `game:leaves-grown7-oak`,
+ * `game:water-still-7`, `game:tallgrass-3` — so a preset kept against one of
+ * them answers for exactly one of the eight, or the seven. Keeping a preset for
+ * grass meant keeping it again for every stage of grass, which is one preset
+ * written down eight times and eight rows to delete when it changes.
+ *
+ * So the number is where the wildcard goes by default, and `game:leaves-grown*-oak`
+ * covers the lot. It is a character in a text field either way: move it, add
+ * another, or take it out to name one block exactly. A code with no number in it
+ * is its own pattern — there is nothing to widen, and widening it further would
+ * be guessing at what somebody meant.
+ *
+ * The mod does the same thing to the pattern the in-game window opens on, so a
+ * preset made from a key press and one made from a right click start out the
+ * same — see `BlockPattern.Widened`.
+ */
+function widened(code) {
+  return code ? String(code).replace(/\d+/g, '*') : '';
 }
 
 /** The first preset that names this block, or nothing. */
@@ -75,6 +100,16 @@ function drawPresets() {
     open.setAttribute('aria-label', `Edit preset ${preset.Title || preset.Pattern}`);
     open.addEventListener('click', () => editPreset(which));
 
+    // Two things a row can do, in the order they read: use this one, or lose it.
+    const use = document.createElement('button');
+    use.type = 'button';
+    use.className = 'use';
+    use.append(chromeMark('eyedropper'));
+    use.title = 'Put a marker on the map with this preset';
+    use.setAttribute(
+      'aria-label', `Place a marker with preset ${preset.Title || preset.Pattern}`);
+    use.addEventListener('click', () => placeWithPreset(which));
+
     const drop = document.createElement('button');
     drop.type = 'button';
     drop.className = 'shut';
@@ -83,7 +118,7 @@ function drawPresets() {
     drop.setAttribute('aria-label', `Delete preset ${preset.Title || preset.Pattern}`);
     drop.addEventListener('click', () => started(dropPreset(which), 'deleting the preset'));
 
-    line.append(drop);
+    line.append(use, drop);
     list.append(line);
   });
 
@@ -94,6 +129,167 @@ function drawPresets() {
   nothingFound(list, held.length === 0
     ? 'No presets yet. Tick "set as preset" when you save a marker.'
     : `None of your ${held.length} presets matches that.`);
+}
+
+/**
+ * Fills the marker form in from a preset.
+ *
+ * Everything a preset holds, not only its name: a preset is what a marker starts
+ * as, and half of one applied is a marker somebody has to finish by hand anyway.
+ * What it says nothing about — where the marker goes — is left exactly as it was.
+ *
+ * The pattern comes with it so that saving the marker as a preset again writes
+ * back to the same one rather than adding a second under the block's own code.
+ */
+function fillFromPreset(preset) {
+  markerName.value = preset.Title || '';
+  chosenColour = preset.Color || chosenColour;
+  chosenPicture = preset.Icon || chosenPicture;
+  privately = preset.Private === true || preset.Private === false
+    ? preset.Private
+    : privateByDefault();
+  if (preset.Pattern) markerPattern.value = preset.Pattern;
+  showFields();
+  drawColours();
+  drawPictures();
+}
+
+/**
+ * Opens the marker form on a preset and arms the map for where it goes.
+ *
+ * The way round the presets window was missing. It could make a preset and
+ * change one, and the only way to use one was to right-click the block it names
+ * and hope — which is no use at all for a preset whose pattern names a block you
+ * are not standing on, or for putting a second marker somewhere you already know.
+ *
+ * Armed rather than placed, because a preset says what a marker is and nothing
+ * about where: the one question left is the one the map answers with a click.
+ */
+function placeWithPreset(which) {
+  const preset = (mine.Presets || [])[which];
+  if (!preset) return;
+
+  openCompose(null, null);
+  fillFromPreset(preset);
+  setPlacing(true);
+  sayHere('Click the map to put it somewhere.');
+}
+
+/**
+ * The presets, offered inside the marker form rather than listed beside it.
+ *
+ * A flyout and not a window: this is a choice made in the middle of filling one
+ * form in, handed straight back to it and gone. A window would have to be found,
+ * moved out of the way of the form it is feeding, and closed again.
+ *
+ * Drawn on every open rather than kept, because a preset made a minute ago in
+ * the window behind has to be in it.
+ *
+ * `looking` narrows it to what somebody has typed in the name box, which is the
+ * other way in — see `presetSearch`. Empty is everything, which is what the
+ * button beside the box asks for.
+ */
+function drawPresetPick(looking) {
+  presetPick.textContent = '';
+  const all = mine.Presets || [];
+  const held = looking
+    ? all.filter(preset => looksLike(looking, preset.Title, preset.Pattern))
+    : all;
+
+  if (all.length === 0) {
+    nothingFound(presetPick, 'No presets yet. Tick "set as preset" when you save a marker.');
+    return;
+  }
+  if (held.length === 0) {
+    nothingFound(presetPick, `None of your ${all.length} presets matches that.`);
+    return;
+  }
+
+  pickable = held;
+  pickedRow = -1;
+
+  held.forEach((preset, which) => {
+    const { line, open } = listedRow(
+      preset.Icon, preset.Color, preset.Title || '(unnamed)', preset.Pattern || '',
+      which % 2 === 1);
+    line.id = `preset-pick-${which}`;
+    open.setAttribute('role', 'option');
+    open.setAttribute('aria-label', `Fill in from ${preset.Title || preset.Pattern}`);
+    open.addEventListener('click', () => takePreset(preset));
+    presetPick.append(line);
+  });
+}
+
+/** The presets the list is showing, in the order it shows them. */
+let pickable = [];
+
+/** Which of them the keyboard is on, or -1 for none. */
+let pickedRow = -1;
+
+/** Takes one, and puts the list away. */
+function takePreset(preset) {
+  fillFromPreset(preset);
+  showPresetPick(false);
+  // Not back into the name box, or the search would open again on the name the
+  // preset just put there.
+  presetPickButton.focus();
+}
+
+/**
+ * Says which row the keyboard is on, to the eye and to a screen reader.
+ *
+ * The same mark a chosen row in the presets window wears, because it means the
+ * same thing in both — this is the one the next press acts on.
+ */
+function showPickedRow() {
+  const rows = [...presetPick.querySelectorAll('.listed')];
+  rows.forEach((line, which) => {
+    line.classList.toggle('chosen', which === pickedRow);
+    line.setAttribute('aria-selected', String(which === pickedRow));
+  });
+  if (pickedRow < 0) {
+    markerName.removeAttribute('aria-activedescendant');
+    return;
+  }
+  markerName.setAttribute('aria-activedescendant', rows[pickedRow].id);
+  rows[pickedRow].scrollIntoView({ block: 'nearest' });
+}
+
+/** Shows or hides the flyout, and says which on the button that opens it. */
+function showPresetPick(open, looking) {
+  if (open) drawPresetPick(looking);
+  presetPick.classList.toggle('open', open);
+  presetPickButton.setAttribute('aria-expanded', String(open));
+  if (open) placePresetPick();
+}
+
+/**
+ * Puts the flyout beside the window it was opened from.
+ *
+ * Measured rather than written in the style sheet, because it is not inside that
+ * window: a window scrolls its own contents, and a list hung off the side of one
+ * from the cascade is a list clipped at its edge.
+ *
+ * To the right where there is room and to the left where there is not, and never
+ * off the bottom — a list somebody has to scroll the page to reach is a list they
+ * cannot reach, since the map does not scroll.
+ */
+function placePresetPick() {
+  const window_ = composer.getBoundingClientRect();
+  const box = presetPick.getBoundingClientRect();
+  const gap = 8;
+
+  const right = window_.right + gap;
+  const left = right + box.width <= innerWidth - gap
+    ? right
+    : Math.max(gap, window_.left - gap - box.width);
+
+  const top = Math.min(
+    Math.max(gap, window_.top),
+    Math.max(gap, innerHeight - gap - box.height));
+
+  presetPick.style.left = `${Math.round(left)}px`;
+  presetPick.style.top = `${Math.round(top)}px`;
 }
 
 /** Takes one preset away, and closes the form if it was the one open. */
@@ -132,4 +328,77 @@ function buildPresets() {
 
   document.getElementById('preset-new').addEventListener('click', newPreset);
   findingIn(presetFind, drawPresets);
+
+  presetPickButton.addEventListener('click', () => {
+    showPresetPick(!presetPick.classList.contains('open'));
+  });
+
+  // The name box doubles as a way into the presets, because typing a name is
+  // faster than reaching for a button and the box is already under the pointer.
+  // Only while making a marker: a preset being edited *is* the thing in the box,
+  // and offering to fill it in from itself is a loop rather than a shortcut.
+  markerName.addEventListener('input', () => {
+    if (!settings.presetSearch.on || mode === 'preset') return;
+    const looking = markerName.value.trim();
+    showPresetPick(looking.length > 0, looking);
+  });
+
+  // Walking the list from the box, without leaving it. Tab because that is what
+  // a hand already on the keyboard reaches for over a list that has just opened
+  // under what it typed, and the arrows because that is what a list means
+  // everywhere else on this page — the block search under this same form
+  // included. Both wrap, through `nextRow`, which is the one place that decides
+  // what the end of a list does.
+  markerName.addEventListener('keydown', event => {
+    if (!presetPick.classList.contains('open') || pickable.length === 0) return;
+
+    if (event.key === 'Tab' || event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      // Or Tab takes the focus out of the form and an arrow puts the caret at
+      // one end of the box, neither of which is what was meant over an open list.
+      event.preventDefault();
+      const back = event.key === 'ArrowUp' || (event.key === 'Tab' && event.shiftKey);
+      pickedRow = nextRow(pickedRow, back ? -1 : 1, pickable.length);
+      showPickedRow();
+    } else if (event.key === 'Enter' && pickedRow >= 0) {
+      // Only with a row under the keyboard. Typing a name and pressing Enter is
+      // the other half of what this box is for, and it must not turn into
+      // whichever preset happened to be listed first.
+      event.preventDefault();
+      takePreset(pickable[pickedRow]);
+    }
+  });
+
+  // A name typed to the end is a name, not a search. Escape is already the way
+  // out of the list, and picking one is the way through it.
+  markerName.addEventListener('blur', () => {
+    // Late enough that a click on a row is still a click on a row: a blur fires
+    // before the press that caused it lands.
+    setTimeout(() => {
+      if (!presetPick.contains(document.activeElement)) showPresetPick(false);
+    }, 150);
+  });
+  // Escape shuts the list before it shuts the window the list was opened from.
+  // On the document rather than on either of them, because the list is no longer
+  // inside the window and a press may land in either.
+  document.addEventListener('keydown', event => {
+    if (event.key !== 'Escape' || !presetPick.classList.contains('open')) return;
+    event.stopPropagation();
+    showPresetPick(false);
+    presetPickButton.focus();
+  });
+
+  // A press anywhere but the list and the button that opens it is somebody
+  // having moved on from choosing.
+  document.addEventListener('pointerdown', event => {
+    if (!presetPick.classList.contains('open')) return;
+    if (!presetPick.contains(event.target) && !presetPickButton.contains(event.target)) {
+      showPresetPick(false);
+    }
+  }, { capture: true });
+
+  // The window it is placed against can be dragged out from under it, and the
+  // screen can be resized under both.
+  addEventListener('resize', () => {
+    if (presetPick.classList.contains('open')) placePresetPick();
+  });
 }
