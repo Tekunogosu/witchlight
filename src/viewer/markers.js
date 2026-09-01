@@ -491,6 +491,47 @@ function arrived(waypoints) {
  */
 let pins = new Set();
 
+/**
+ * Pins asked for and not yet seen back, by key: which way it was asked, and when.
+ *
+ * A pin is a round trip like everything else here — the service holds the ask,
+ * the mod collects it two seconds later and posts the answer with the next share
+ * — so for a few beats the poll goes on saying what was true before the press.
+ * Taken at face value that made the mark flip on, back off as the first stale
+ * poll landed, and on again when the game finally agreed: three states for one
+ * press, of which two were wrong.
+ *
+ * So what was asked for stands until the answer arrives or the wait runs out.
+ * Which is the rule the marker form already follows for a marker it has asked
+ * the game to make — see `awaiting`.
+ */
+const pinsAsked = new Map();
+
+/**
+ * Takes the pins the service is sending, with anything still being waited on
+ * left as it was asked for.
+ *
+ * An ask is dropped the moment the answer matches it, which is the only honest
+ * confirmation there is; and dropped anyway once the wait runs out, because a
+ * game server that has stopped collecting is not a reason to go on showing
+ * somebody a pin they have not got.
+ */
+function takePins(sent) {
+  const holds = new Set(sent || []);
+  const now = Date.now();
+
+  for (const [key, asked] of pinsAsked) {
+    if (holds.has(key) === asked.keep || now - asked.at > MARKER_PATIENCE) {
+      pinsAsked.delete(key);
+      continue;
+    }
+    if (asked.keep) holds.add(key);
+    else holds.delete(key);
+  }
+
+  pins = holds;
+}
+
 /** Whether this reader keeps this marker in sight. */
 function keptInSight(place) {
   return Boolean(place && place.Key && pins.has(place.Key));
@@ -504,20 +545,30 @@ function keptInSight(place) {
  * next poll is the answer, exactly as it is for who may see a marker, and what
  * comes back is only whether the service took the ask.
  *
- * The set is moved at once so the mark answers the press. A pin the game refuses
- * is put back by the next poll, which is where the truth about it comes from.
+ * The set is moved at once so the mark answers the press, and stays moved until
+ * the service says otherwise — which it cannot do until the mod has collected
+ * the ask. A pin the game refuses comes back the way it was once the wait for it
+ * runs out, which is where the truth about it comes from.
  */
 async function askPin(place, keep) {
   if (!place || !place.Key) return false;
   if (keep) pins.add(place.Key);
   else pins.delete(place.Key);
+  // Held against the polls that will go on saying otherwise until the game has
+  // been asked and has answered. See `takePins`.
+  pinsAsked.set(place.Key, { keep, at: Date.now() });
 
   try {
     const answer = await fetch(`/markers/${encodeURIComponent(place.Key)}/pin`, {
       method: keep ? 'PUT' : 'DELETE',
     });
+    // Refused on this side of the game, so there is nothing to wait for: the
+    // mark goes back to what the service is saying on the next poll rather than
+    // holding a press that never left the browser.
+    if (!answer.ok) pinsAsked.delete(place.Key);
     return answer.ok;
   } catch (error) {
+    pinsAsked.delete(place.Key);
     return false;
   }
 }

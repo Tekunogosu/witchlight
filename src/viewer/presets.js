@@ -398,8 +398,15 @@ function buildPresets() {
   markerName.addEventListener('blur', () => {
     // Late enough that a click on a row is still a click on a row: a blur fires
     // before the press that caused it lands.
+    //
+    // The button that opens the list counts as being in it. Pressing that button
+    // takes the focus out of this box, and closing on that took two presses to
+    // open the list at all: the first opened it and this shut it again a
+    // sixth of a second later, and the second worked only because the focus had
+    // already left the box by then.
     setTimeout(() => {
-      if (!presetPick.contains(document.activeElement)) showPresetPick(false);
+      if (holdingPresetPick()) return;
+      showPresetPick(false);
     }, 150);
   });
   // Escape shuts the list before it shuts the window the list was opened from.
@@ -420,6 +427,20 @@ function buildPresets() {
       showPresetPick(false);
     }
   }, { capture: true });
+}
+
+/**
+ * Whether the list is still somebody's to be looking at.
+ *
+ * The list itself and the button that opens it are one control between them, so
+ * the focus being on either is the focus being in the list. Its own function
+ * because two things ask it — what closes the list when the focus leaves, and
+ * what closes it on a press elsewhere — and a list that answered differently to
+ * the two would close under whichever of them ran second.
+ */
+function holdingPresetPick() {
+  return presetPick.contains(document.activeElement)
+    || presetPickButton.contains(document.activeElement);
 
   // The window it is placed against can be dragged out from under it, and the
   // screen can be resized under both.

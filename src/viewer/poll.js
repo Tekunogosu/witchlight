@@ -1,12 +1,22 @@
 // Asking the service what has changed, and starting the page.
 //
-// Three clocks: markers, players and terrain every two seconds, and the things
-// that only change when a mod set does asked once at load.
+// Three clocks: markers and players on the beat the operator set, terrain every
+// two seconds, and the things that only change when a mod set does asked once at
+// load.
 //
 // Terrain used to be asked for every five. Nothing about the question is
 // expensive — `?since=` answers with the tiles that moved and usually with none
 // — and five seconds of it sat on top of every other wait between a player
 // walking into new ground and seeing it drawn.
+
+/**
+ * How long to leave between asking where everybody is.
+ *
+ * The operator's `live_refresh_ms`, served with the page and already held to a
+ * gap a browser can keep up with, so nothing here has a second opinion about
+ * what a sensible number is.
+ */
+const LIVE_BEAT = window.witchlight.refresh;
 
 /**
  * Which marker pictures exist.
@@ -59,8 +69,10 @@ async function pollLive() {
     showWhen(live.World);
     const waypoints = live.Waypoints || [];
     // Which of them this reader keeps in sight in game. Sent to whoever set them
-    // and to nobody else, so what arrives is already this reader's own answer.
-    pins = new Set(live.Pins || []);
+    // and to nobody else, so what arrives is already this reader's own answer —
+    // except where this page has just asked for one and the game has not
+    // answered yet, which `takePins` is what holds.
+    takePins(live.Pins);
 
     // A marker naming a picture nobody has heard of means the set has grown.
     if (waypoints.some(place => place.Icon && !icons.has(String(place.Icon)))) {
@@ -166,6 +178,9 @@ for (const setting of Object.values(settings)) setting.apply(setting.on);
 
 // A beat rather than an interval: each answer is waited for before the next
 // question is counted, so a service slower than the gap is not asked twice over.
-beat(pollLive, 2000, 'the live poll');
+beat(pollLive, LIVE_BEAT, 'the live poll');
+// What this person has set, which the game can change as well as this page — see
+// `watchMine`. Slower, because presets change a few times a day.
+beat(watchMine, 15000, 'what this person has set');
 beat(pollWorld, 2000, 'the terrain poll');
 started(pollWorld().then(pollIcons).then(pollColours).then(pollLive), 'the first poll');

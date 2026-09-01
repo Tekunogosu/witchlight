@@ -9,6 +9,93 @@ which is where that rule is kept rather than in anybody's memory.
 A version that moved for the other half says so and lists nothing, which is not an
 omission: it is what "one release" looks like from the side that did not change.
 
+## 0.39.1
+
+**Deploy note:** both halves, upgraded together. Nothing is cleared and nothing
+has to be edited.
+
+**The zoom buttons wear the map's own marks.** The plus and the minus were
+characters, drawn by each machine in whatever face it had — so the pair came out
+at a different weight and a different size from the buttons stacked above them,
+and differently again on the next reader's screen. They are the same compiled
+silhouettes every other control in that column wears now, which is one picture
+for everybody.
+
+**Four buttons say what they do.** The mark beside the coordinates offers to
+*select a map location to mark*; the one beside the name box, to *select from an
+existing preset*; the third button on the claims bar opens the *claim list*. The
+mark that keeps a marker as a preset names the marker it would keep — "Set Copper
+seam as a preset" — and follows the name box as it is typed rather than saying so
+about whatever the form was opened with.
+
+**Every size slider is one row.** The accessibility panel was 170 pixels across,
+which is not enough for a label and a track side by side: "Players and clock"
+wrapped, and a wrapped label put its own slider a line below the four beside it.
+The panel is now the width of the settings panel — one number for both, since
+they hang off adjacent buttons — and each size is its name on one line with the
+track across the panel under it. Five tracks that start and end in the same place
+are a column of thumbs a glance can compare.
+
+**Bar display is where a reader can find it.** The section the server fills in —
+the bars a mod on it adds to a player's card — sits under a rule with a clear
+step of space above it, and its heading is green rather than the grey the panel's
+other headings wear. Everything above it answers what this map should draw;
+this answers what this server has to draw at all.
+
+## 0.39.0
+
+**Deploy note:** both halves, upgraded together. Nothing is cleared. The new
+setting is written into the settings file the next time the service writes one,
+and a file without it keeps the two seconds the map has always used.
+
+**How often the map asks where everybody is, is an operator's to set.**
+`live_refresh_ms` is the gap the page leaves between one live answer and the next
+question, in milliseconds, and it starts at the 2000 that was built in. Players,
+markers, claims and the confirmation that a marker just asked for was made all
+arrive on that one beat, so it is the whole of how fresh the live half of the map
+is — lower it on a server where people watch each other move, raise it where a
+browser left open all day should cost the machine less. Below 250 it is served as
+250, because a gap of nothing is a browser asking again the instant it is
+answered; above 60000 as 60000, because past a minute the marker form has given up
+waiting before the beat that would have confirmed it. The page is told the number
+when it is served, so a change reaches a browser once the service has restarted
+and the page has been reloaded.
+
+## 0.38.1
+
+**Deploy note:** both halves, upgraded together. Nothing is cleared and nothing
+has to be edited. Chunks already exported as flat brown squares repair themselves
+the next time they load.
+
+**Whole chunks came out flat brown.** The server keeps a chunk's heightmap long
+after it has let go of the blocks under it, so a chunk marked dirty and exported
+in that window read as air from top to bottom and was stored that way — a
+chunk-aligned square of bare earth in the middle of finished terrain, which
+stayed until something marked that chunk dirty again. The mod now checks that the
+blocks are there before reading them, and holds the chunk back otherwise.
+
+**A preset made in game appears on a map that is already open.** What a person
+has set was read once at login and never again, so a preset made from the game —
+which the mod keeps against the same person — reached a browser only if it was
+reloaded. It is read on a beat of its own now, slower than the markers because
+these change a few times a day rather than a few times an hour.
+
+**The pin stops bouncing.** A pin is a round trip like everything else here, so
+for a beat or two the poll goes on saying what was true before the press: the
+mark came on, went off as the first stale answer landed, and came back on when
+the game agreed — three states for one press, two of them wrong. What was asked
+for now stands until the answer arrives or the wait runs out.
+
+**The presets list opens on one press.** Pressing the button beside the name box
+took the focus out of that box, and what closes the list when the focus leaves it
+did not count that button as part of the list — so the first press opened the
+list and closed it again a sixth of a second later.
+
+**The button that draws a claim has its mark in the middle of it.** Shown to
+somebody who may take land, it was shown as a block, and a tool centres its mark
+with a rule only a grid reads — so the mark sat in the top left corner of a
+button twice its size.
+
 ## 0.38.0
 
 **Deploy note:** both halves, upgraded together. Nothing is cleared and nothing

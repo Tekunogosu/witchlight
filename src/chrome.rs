@@ -101,6 +101,13 @@ const ICONS: &[(&str, &str)] = chrome![
     // Filled, like the marks they stand among.
     "lock" @ "fill",
     "users-three" @ "fill",
+    // The map's own zoom pair. Leaflet writes a `+` and a `\u{2212}` into those two
+    // buttons as text, which is a character each machine draws in whatever face
+    // it has — the same reason nothing else in this column is a character. Bold
+    // rather than filled, like the marks they sit under: filled, a plus is a
+    // solid square with the cross knocked out of it.
+    "plus" @ "bold",
+    "minus" @ "bold",
     // Which column a list is sorted by, and which way. One mark rather than two:
     // descending is the same caret turned over, and a second file would be a
     // second thing to keep pointing the right way.

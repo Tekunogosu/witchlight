@@ -65,8 +65,8 @@ let listing = 'all';
  * How far away a marker is has a column of its own, and it is measured from
  * wherever the reader's own player is standing — which is the question somebody
  * looking at a list of places is actually asking. The order is taken when the
- * list is drawn and left alone while they walk: a list that resorted itself
- * every two seconds would move the row out from under the hand reaching for it.
+ * list is drawn and left alone while they walk: a list that resorted itself on
+ * every live beat would move the row out from under the hand reaching for it.
  */
 const sorts = {
   name: { of: place => (place.Title || '').toLowerCase() },
@@ -112,7 +112,7 @@ function saidAway(blocks) {
  * Says how far one marker is, on the cell that holds the answer.
  *
  * Written into the cell rather than the row being built again: a position
- * arrives every two seconds, and a list redrawn on that beat would take the row
+ * arrives on every live beat, and a list redrawn on that beat would take the row
  * under the pointer with it.
  */
 function fillAway(box, place) {
@@ -271,7 +271,7 @@ function markerRow(place, shaded) {
   // headings pointing at nothing a reader could find under them.
   const where = cell('where', `${x}, ${place.Y}, ${z}`);
   // Filled by the one function that says how far away something is, because the
-  // poll that moves the reader writes into this same cell every two seconds.
+  // poll that moves the reader writes into this same cell on every beat.
   const away = document.createElement('span');
   away.className = 'away';
   away.dataset.key = place.Key || '';

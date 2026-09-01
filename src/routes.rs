@@ -19,7 +19,7 @@ pub fn route(request: &mut Request, state: &State) -> Reply {
     let path = urls::path(&url);
 
     match path {
-        "/" => http::html(&viewer::page(state.bounds())),
+        "/" => http::html(&viewer::page(state.bounds(), state.rules.live_refresh_ms)),
         "/viewer.css" => http::asset(viewer::STYLE, "text/css"),
         "/viewer.js" => http::asset(viewer::SCRIPT, "application/javascript"),
         "/leaflet.js" => http::asset(viewer::LEAFLET_JS, "application/javascript"),

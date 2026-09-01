@@ -24,6 +24,36 @@ const wantPrivate = document.getElementById('want-private');
 const wantFollow = document.getElementById('want-follow');
 const wantSaid = document.getElementById('want-said');
 
+/** What was last read, so a beat that says nothing new redraws nothing. */
+let mineShape = '';
+
+/**
+ * Reads what this person has set, and draws again where it has changed.
+ *
+ * Read on a beat rather than once at login, because this is not only the page's
+ * to change: a preset can be made from in game, and the mod keeps it against the
+ * same person the map's own form writes to. A page that read it once had a
+ * preset list as old as the session, and a preset made in front of somebody
+ * standing on the block it names did not appear on the map they had open.
+ *
+ * Slower than the live poll. Markers change a few times an hour and these change
+ * a few times a day, so this is a few hundred bytes every fifteen seconds
+ * against a marker list every two.
+ */
+async function watchMine() {
+  await pollMine();
+  const shape = JSON.stringify(mine);
+  if (shape === mineShape) return;
+  mineShape = shape;
+
+  // Everything drawn from what this person has set. The windows that are shut
+  // are drawn again when they open, so only the ones on the screen matter — and
+  // each of these draws nothing where its own window is not up.
+  drawProfile();
+  drawPresets();
+  if (applyPanel.classList.contains('open')) drawApplyList();
+}
+
 /** Reads back what this person has set. Nobody signed in has set nothing. */
 async function pollMine() {
   if (!(viewer && viewer.Name)) {

@@ -91,14 +91,19 @@ fn fingerprint(parts: &[&str]) -> String {
 /// page shows is what compiled it — a page fetched from one build cannot report
 /// the number of another. It also versions the style and the scripts, which is
 /// what lets those be cached forever and still change when this does.
+///
+/// `refresh_ms` is the operator's live poll gap. It is written into the page
+/// rather than asked for, because the first beat happens before an answer to any
+/// question could arrive.
 #[must_use]
-pub fn page((min_x, min_z, max_x, max_z): (i32, i32, i32, i32)) -> String {
+pub fn page((min_x, min_z, max_x, max_z): (i32, i32, i32, i32), refresh_ms: u64) -> String {
     include_str!("viewer/page.html")
         .replace("__TILE__", &crate::pyramid::TILE.to_string())
         .replace("__MIN_X__", &min_x.to_string())
         .replace("__MIN_Z__", &min_z.to_string())
         .replace("__MAX_X__", &max_x.to_string())
         .replace("__MAX_Z__", &max_z.to_string())
+        .replace("__REFRESH__", &refresh_ms.to_string())
         .replace("__ASSETS__", stamp())
         .replace("__VERSION__", env!("CARGO_PKG_VERSION"))
 }
@@ -109,7 +114,7 @@ mod tests {
 
     #[test]
     fn the_page_names_the_build_and_leaves_no_placeholder_behind() {
-        let page = page((-512, -512, 512, 512));
+        let page = page((-512, -512, 512, 512), 2000);
         assert!(
             page.contains(env!("CARGO_PKG_VERSION")),
             "the page should say which build served it"
@@ -156,7 +161,7 @@ mod tests {
     /// first is a promise the build cannot keep.
     #[test]
     fn every_asset_kept_forever_is_addressed_by_its_content() {
-        let page = page((0, 0, 0, 0));
+        let page = page((0, 0, 0, 0), 2000);
         for asset in ["/viewer.css", "/viewer.js", "/leaflet.css", "/leaflet.js"] {
             assert!(
                 page.contains(&format!("{asset}?v={}", stamp())),
@@ -170,12 +175,23 @@ mod tests {
     }
 
     #[test]
+    fn the_page_carries_the_beat_it_is_to_ask_on() {
+        // The first live poll goes out before an answer to any question could
+        // come back, so a page that had to ask for this number would spend its
+        // opening beats on some other one.
+        assert!(
+            page((0, 0, 0, 0), 4500).contains("refresh: 4500"),
+            "the page must open knowing how often to ask"
+        );
+    }
+
+    #[test]
     fn the_page_asks_for_the_style_and_the_scripts() {
         // Splitting the page into three files means two of them are now fetched
         // rather than inlined, and a page that forgets to ask for one of them is
         // a map with no furniture or no behaviour — which looks like a broken
         // service rather than a missing tag.
-        let page = page((0, 0, 0, 0));
+        let page = page((0, 0, 0, 0), 2000);
         assert!(page.contains("/viewer.css?v="), "the page must ask for its style");
         assert!(page.contains("/viewer.js?v="), "and for its scripts");
         assert!(page.contains("/leaflet.js"), "and for the library they extend");

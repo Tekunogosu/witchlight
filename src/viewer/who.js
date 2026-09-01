@@ -84,7 +84,7 @@ function drawWho() {
   // Cards sit in the order they were made in, so the order above is a move
   // rather than a redraw — and only when you are not at the top already, because
   // moving an element is a change to the page and this panel keeps up with the
-  // world every two seconds.
+  // world on every live beat.
   const yours = viewer && viewer.Uid && cards.get(String(viewer.Uid));
   if (yours && whoList.firstElementChild !== yours.element) {
     whoList.prepend(yours.element);
@@ -107,7 +107,7 @@ function drawWho() {
  * The bars this server shows beyond health and food, kept up to date.
  *
  * Made once per name and then written into, the way the cards themselves are:
- * this runs every two seconds for everybody on, and a row rebuilt on each beat
+ * this runs on every live beat for everybody on, and a row rebuilt each time
  * would flicker under the eye reading it.
  *
  * A bar that stops arriving is taken away rather than left at its last reading —

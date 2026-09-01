@@ -159,6 +159,13 @@ function buildCompose() {
     privately = !privately;
     showSeen();
   });
+  // Both marks below the name box say the marker's name in what they promise, so
+  // what they promise follows the box rather than waiting for the form to be
+  // drawn again for some other reason.
+  markerName.addEventListener('input', () => {
+    showSeen();
+    showKeepsake();
+  });
   // The mark decides whether there is a pattern to fill in, so it redraws the
   // form rather than only remembering its own state.
   markerRemember.addEventListener('click', () => {
@@ -638,12 +645,12 @@ function showSeen() {
   markerPrivate.disabled = !mayKeep;
 }
 
-/** Whether this is being remembered as what a block starts as, and what block. */
+/** Whether this is being remembered as a preset, and under what name. */
 function showKeepsake() {
-  const what = clicked ? (clicked.name || shortCode(clicked.code)) : null;
+  const named = markerName.value.trim() || 'this marker';
   const words = alsoPreset
-    ? `Kept as what ${what || 'a block'} starts as — click to stop keeping it`
-    : `Set as what ${what || 'a block'} starts as`;
+    ? `${named} is a preset — click to stop keeping it`
+    : `Set ${named} as a preset`;
   markerRemember.classList.toggle('on', alsoPreset);
   markerRemember.title = words;
   markerRemember.setAttribute('aria-label', words);

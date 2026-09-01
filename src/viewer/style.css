@@ -68,6 +68,12 @@
      the marks around them so the answer carries at the size a list draws it. */
   --kept: #ff9a90;
   --shared: #7fe0a0;
+  /* The one heading in the settings panel that names something a server added
+     rather than something the map brings itself. Coloured where the panel's
+     other headings are not, because that is the whole of what it says: these
+     switches exist on this server and not on the next one. The green already
+     spelled out above rather than a fourth one a hair away from it. */
+  --section: var(--shared);
 
   --font-sm: 11px;
   --font-md: 12px;
@@ -84,6 +90,14 @@
   /* And the mark a column heading wears, which is smaller: it is heading a
      column rather than answering for a row. */
   --sort-mark: 11px;
+
+  /* The two panels that drop out of the tool column — the settings and the
+     accessibility panel. One number, because they hang off adjacent buttons and
+     a reader opening both in turn should not watch the column change width. It
+     is wide enough for the longest size label to sit on one line, which is what
+     decides it: a wrapped label puts its own slider half a row lower than the
+     four beside it. */
+  --panel-drop: 216px;
 
   --gap-1: 4px;
   --gap-2: 8px;
@@ -280,7 +294,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; color-scheme: dark;
    easiest to read", and a reader who wanted to mix their own would still have
    to look at five to find out. */
 #access-panel { position: absolute; left: 0; top: calc(100% + 6px); z-index: 900;
-           width: 170px; padding: 10px 12px; background: var(--surface-veil);
+           width: var(--panel-drop); padding: 10px 12px; background: var(--surface-veil);
            border: 1px solid var(--line); border-radius: var(--round); display: none;
            max-height: 70vh; overflow-y: auto;
            box-shadow: 0 1px 5px rgba(0, 0, 0, .65); }
@@ -299,17 +313,24 @@ html, body { margin: 0; height: 100%; overflow: hidden; color-scheme: dark;
                   margin: 0; font: inherit; font-size: var(--font-md);
                   color: var(--text); background: none; border: 1px solid transparent;
                   border-radius: var(--round-sm); cursor: pointer; }
-/* The track sits under its own label rather than beside it: the panel is 170px
-   wide, and a label and a usable track do not both fit across that.
-   The margin is scoped to the panel because `#access-panel input` — which zeroes
-   it for the checkboxes — outranks a class selector and would otherwise close the
-   gap back up. */
-#access-panel .slide input { margin-top: var(--gap-1); }
+/* One size to a row: its name on a line of its own, the track on the next and
+   across the whole panel. A label beside its track leaves neither enough room —
+   and, worse, a name long enough to wrap pushes its own track a line below the
+   four beside it, so five tracks that should read as one column of thumbs read
+   as five separate controls. Full width is what makes them a column: every
+   track starts and ends in the same place, so where a thumb sits is comparable
+   down the list at a glance.
+
+   Stated against the panel rather than on `.slide`, because `#access-panel
+   label` — which lays every label in this panel out as a row for the sake of
+   the checkboxes — outranks a class on its own. */
+#access-panel .slide { display: block; padding: var(--gap-2) 0 var(--gap-1); }
+#access-panel .slide input { display: block; width: 100%; margin-top: var(--gap-1); }
 #access-panel button:hover { background: var(--surface-bar); color: #fff; }
 #access-panel button[aria-pressed="true"] { background: var(--surface-on);
                                        border-color: var(--accent); color: var(--text-strong); }
 #settings { position: absolute; left: 0; top: calc(100% + 6px); z-index: 900;
-            width: 216px; padding: 10px 12px; background: var(--surface-veil);
+            width: var(--panel-drop); padding: 10px 12px; background: var(--surface-veil);
             border: 1px solid var(--line); border-radius: var(--round); display: none;
             box-shadow: 0 1px 5px rgba(0, 0, 0, .65); }
 #settings.open { display: block; }
@@ -320,6 +341,16 @@ html, body { margin: 0; height: 100%; overflow: hidden; color-scheme: dark;
                   min-height: 24px; padding: var(--gap-1) 0;
                   font-size: var(--font-md); color: var(--text); cursor: pointer; }
 #settings input { accent-color: var(--accent); margin: 0; }
+/* What this server shows for a player beyond health and food. Set apart from the
+   switches above it — a rule, and a clear step of space — because everything
+   above answers "what should this map draw" and this answers "what does this
+   server have to draw at all". The heading is louder and green for the same
+   reason: a reader who came to the panel for a mod's bars finds the section
+   without reading the switches on the way down. */
+#bar-display { margin-top: var(--gap-4); padding-top: var(--gap-3);
+               border-top: 1px solid var(--line-soft); }
+#bar-display h2 { margin-bottom: var(--gap-3); font-size: var(--font-md);
+                  color: var(--section); font-weight: bold; }
 /* Windows over the map rather than panels beside it: the marker form, the
    presets, and who you are. Each is moved by its bar to wherever it is in the
    way, and each sits over everything Leaflet draws — which tops out at 1000 —
@@ -545,6 +576,8 @@ html, body { margin: 0; height: 100%; overflow: hidden; color-scheme: dark;
                     mask-image: url(/chrome/users-three.svg); }
 .mark-caret-up { -webkit-mask-image: url(/chrome/caret-up.svg);
                  mask-image: url(/chrome/caret-up.svg); }
+.mark-plus { -webkit-mask-image: url(/chrome/plus.svg); mask-image: url(/chrome/plus.svg); }
+.mark-minus { -webkit-mask-image: url(/chrome/minus.svg); mask-image: url(/chrome/minus.svg); }
 .mark-user { -webkit-mask-image: url(/chrome/user.svg); mask-image: url(/chrome/user.svg); }
 .mark-person-arms-spread { -webkit-mask-image: url(/chrome/person-arms-spread.svg);
                            mask-image: url(/chrome/person-arms-spread.svg); }
@@ -1221,6 +1254,9 @@ body.show-marker-names .marker .tag { display: block; }
    where the claims are is not gated here — that is the service's answer, and a
    reader who may see none is shown an empty layer rather than a hidden button. */
 #claims .claim-make { display: none; }
-#claims.may-claim .claim-make { display: block; }
+/* Back to the grid every tool button is, and not to `block`. A tool centres its
+   mark with `place-items`, which only a grid reads — so showing this one as a
+   block put its mark in the top left corner of a button twice its size. */
+#claims.may-claim .claim-make { display: grid; }
 
 .leaflet-control-attribution { display: none; }

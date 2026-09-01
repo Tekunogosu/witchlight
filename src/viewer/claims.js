@@ -727,7 +727,7 @@ function claimSettled() {
 const claimBar = cornerButton('claims', 'polygon', 'Land claims');
 const claimShow = claimBar.querySelector('a');
 const claimDraw = cornerAnchor(claimBar, 'selection-plus', 'Draw a land claim');
-const claimList = cornerAnchor(claimBar, 'list-bullets', 'All land claims');
+const claimList = cornerAnchor(claimBar, 'list-bullets', 'View claim list');
 // Offered only to somebody the mod says may take land. Said as a class on the
 // bar rather than a style on the button, so what is hidden and what is shown is
 // one rule in the stylesheet — see `#claims .claim-make`.

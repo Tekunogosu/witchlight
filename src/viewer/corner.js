@@ -194,6 +194,29 @@ const directoryButton = cornerAnchor(mineBar, 'list-bullets', 'All markers');
 function gatherCorner() {
   const owned = map.getContainer().querySelector('.leaflet-top.leaflet-left');
   if (owned) corner.append(owned);
+  markZoom();
+}
+
+/**
+ * The map's own zoom, wearing the marks the rest of the column wears.
+ *
+ * Leaflet writes a plus and a minus into those two buttons as text. A character
+ * is drawn in whatever face the machine reading it happens to have — which is
+ * the reason nothing else in this column is one, and why the pair came out a
+ * different weight and a different size from the buttons stacked above them on
+ * every machine that disagreed about the font. What is replaced is the contents
+ * of Leaflet's buttons and nothing about the control they belong to: the names
+ * a screen reader says are the titles Leaflet set, which is why clearing the
+ * text costs no label.
+ */
+function markZoom() {
+  const marks = { '.leaflet-control-zoom-in': 'plus', '.leaflet-control-zoom-out': 'minus' };
+  for (const [which, mark] of Object.entries(marks)) {
+    const button = corner.querySelector(which);
+    if (!button) continue;
+    button.textContent = '';
+    button.append(chromeMark(mark));
+  }
 }
 
 /**

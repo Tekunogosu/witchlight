@@ -60,6 +60,7 @@ bind = "0.0.0.0:8080"                 # every interface; 127.0.0.1 for this mach
 api_bind = ""                         # where the mod posts; empty means loopback on a free port
 api_token = ""                        # what it must present; empty means a fresh one each start
 markers_public = false                # whether a marker nobody has chosen for is everyone's
+live_refresh_ms = 2000                # Map refresh frequency
 autostart = true                      # whether the server mod starts this itself
 announce = true                       # whether it tells joining players where the map is
 announce_url = ""                     # and what to tell them; empty means work it out
@@ -84,6 +85,15 @@ here that this program never reads. They say who starts the map, who is told abo
 may ask it for things, which are questions about the pair rather than about either
 half, so they sit with everything else about the map instead of in a file of their
 own.
+
+`live_refresh_ms` is the gap the page leaves between one live answer and the next
+question. Players, markers, claims and the confirmation that a marker just asked
+for was made all arrive on that one beat, so it is the whole of how fresh the live
+half of the map is: lower it on a server where people watch each other move, raise
+it where a browser left open all day should cost the machine less. Anything below
+250 is served as 250 and anything above 60000 as 60000, and the page is told the
+number when it is served — so a change reaches a browser once the service has
+restarted and the page has been reloaded.
 
 `[bars]` adds a bar to each player's card beside their health and their food:
 
@@ -223,6 +233,13 @@ the invisible placeholders a large structure stands beside its real block. To an
 operator reading coverage the two are different (one colour is being fetched and
 the other will never exist); to anybody looking at the map they are both ground
 whose top cannot be drawn. **Only a column nobody exported reads as absence.**
+
+A flat square of that colour, chunk-aligned, in the middle of finished terrain is
+not either of those. It is a chunk the mod exported while the server had let go of
+its blocks and kept only the flat record above them, so every position in it read
+as air — see `Readable` in the mod's `Columns.cs`, which now holds such a chunk
+back rather than writing a chunk of sky. Squares written before that check repair
+themselves the next time the chunk loads.
 Painted otherwise it put black specks through finished terrain, each one reading
 as a hole in a world that has no hole in it.
 
@@ -325,7 +342,9 @@ immutable and cached for a year, while the page and both feeds are `no-store`.
 | `/icons.json`, `/icons/{name}.svg` | the pictures markers are drawn with |
 | `/portraits/{name}.png` | a picture a player's own client drew of their seraph. Ask with `?v={PortraitAt}`: the name is the player's and does not change when the picture does |
 
-The page polls `/info.json` and `/live.json` every 2 seconds. It asks with
+The page polls `/info.json` every 2 seconds and `/live.json` on the beat
+`live_refresh_ms` sets, which is two seconds until an operator says otherwise. It
+asks with
 `?since=` and gets back the tiles that actually changed, so a server where someone
 is building repaints one square rather than the map, and each tile is swapped only
 once its replacement has decoded — the old one stays up meanwhile, so the map never

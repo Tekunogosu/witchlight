@@ -16,12 +16,17 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 
-/// What the operator has decided about markers.
+/// What the operator has decided that the page must be told.
 ///
-/// Two switches always read together, both saying who a marker belongs to when
-/// nobody has said otherwise. They travel as a pair so the half asking never has
-/// one without the other — and because a function taking eight loose arguments is
-/// a function taking a settings file badly.
+/// Who a marker belongs to when nobody has said otherwise, whether where
+/// somebody is standing is everybody's to see, and how often to ask for the lot.
+/// They travel together so the half asking never has one without the others —
+/// and because a function taking eight loose arguments is a function taking a
+/// settings file badly.
+///
+/// Nothing here is enforced here. The mod is the half that decides who is sent
+/// what; what these settle is which controls the page offers and how often it
+/// asks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Rules {
     /// Whether a marker nobody has decided about is everyone's.
@@ -32,6 +37,10 @@ pub struct Rules {
     /// mod; what this decides here is only what the page is told, so that a short
     /// list of players reads as a server that chose it rather than as a fault.
     pub players_public: bool,
+    /// How long the page leaves between asking where everybody is, in
+    /// milliseconds. Already held to a gap a browser can keep up with — the
+    /// clamping is `Config::rules`, so nothing downstream has to wonder.
+    pub live_refresh_ms: u64,
 }
 
 /// Which privilege each `wl` command asks of whoever types it.
@@ -128,6 +137,21 @@ impl Privilege {
     /// What Vintage Story asks of anybody running `/land claim`.
     pub const CLAIM_LAND: &'static str = "claimland";
 }
+
+/// The shortest gap the page is ever told to leave between live polls.
+///
+/// A gap of nothing is a browser asking again the instant it is answered, which
+/// is a denial of service written into a settings file — and a quarter second is
+/// already faster than the mod posts. Clamped rather than refused, so a number
+/// somebody typed in seconds still leaves a working map.
+pub const REFRESH_FLOOR_MS: u64 = 250;
+
+/// The longest.
+///
+/// A map that says where people are once a minute is as slow as one still worth
+/// calling live: a marker the page has just asked for is confirmed on this beat,
+/// and past a minute the form has given up waiting before the answer arrives.
+pub const REFRESH_CEILING_MS: u64 = 60_000;
 
 /// What `admin` is short for.
 pub const ADMIN: &str = "admin";
@@ -240,6 +264,24 @@ pub struct Config {
     /// from sending them.
     pub players_public: bool,
 
+    /// How long the page leaves between asking where everybody is, in
+    /// milliseconds.
+    ///
+    /// Two seconds. Players, markers, claims and whether a marker just asked for
+    /// has been made all arrive on this one beat, so this number is the whole of
+    /// how fresh the live half of the map is. Lower it on a server where people
+    /// watch each other move; raise it on one where a browser left open all day
+    /// should cost the machine less.
+    ///
+    /// Milliseconds because the interesting choices sit inside a second of each
+    /// other, and seconds would round every one of them to the same number.
+    ///
+    /// Held between `REFRESH_FLOOR_MS` and `REFRESH_CEILING_MS`, which is what
+    /// keeps a zero out of a browser's timer. Read here alone: the page is told
+    /// the number when it is served, so a change reaches a browser once the
+    /// service has restarted and the page has been reloaded.
+    pub live_refresh_ms: u64,
+
     /// How many threads render tiles. Zero decides from the machine, capped so
     /// that the game server this usually shares a box with keeps its cores.
     pub threads: usize,
@@ -320,6 +362,7 @@ impl Default for Config {
             markers_public: false,
             markers_public_editable: false,
             players_public: true,
+            live_refresh_ms: 2000,
             threads: 0,
             tile_cache_mb: 256,
             autostart: true,
@@ -418,6 +461,9 @@ impl Config {
             markers_public: self.markers_public,
             markers_editable: self.markers_public_editable,
             players_public: self.players_public,
+            // Clamped here rather than where it is read, so that the number the
+            // page is handed and the number a test asks about are the same one.
+            live_refresh_ms: self.live_refresh_ms.clamp(REFRESH_FLOOR_MS, REFRESH_CEILING_MS),
         }
     }
 
@@ -531,6 +577,11 @@ impl Config {
              # to their own group and to nobody else. How many are online is\n\
              # still said either way. Read and enforced by the mod, which is the\n\
              # half that knows the groups.\n\
+             # live_refresh_ms is the map refresh frequency: how long the page\n\
+             # leaves between asking where everybody is, in milliseconds. Players, markers and claims all\n\
+             # arrive on this one beat, so it is the whole of how fresh the live\n\
+             # half of the map is. Anything below 250 is served as 250 and\n\
+             # anything above 60000 as 60000.\n\
              # threads is how many requests are answered at once; 0 decides.\n\
              # tile_cache_mb is how much memory rendered tiles may hold.\n\
              # autostart is whether the server mod runs this service itself.\n\
@@ -610,6 +661,22 @@ mod tests {
             Privilege::CLAIM_LAND,
             "taking land through the map asks what `/land claim` asks"
         );
+    }
+
+    /// The one setting here that lands in a browser's timer.
+    #[test]
+    fn the_live_beat_is_held_to_a_gap_a_browser_can_keep_up_with() {
+        let told = |ms| Config { live_refresh_ms: ms, ..Config::default() }.rules().live_refresh_ms;
+        assert_eq!(Config::default().live_refresh_ms, 2000, "two seconds, as it always was");
+        assert_eq!(told(500), 500, "what an operator asked for is what the page is told");
+        // A gap of nothing is a browser asking again the instant it is answered.
+        assert_eq!(told(0), REFRESH_FLOOR_MS);
+        // And somebody who typed the number in seconds gets a fast map rather
+        // than that.
+        assert_eq!(told(2), REFRESH_FLOOR_MS);
+        // Past a minute the form has given up on a marker before the beat that
+        // would have confirmed it.
+        assert_eq!(told(600_000), REFRESH_CEILING_MS);
     }
 
     #[test]

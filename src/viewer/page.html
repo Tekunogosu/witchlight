@@ -72,8 +72,8 @@
     <input id="marker-name" type="text" maxlength="128" placeholder="Name"
            aria-label="Marker name">
     <button id="marker-preset-pick" class="aside" type="button"
-            title="Fill this in from one of your presets"
-            aria-label="Fill this in from one of your presets"
+            title="Select from an existing preset"
+            aria-label="Select from an existing preset"
             aria-haspopup="listbox" aria-expanded="false" aria-controls="preset-pick">
       <span class="chrome masked mark-bookmarks" aria-hidden="true"></span>
     </button>
@@ -97,7 +97,8 @@
       <input id="marker-y" type="number" aria-label="Marker y" placeholder="y">
       <input id="marker-z" type="number" aria-label="Marker z" placeholder="z">
       <button id="marker-pick" class="tool" type="button"
-              title="Pick the spot on the map" aria-label="Pick the spot on the map"
+              title="Select a map location to mark"
+              aria-label="Select a map location to mark"
               aria-pressed="false"><span class="chrome masked mark-crosshair"
               aria-hidden="true"></span></button>
     </div>
@@ -396,6 +397,9 @@
 window.witchlight = {
   tile: __TILE__,
   bounds: { minX: __MIN_X__, minZ: __MIN_Z__, maxX: __MAX_X__, maxZ: __MAX_Z__ },
+  // How long to leave between asking where everybody is, as the operator set it.
+  // Served with the page because the first beat comes before any answer could.
+  refresh: __REFRESH__,
 };
 </script>
 <script src="/leaflet.js?v=__ASSETS__"></script>
