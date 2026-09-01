@@ -64,6 +64,15 @@ pub struct Person {
     /// Whether the form's "remember this" box starts ticked.
     #[serde(default)]
     pub presets_by_default: bool,
+
+    /// Whether the map takes up following this person's own player as soon as it
+    /// knows who they are.
+    ///
+    /// About the person rather than the screen, which is what puts it here: it is
+    /// the same answer on a phone and a desktop, and somebody who wants the map
+    /// to open on where they are standing wants it wherever they open it.
+    #[serde(default)]
+    pub follow_self: bool,
 }
 
 impl Person {
@@ -193,6 +202,7 @@ mod tests {
             }],
             private_by_default: Some(true),
             presets_by_default: true,
+            follow_self: true,
         }
     }
 

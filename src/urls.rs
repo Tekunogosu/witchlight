@@ -106,6 +106,30 @@ pub fn marker_key(path: &str) -> Option<&str> {
     (!key.is_empty() && !key.contains('/') && key != "pending").then_some(key)
 }
 
+/// The marker a `/markers/{key}/pin` path names.
+///
+/// A pin hangs off the marker rather than sitting beside it, because that is what
+/// it is about: one marker, and whether the person asking keeps it in sight. Its
+/// own address rather than a field on the marker, because it is nobody else's
+/// business and changes nothing anybody else sees — a put on the marker itself is
+/// an edit of the marker, which is a different permission and a different answer.
+#[must_use]
+pub fn marker_pin_key(path: &str) -> Option<&str> {
+    let key = path.strip_prefix("/markers/")?.strip_suffix("/pin")?;
+    (!key.is_empty() && !key.contains('/')).then_some(key)
+}
+
+/// `/claims/{key}`, where the key is the name the mod gave a claim.
+///
+/// The shape is the marker's, and so is the reason: which of the two things a
+/// claim's own address means is the method and nothing else, so one place knows
+/// a claim by name and one place says what may be done to it.
+#[must_use]
+pub fn claim_key(path: &str) -> Option<&str> {
+    let key = path.strip_prefix("/claims/")?;
+    (!key.is_empty() && !key.contains('/')).then_some(key)
+}
+
 /// `/icons/{name}.svg`, where the name is a marker icon.
 ///
 /// The name reaches here from a waypoint, which got it from whatever mods are
@@ -271,5 +295,16 @@ mod tests {
         assert_eq!(marker_key("/markers/a/b"), None, "one key, not a path");
         // The mod's own collection point, which is not a marker's name.
         assert_eq!(marker_key("/markers/pending"), None);
+    }
+
+    #[test]
+    fn a_pin_hangs_off_the_marker_it_is_about() {
+        assert_eq!(marker_pin_key("/markers/abc/pin"), Some("abc"));
+        // The marker itself, which is a different thing to do to it.
+        assert_eq!(marker_pin_key("/markers/abc"), None);
+        assert_eq!(marker_pin_key("/markers//pin"), None);
+        assert_eq!(marker_pin_key("/markers/a/b/pin"), None, "one key, not a path");
+        // And the marker's own address does not answer for what hangs off it.
+        assert_eq!(marker_key("/markers/abc/pin"), None);
     }
 }

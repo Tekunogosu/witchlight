@@ -73,9 +73,13 @@ icons = "player"                      # ask a client for the marker pictures
 export = "admin"                      # write the surface of every loaded chunk
 status = "admin"                      # the whole of what state the map is in
 service = "admin"                     # start and stop the map service
+
+[claims]                              # who may do what with the land claims
+view = "player"                       # see where the claims are, on the map
+create = "claimland"                  # draw a new one from the map
 ```
 
-`autostart`, `announce`, `announce_url`, `[commands]` and `[bars]` are the settings
+`autostart`, `announce`, `announce_url`, `[commands]`, `[claims]` and `[bars]` are the settings
 here that this program never reads. They say who starts the map, who is told about it and who
 may ask it for things, which are questions about the pair rather than about either
 half, so they sit with everything else about the map instead of in a file of their
@@ -133,6 +137,22 @@ force, which is the only place a server upgrading into this can see it — a set
 file written before `[commands]` existed says nothing about it, and nothing here
 rewrites a file an operator owns just to add a section of defaults it is already
 following. `witchlight -c <file> -S` writes one, at the cost of any comments in it.
+
+`[claims]` is spelled the same way and takes the same words. It answers two
+questions rather than one, because they are two: seeing where a claim is tells
+somebody whether they may build there, and drawing one takes land. A server can
+reasonably show every boundary to everybody and still let nobody but its
+landholders draw one.
+
+`view` starts at `player` because the game already sends every claim to every
+client and draws the borders for anyone holding the right tool — a map that hid
+them would be telling players less than the game does. `create` starts at
+`claimland`, which is exactly what the game asks of `/land claim`: **the map is
+never a way round a rule the server already has.** Narrowing `create` narrows the
+map alone, and the mod checks the game's own privilege as well as this one, along
+with the world's `allowLandClaiming`, the role's allowance and smallest size, how
+many claims that person already holds, and whether the rectangle lands on
+anybody's. A claim the map takes is one `/land claim` would have taken.
 
 Set `announce_url` on any server a player cannot reach directly. Left empty, the
 address given out is the one this machine can see for itself, which is right on a
@@ -344,11 +364,92 @@ resorted itself every two seconds would move the row out from under the hand
 reaching for it. Typing in its search box draws the markers it found **larger on
 the map**, which is the other half of finding one.
 
+**The list has a bulk edit.** Pressing it puts a column of boxes down the left of
+the rows, headed by one that ticks the lot, and the row of buttons under the list
+then acts on what is ticked rather than on what is listed — one rule for all four
+of them, and each says the number it found. Two of those are new: a bin that asks
+twice, and *From preset*, which opens a searchable list of that reader's presets
+and rewrites every ticked marker's name, picture, colour and block from the one
+they pick. Where the markers are is left alone, and so is who may see each of
+them: that is a choice about one marker rather than a property of the kind of
+thing it is.
+
+**Right-clicking a marker opens it**, whether or not it is that reader's to
+change. Their own opens as a form: the name, the colour, the picture, who may see
+it, and a bin. Somebody else's opens as a record, with every box filled in and
+none of them writable, offering the two things about it that *are* this reader's
+own — keeping it in sight, and a preset shaped like it. The marker list opens the
+same window from a row.
+
+**A marker carries which block it is about**, read by the game under it when it
+was made and again wherever it moves. That is what a preset made from a marker is
+keyed on, so turning one into a preset arrives with the pattern already filled in
+— it had nothing, and a preset with no pattern names no block. A marker made
+before the mod kept the answer falls back to what the map drew at that spot.
+
+**Keeping a marker in sight** pins it on that reader's own map in game: the game
+holds a pinned waypoint against the edge of the map instead of letting it scroll
+off. It is one person's choice about one marker and changes nothing anybody else
+sees — pinning somebody's marker puts it on the pinner's map and on no other. Any
+marker a reader is sent may be pinned, since being able to see it is the whole of
+the permission. Their own is the flag the game already keeps on the waypoint, so
+the in-game map dialog and this one are the same switch; everybody else's is a
+decision the mod stores beside the visibility choices.
+
 Markers can also be drawn larger for good — *Marker size*, in the accessibility
 panel, beside the colour and colour-vision settings. It multiplies the size the
 game itself draws a mark at, so where a mark sits on its block and the shadow it
 is read against scale with it, and the search's own step sits on top of whatever
 is set.
+
+Every button the map wears is in **one column down the left edge** — who you are,
+what the map shows, the markers, the claims, the zoom and the block picker, in
+that order. The zoom used to hang from the middle of that edge instead, which
+made two stacks that slid against each other as the window changed size and put
+one straight through the other on a short one.
+
+The **world's clock** is in the opposite corner, beside the list of who is on:
+what the world is doing rather than something to do to it, and a readout in the
+middle of a column of controls reads as one more thing to press. It takes the
+corner itself on a server with nobody on, since the list takes itself off then.
+
+The **land claims** are a layer of their own, switched by the button in the tool
+column or from the settings panel — the two are one switch and each follows the
+other. Every claim is drawn one shaded rectangle per area, so a claim built out of
+several adjacent boxes keeps the shape of its boundary rather than being wrapped
+in a box around the lot; opening one says who holds it, what they called it, and
+how far up and down it reaches. Which claims a reader is sent is decided by the
+service against a list the mod supplies, so a reader who may not see them is sent
+an empty array rather than a full one to hide — a browser cannot be asked to
+forget what it has been handed.
+
+Somebody the server lets claim land gets a second button, which **draws a new
+claim**: one drag across the ground, with a crosshair and the map held still
+under it, then a window holding what was dragged. The window says what the claim
+comes to in cubic metres and what that leaves of their allowance, and refuses one
+that is plainly too large before spending a round trip on it — the game decides
+for real either way, and this only saves twenty seconds of watching for a claim
+that was never going to arrive.
+
+The form is a column of labelled sections rather than a row of boxes: a name, the
+area as *West*/*North* and *East*/*South*, a depth, and who else may. The last is
+the game's own two everybody-permissions and a list of players who may build,
+which is exactly what `/land claim grant` offers — a third of anything would be a
+permission system the game would not enforce.
+
+A third button lists **every claim there is**: what there is, whose it is, where,
+and a way into the ones this reader may change. Renaming, saying who else may,
+and giving a claim up all happen there. The ground is shown and not editable —
+moving a boundary has to be judged against every other claim and against an
+allowance, and a map cannot show somebody what they would be giving up, so
+redrawing is making a new one.
+
+Depth is asked for rather than assumed, though the map is drawn from above. An
+allowance is counted in cubic metres and depth is most of what a claim's volume
+is, so making every claim the whole height of the world would hand a survival
+player a square thirty-two blocks across. It starts as a band around the ground
+under the middle of the rectangle, which is what somebody marking out a base
+means, and *All* is there for the claims that really do want the lot.
 
 The **chunk grid** outlines the chunks the export names, which the game puts at 32
 blocks. It is off until switched on, faint enough to read the terrain through, and
@@ -371,7 +472,7 @@ needed it. Reading order, roughly outside in:
 | `state.rs` | what the request threads share |
 | `watch.rs` | noticing that the mod has written something |
 | `feeds.rs` | the JSON the page asks for |
-| `viewer.rs` `viewer/` | the page: markup, style, and eleven scripts joined in order |
+| `viewer.rs` `viewer/` | the page: markup, style, and the scripts joined in order |
 | `chrome.rs` | which marks the furniture wears, and which of the vendored pack reach the binary |
 | `columns.rs` `pyramid.rs` `render.rs` `palette.rs` `color.rs` | the map itself, from region file to pixel |
 | `live.rs` `pending.rs` `preferences.rs` `auth.rs` `facts.rs` | what the two halves say to each other |

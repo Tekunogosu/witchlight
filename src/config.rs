@@ -73,6 +73,62 @@ pub struct Commands {
     pub service: String,
 }
 
+/// Who may see the land claims on the map, and who may draw a new one.
+///
+/// Two privileges rather than one, because they are two different asks. Seeing
+/// where a claim is answers "may I build here" and is the sort of thing a server
+/// puts on a public map; drawing one takes land, and a server that shows every
+/// boundary is not thereby a server where anybody may fence off a valley.
+///
+/// Written the way `[commands]` is — a privilege the game knows, with `admin`
+/// and `player` spelled out for the two that answer most servers — because it is
+/// the same question in the same file and a second spelling would be a second
+/// thing to explain.
+///
+/// The mod is the half that enforces both. What the service does with them is
+/// hold the lists of who the mod says may, so that a browser is never handed a
+/// claim its reader may not see; what the page does with them is decide whether
+/// to offer the button.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct Claims {
+    /// Who may see where the claims are.
+    pub view: String,
+    /// Who may draw a new one from the map.
+    pub create: String,
+}
+
+impl Default for Claims {
+    fn default() -> Self {
+        Self {
+            // Where a claim is, is already everybody's: the game sends every
+            // claim to every client and draws the borders for anyone holding the
+            // right tool. A map that hid them would be telling players less than
+            // the game does, so the default is what they already have and the
+            // setting is for a server that wants less.
+            view: PLAYER.to_owned(),
+            // What the game asks of `/land claim`, and for the same reason. The
+            // map must not be a way round a rule the server already has, so this
+            // starts as that rule rather than as a looser one — and an operator
+            // narrowing it here narrows the map alone, which is the point of its
+            // being a setting.
+            create: Privilege::CLAIM_LAND.to_owned(),
+        }
+    }
+}
+
+/// A privilege code this service names by hand.
+///
+/// Only where a default has to be one particular privilege of the game's rather
+/// than `admin` or `player`. Spelled once so that the settings file, the template
+/// and the tests cannot disagree about it.
+pub struct Privilege;
+
+impl Privilege {
+    /// What Vintage Story asks of anybody running `/land claim`.
+    pub const CLAIM_LAND: &'static str = "claimland";
+}
+
 /// What `admin` is short for.
 pub const ADMIN: &str = "admin";
 
@@ -221,6 +277,11 @@ pub struct Config {
     /// every plain setting or the ones below it read as part of it.
     pub commands: Commands,
 
+    /// Who may see the land claims, and who may draw one from the map.
+    ///
+    /// A table, so it sits with the other tables at the foot of the file.
+    pub claims: Claims,
+
     /// Extra bars on a player's card, beside their health and their food.
     ///
     /// A mod that gives players a resource — mana, stamina, a level — keeps it
@@ -265,6 +326,7 @@ impl Default for Config {
             announce: true,
             announce_url: String::new(),
             commands: Commands::default(),
+            claims: Claims::default(),
             // What a stock Rustbound Magic keeps its two bars under, since that
             // is the mod most likely to be behind this setting being wanted at
             // all. Named rather than detected: this half never sees a mod, and a
@@ -484,6 +546,13 @@ impl Config {
              # a name the game does not know is refused to everyone but an\n\
              # admin, so a typo locks a command rather than opening it. Read by\n\
              # the mod, which is the half that knows who is an admin.\n\
+             # [claims] is who may see the land claims on the map and who may\n\
+             # draw a new one from it. Same spelling as [commands]: `admin`,\n\
+             # `player`, or any privilege the game knows. Seeing where a claim\n\
+             # is starts open, because the game already tells every client;\n\
+             # drawing one starts at `claimland`, which is what the game asks\n\
+             # of `/land claim`, so the map is never a way round a rule the\n\
+             # server already has. Read and enforced by the mod.\n\
              # [bars] adds a bar to each player's card beside their health and\n\
              # their food, read off that player's own entity — which is where a\n\
              # mod giving players mana or stamina already keeps it, and which\n\
@@ -530,17 +599,33 @@ mod tests {
     }
 
     #[test]
+    fn the_claim_gates_start_where_the_game_already_stands() {
+        let held = Config::default().claims;
+        // The game sends every claim to every client, so a map that hid them
+        // would tell players less than the game does.
+        assert_eq!(held.view, PLAYER, "where a claim is, is already everybody's");
+        // And the map must never be a way round a rule the server already has.
+        assert_eq!(
+            held.create,
+            Privilege::CLAIM_LAND,
+            "taking land through the map asks what `/land claim` asks"
+        );
+    }
+
+    #[test]
     fn the_written_template_reads_back_as_what_wrote_it() {
         // The table has to serialise after every plain setting, or the settings
         // below it are read as part of it. This is the check that keeps the
         // field last rather than a comment asking the next person to.
         let held = Config {
             commands: Commands { export: "commandplayer".to_owned(), ..Commands::default() },
+            claims: Claims { view: ADMIN.to_owned(), ..Claims::default() },
             ..Config::default()
         };
         let read: Config =
             toml::from_str(&held.to_template()).expect("the template this just wrote");
         assert_eq!(read.commands, held.commands);
+        assert_eq!(read.claims, held.claims, "and so does every other table");
         assert_eq!(read.announce_url, held.announce_url, "and nothing fell into the table");
     }
 

@@ -116,14 +116,26 @@ const settings = {
   // claim about eight people rather than a missing one.
   players: { label: 'Players', on: true, apply: on => { layer(people, on); if (on) drawPlayers(); } },
   markers: { label: 'Markers', on: true, apply: on => layer(places, on) },
+  // Reached from the map as well as from here — see `setSetting` — so the apply
+  // is what tells the button on the map, rather than each way in telling the
+  // other. Off to begin with: a map opened to find where somebody is is a map
+  // with nothing over it, and the ground people have spoken for is a question
+  // asked on purpose.
+  claims: {
+    label: 'Land claims',
+    on: false,
+    apply: on => { layer(claimed, on); showClaimsToggle(); },
+  },
   grid: { label: 'Chunk grid', on: false, apply: on => layer(grid, on) },
   panel: { label: 'Player list', on: true, apply: on => { who.style.display = on ? '' : 'none'; } },
-  // The corner, the marker form and the list of every marker all say a position,
-  // so all three are rewritten rather than only the two that are on the screen.
+  // Everything that says a position is rewritten, not only what is on the
+  // screen: the corner, the marker form, the list of every marker, and the
+  // claims — whose boundaries say the ground they cover and were the one thing
+  // left reading in the other set of numbers until somebody opened one.
   absolute: {
     label: 'Absolute coordinates',
     on: false,
-    apply: () => { say(); reframe(); drawDirectory(); },
+    apply: () => { say(); reframe(); drawDirectory(); redrawClaims(); },
   },
   names: { label: 'Player names', on: true, apply: on => {
     document.body.classList.toggle('no-names', !on);
@@ -184,7 +196,7 @@ const settings = {
 const scales = {
   mark: { label: 'Markers', css: '--mark-scale', at: 1, least: 0.6, most: 3 },
   markName: { label: 'Marker names', css: '--mark-name-scale', at: 1, least: 0.6, most: 3 },
-  people: { label: 'Player list', css: '--scale-people', at: 1, least: 0.7, most: 1.8 },
+  people: { label: 'Players and clock', css: '--scale-people', at: 1, least: 0.7, most: 1.8 },
   panel: { label: 'Windows', css: '--scale-panel', at: 1, least: 0.7, most: 1.8 },
   tools: { label: 'Map buttons', css: '--scale-tools', at: 1, least: 0.7, most: 1.8 },
 };
@@ -347,7 +359,7 @@ function drawBarSwitches() {
     panel.append(under);
 
     for (const name of byGroup.get(group)) {
-      panel.append(switchFor({
+      panel.append(switchFor('', {
         label: name,
         on: barWanted(name),
         apply: on => {
@@ -361,7 +373,39 @@ function drawBarSwitches() {
   }
 }
 
-function switchFor(setting) {
+/**
+ * The checkbox standing for each named setting, so that one turned on somewhere
+ * else can say so.
+ *
+ * Most settings are reached only through their own checkbox, and for those this
+ * is a map nobody reads. One is not: the claims are toggled from a button on the
+ * map as well as from the panel, and a switch with two ways in and one way of
+ * showing its state is a panel that lies about the map beside it.
+ *
+ * Keyed by the name in `settings`, which is what a caller has. The bars build
+ * switches of their own and are not in here, because nothing else toggles one.
+ */
+const switchBoxes = new Map();
+
+/**
+ * Turns a setting on or off, wherever it was asked from.
+ *
+ * The one owner of what that means: the table is written, the choice is kept, the
+ * page is told, and whatever shows the state is brought into line with it. Each
+ * of those used to be spelled out at the checkbox, which was fine while a
+ * checkbox was the only way to reach one.
+ */
+function setSetting(name, on) {
+  const setting = settings[name];
+  if (!setting || setting.on === on) return;
+  setting.on = on;
+  const box = switchBoxes.get(name);
+  if (box) box.checked = on;
+  remember();
+  setting.apply(on);
+}
+
+function switchFor(name, setting) {
   const label = document.createElement('label');
   const box = document.createElement('input');
   box.type = 'checkbox';
@@ -371,6 +415,7 @@ function switchFor(setting) {
     remember();
     setting.apply(box.checked);
   });
+  if (name) switchBoxes.set(name, box);
   label.append(box, document.createTextNode(setting.label));
   return label;
 }
@@ -380,8 +425,8 @@ function buildSettings() {
   const access = document.createElement('div');
   access.id = 'access-panel';
 
-  for (const setting of Object.values(settings)) {
-    (setting.panel === 'access' ? access : panel).append(switchFor(setting));
+  for (const [name, setting] of Object.entries(settings)) {
+    (setting.panel === 'access' ? access : panel).append(switchFor(name, setting));
   }
 
   // Hung on the button that opens it rather than placed near it. It used to be

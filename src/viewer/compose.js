@@ -74,11 +74,19 @@ let removing = false;
 let dropArmed = false;
 
 /**
- * What the form is for: a new marker, a marker that exists, or a preset.
+ * What the form is for: a new marker, a marker that exists, a marker somebody
+ * else's to change, or a preset.
  *
- * One window rather than three, because every choice on it — a name, a colour, a
- * picture, who sees it — is the same choice in all three cases. What changes is
- * where the answer goes and what the button that sends it is called.
+ * One window rather than four, because every choice on it — a name, a colour, a
+ * picture, who sees it — is the same choice in all of them. What changes is where
+ * the answer goes and what the button that sends it is called.
+ *
+ * `seen` is a marker this reader may look at and not change. It is a mode rather
+ * than a flag beside `marker` for the reason the others are one place: what the
+ * window is has to have a single owner, or the title, the fields, the bin and the
+ * button that sends it are four answers that can disagree. What that mode offers
+ * is the two things about somebody else's marker that are this reader's own —
+ * whether they keep it in sight, and a preset shaped like it.
  */
 let mode = 'new';
 
@@ -123,6 +131,7 @@ const markerPrivate = document.getElementById('marker-private');
 const markerRemember = document.getElementById('marker-remember');
 const markerPattern = document.getElementById('marker-pattern');
 const markerPick = document.getElementById('marker-pick');
+const markerPin = document.getElementById('marker-pin');
 const markerDrop = document.getElementById('marker-drop');
 const markerSave = document.getElementById('marker-save');
 const saidHere = document.getElementById('said');
@@ -157,14 +166,35 @@ function buildCompose() {
     alsoPreset = !alsoPreset;
     showFields();
   });
+  // Nothing waits on the game here. A pin is one press among several and the
+  // marker coming back pinned on the next poll is the answer, which is the rule
+  // the lock in the marker list already follows.
+  markerPin.addEventListener('click', () => {
+    if (!editing) return;
+    disarmDrop();
+    const keep = !keptInSight(editing);
+    // The ask moves the set before it reaches the network, so the mark is drawn
+    // from what was just chosen rather than from what it was.
+    started(askPin(editing, keep), 'pinning a marker to your own map');
+    showPin();
+  });
   markerDrop.addEventListener('click', armOrDelete);
   markerSave.addEventListener('click', () => {
     disarmDrop();
     started(askForMarker(), 'asking for the marker');
   });
   document.getElementById('marker-cancel').addEventListener('click', closeCompose);
+  // Enter in the name box means one of two things, and this is where that is
+  // decided. With the presets open on a row it takes that preset — filling the
+  // form in and saving it are two presses, not one, so that whoever picked it
+  // can still change what it gave them. Otherwise it is the Save button.
+  //
+  // Both, and it was both: the presets have a listener of their own on this box
+  // and this one is wired first, so a name half typed was asked for and *then*
+  // filled in from the preset. A press has one meaning, so one place says it.
   markerName.addEventListener('keydown', event => {
-    if (event.key === 'Enter') started(askForMarker(), 'asking for the marker');
+    if (event.key !== 'Enter' || pickedPreset()) return;
+    started(askForMarker(), 'asking for the marker');
   });
   buildBlockSearch();
 
@@ -245,14 +275,30 @@ function openCompose(spot, ground) {
   showCompose();
 }
 
-/** Opens the form on a marker that already exists, to change it. */
+/**
+ * Opens the form on a marker that already exists.
+ *
+ * On every marker this reader can see, rather than only the ones they may
+ * change. A marker somebody else made is still worth opening: where it is, what
+ * it is called and whose it is are most of what anybody wants from one, and the
+ * two things about it that are this reader's own — keeping it in sight, and a
+ * preset shaped like it — are offered nowhere else. Which of those the window is
+ * for is `mode`, and the mod decides again for real either way.
+ */
 function editCompose(place) {
-  mode = 'marker';
+  mode = mayEdit(place) ? 'marker' : 'seen';
   editing = place;
   editingPreset = -1;
-  clicked = null;
-  composeTitle.textContent = 'Edit marker';
-  markerSave.textContent = 'Save';
+  // What the marker was put on, which the game read at the moment it was made
+  // and this has carried ever since. Without it a marker being turned into a
+  // preset had nothing to key one on, and the block a marker is standing on is
+  // the whole of what a preset is about — see the mod's `Origins`.
+  clicked = place.Block ? { code: place.Block, name: '' } : null;
+  composeTitle.textContent = mode === 'seen' ? 'Marker' : 'Edit marker';
+  // A window that cannot save has nothing to call Save. What it offers instead
+  // is the one thing somebody looking at another person's marker can keep: what
+  // it is, as what a block starts as.
+  markerSave.textContent = mode === 'seen' ? 'Make preset' : 'Save';
 
   const [x, z] = said(place.X, place.Z);
   markerName.value = place.Title || '';
@@ -263,12 +309,39 @@ function editCompose(place) {
   chosenPicture = place.Icon || 'circle';
   privately = Boolean(place.Private);
   alsoPreset = false;
+  // Ready before the mark that reveals it is pressed, with the block's variant
+  // number already widened into a wildcard — the same pattern a right click on
+  // this block would have offered.
+  markerPattern.value = widened(clicked && clicked.code);
   // A marker somebody else owns is theirs to be seen by whoever they let; taking
   // it private would be taking it off their own map. Set before the form is drawn,
   // because it is what the mark that says so is drawn from.
   mayKeep = Boolean(viewer && place.OwnerUid === viewer.Uid);
   showFields();
   showCompose();
+  // A marker made before the mod kept what it was put on. The map knows what it
+  // drew at that spot, which is the surface — the same answer a right click
+  // there would give, and the best there is for a marker whose own record of it
+  // was never written.
+  if (!clicked) started(guessBlock(place), 'looking up what a marker was put on');
+}
+
+/**
+ * Fills in what an old marker was put on, from what the map drew there.
+ *
+ * Only where the form is still open on that same marker and nobody has typed a
+ * pattern in the meantime: the lookup is a round trip, and it is slower than the
+ * person filling the form in rather than righter than them.
+ */
+async function guessBlock(place) {
+  const ground = await lookUp(place.X, place.Z);
+  if (!ground || !ground.code) return;
+  if (editing !== place || !composer.classList.contains('open')) return;
+  if (markerPattern.value.trim() !== '') return;
+
+  clicked = { code: ground.code, name: ground.name || '' };
+  markerPattern.value = widened(ground.code);
+  showKeepsake();
 }
 
 /**
@@ -292,9 +365,34 @@ function editPreset(which) {
  * second copy of the form-filling below it: what "new" means here is one row that
  * is not there yet, and everything else about the two is the same.
  */
-function newPreset() {
-  openPreset({ Color: palette[0], Private: privateByDefault() }, -1);
+function newPreset(shape) {
+  openPreset({ Color: palette[0], Private: privateByDefault(), ...(shape || {}) }, -1);
   markerPattern.focus();
+}
+
+/**
+ * A preset shaped like a marker that already exists.
+ *
+ * What a preset is made of and a marker is made of are the same four answers
+ * minus the place, so taking a copy is reading them across. The pattern comes
+ * from the block the marker is about, which this form has already resolved —
+ * see `clicked`, and the mod's `Origins` behind it. A marker nothing knows the
+ * block of leaves it empty, to be typed.
+ *
+ * Who may see it comes across with the rest. A preset says what markers made
+ * from it are, and somebody copying a public marker is copying a public thing.
+ */
+function presetLike(place) {
+  return {
+    // What the marker was put on, where anything knows it. A preset with no
+    // pattern is a preset that names no block, and the block this marker is
+    // standing on is the one somebody copying it almost certainly means.
+    Pattern: widened(clicked && clicked.code),
+    Title: place.Title === UNNAMED ? '' : (place.Title || ''),
+    Icon: place.Icon,
+    Color: place.Color,
+    Private: Boolean(place.Private),
+  };
 }
 
 /**
@@ -438,8 +536,13 @@ function showCompose() {
   if (viewer && viewer.Name) {
     sayHere('');
     markerSave.disabled = false;
-    markerName.focus();
-    markerName.select();
+    // Nothing to type into a marker somebody else owns, so nothing is put under
+    // the cursor: a name selected in a box that refuses the next keystroke is
+    // the window inviting an edit it will not take.
+    if (mode !== 'seen') {
+      markerName.focus();
+      markerName.select();
+    }
   } else {
     sayHere('Run /witchlight login in the game to make a marker.', true);
     markerSave.disabled = true;
@@ -463,17 +566,69 @@ function showCompose() {
  */
 function showFields() {
   const preset = mode === 'preset';
+  const reading = mode === 'seen';
   // A preset is already the thing the mark would make, so it is the one mode
   // that is not offered it. A marker being changed is offered it like a new one:
   // deciding a block should start this way is a thing somebody works out from a
   // marker they already have as readily as from one they are making.
-  markerRemember.style.display = preset ? 'none' : '';
+  // A preset is already the thing the mark would make. A marker nobody here may
+  // change is offered a whole preset instead, on the button that would otherwise
+  // save it, so the mark would be a second way to the same place.
+  markerRemember.style.display = preset || reading ? 'none' : '';
   document.getElementById('pattern-field').style.display =
     preset || alsoPreset ? '' : 'none';
   document.getElementById('place-field').style.display = preset ? 'none' : '';
+  // What a form that cannot save must not look able to change. Every box at
+  // once, because "may this be typed into" is one answer about the window and
+  // not a decision per field.
+  for (const field of [markerName, markerX, markerY, markerZ, markerPick]) {
+    field.disabled = reading;
+  }
+  composer.classList.toggle('reading', reading);
+  document.getElementById('marker-cancel').textContent = reading ? 'Close' : 'Cancel';
   showSeen();
   showKeepsake();
+  showPin();
   showDrop();
+}
+
+/**
+ * Whether the form is open on a marker that could be kept in sight.
+ *
+ * One that exists and that this reader is being sent, which is every marker the
+ * window can be opened on except one being made. Their own or anybody's: a pin
+ * puts a marker on the pinner's map and on nobody else's, so being able to see it
+ * is the whole of the permission — and the mod decides that again for real.
+ *
+ * One owner for the question, because the mark being on the screen and the mark
+ * doing anything when pressed have to be the same answer.
+ */
+function pinnable() {
+  return Boolean(editing) && (mode === 'marker' || mode === 'seen');
+}
+
+/**
+ * Whether this marker is kept in sight on this reader's own map in game, as the
+ * mark that says so.
+ *
+ * A pin and a pin struck through rather than one mark that lights up: what is
+ * being said is which of two states the marker is in, and a mark carrying that
+ * in brightness alone is a state some readers cannot see. The words say where it
+ * is and then what a press would do, in that order, which is the rule the lock
+ * beside it follows.
+ */
+function showPin() {
+  markerPin.style.display = pinnable() ? '' : 'none';
+  const kept = pinnable() && keptInSight(editing);
+  markerPin.textContent = '';
+  markerPin.append(chromeMark(kept ? 'push-pin' : 'push-pin-slash'));
+  const words = kept
+    ? `Kept in sight on your map in game — click to stop keeping ${namedHere()}`
+    : `Keep ${namedHere()} in sight on your map in game`;
+  markerPin.classList.toggle('on', kept);
+  markerPin.title = words;
+  markerPin.setAttribute('aria-label', words);
+  markerPin.setAttribute('aria-pressed', String(kept));
 }
 
 /** Who will see it, in the marker list's own mark: the same picture in the same

@@ -109,11 +109,15 @@ fn posted(request: &mut Request, channel: &Channel) -> Reply {
             None => http::text(400, "expected {\"Uid\":…, \"Name\":…}"),
         },
 
-        // The markers people asked for on the web, which the mod cannot be sent
-        // and so comes to collect. Emptied by the asking; see `Pending::take`.
-        "/markers/pending" => http::json(
+        // What people asked for on the web — markers, and the land claims
+        // somebody drew — which the mod cannot be sent and so comes to collect.
+        // Emptied by the asking; see `Pending::take`.
+        "/pending" => http::json(
             &serde_json::to_string(&channel.pending.take())
-                .unwrap_or_else(|_| r#"{"Make":[],"Change":[],"Remove":[]}"#.to_owned()),
+                .unwrap_or_else(|_| {
+                    r#"{"Markers":{"Make":[],"Change":[],"Remove":[],"Pin":[]},"#.to_owned()
+                        + r#""Claims":{"Make":[],"Change":[],"Remove":[]}}"#
+                }),
         ),
 
         // What somebody has set for themselves, for the half of the mod that
@@ -137,6 +141,11 @@ fn posted(request: &mut Request, channel: &Channel) -> Reply {
         },
 
         "/live/players" => taken(channel.live.set_players(body)),
+        // The land claims, with the names of everybody the mod says may see
+        // them. Who may is a privilege, and the mod is the half that knows who
+        // holds one — see the `Live` this hands it to for why they travel beside
+        // the claims rather than as a copy of them per person.
+        "/live/claims" => taken(channel.live.set_claims(body)),
         "/live/world" => taken(channel.live.set_world(body)),
         "/live/markers" => taken(channel.live.set_markers(body)),
 

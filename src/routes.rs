@@ -7,7 +7,7 @@ use tiny_http::{Method, Request};
 
 use crate::error::Error;
 use crate::http::{self, Reply};
-use crate::pending::{Gone, Marker};
+use crate::pending::{Claim, ClaimEdit, ClaimGone, Gone, Marker, Pin};
 use crate::preferences::Person;
 use crate::state::State;
 use crate::stored;
@@ -58,6 +58,7 @@ pub fn route(request: &mut Request, state: &State) -> Reply {
         },
 
         "/markers" => made(request, state),
+        "/claims" => claimed(request, state),
         "/me/preferences.json" | "/me/preferences" => preferences(request, state),
 
         _ => stored(request, state, path),
@@ -66,6 +67,18 @@ pub fn route(request: &mut Request, state: &State) -> Reply {
 
 /// The addresses whose shape carries a name or a position in it.
 fn stored(request: &mut Request, state: &State, path: &str) -> Reply {
+    // Read before the marker's own address, because it is a longer path with the
+    // same prefix and only one of the two can be right about a given one.
+    if let Some(key) = urls::marker_pin_key(path) {
+        // Kept and no longer kept are the same act read either way, so the method
+        // says which — the rule a marker's own address already follows.
+        return match *request.method() {
+            Method::Put => pinned(request, state, key, true),
+            Method::Delete => pinned(request, state, key, false),
+            _ => http::text(405, "a marker is pinned with a put and unpinned with a delete"),
+        };
+    }
+
     if let Some(key) = urls::marker_key(path) {
         // Which of the three a marker's own address means is the method and
         // nothing else, so the one place that knows a marker by name is also the
@@ -74,6 +87,16 @@ fn stored(request: &mut Request, state: &State, path: &str) -> Reply {
             Method::Put => changed(request, state, key),
             Method::Delete => removed(request, state, key),
             _ => http::text(405, "a marker is changed with a put and taken away with a delete"),
+        };
+    }
+
+    // Which of the two a claim's own address means is the method and nothing
+    // else, exactly as it is for a marker.
+    if let Some(key) = urls::claim_key(path) {
+        return match *request.method() {
+            Method::Put => claim_changed(request, state, key),
+            Method::Delete => claim_removed(request, state, key),
+            _ => http::text(405, "a claim is changed with a put and given up with a delete"),
         };
     }
 
@@ -149,6 +172,43 @@ fn made(request: &mut Request, state: &State) -> Reply {
     accepted(&key)
 }
 
+/// A land claim somebody drew on the map.
+///
+/// Accepted rather than done, like a marker: the game has not heard of it, and
+/// whether it may exist at all is the mod's to answer against the game's own
+/// rules — the privilege, how much land this person is allowed, how small a claim
+/// may be, and whether it lands on anybody else's. None of those is a question
+/// this half could answer without keeping a second copy of the game's rules, and
+/// a second copy is a second answer.
+///
+/// So the page is told the ask was taken and watches for the claim to appear
+/// among the ones it is sent, which is the only honest confirmation there is.
+fn claimed(request: &mut Request, state: &State) -> Reply {
+    if *request.method() != Method::Post {
+        return http::text(405, "claims are made with a post");
+    }
+
+    let (who, body) = match asked(request, state, "claim land") {
+        Ok(both) => both,
+        Err(refusal) => return refusal,
+    };
+
+    let drawn = match Claim::drawn(&who.uid, &body) {
+        Ok(drawn) => drawn,
+        Err(why) => return http::text(400, why),
+    };
+
+    if !state.pending.claim(drawn) {
+        return http::text(503, "the game server is not collecting claims");
+    }
+
+    // Nothing to name it by. A marker is answered with the name it will be made
+    // under, because this half mints that name; a land claim is the game's own
+    // and carries nothing this half could have decided beforehand. So the page is
+    // told it was taken and watches the ground it drew on.
+    http::json(&serde_json::json!({ "Asked": true }).to_string()).with_status_code(202)
+}
+
 /// A change to a marker that already exists.
 ///
 /// Whether this person may is asked twice and answered by the mod. What is
@@ -192,6 +252,77 @@ fn removed(request: &mut Request, state: &State, key: &str) -> Reply {
 
     if !state.pending.remove(gone) {
         return http::text(503, "the game server is not collecting markers");
+    }
+
+    accepted(key)
+}
+
+/// A marker somebody asked to keep in sight on their own map, or to stop keeping.
+///
+/// No body: which way it goes is the method, and a pin names a waypoint rather
+/// than describing one. Whether they may is the mod's to answer against the
+/// waypoint itself — anybody the marker is shared with may keep it in sight,
+/// which is a lower bar than changing one and deliberately so, since a pin puts
+/// the marker on the pinner's map and on nobody else's.
+///
+/// Accepted, not done, like everything else the game has to do. The page watches
+/// for the pin to appear among the ones it is sent.
+fn pinned(request: &mut Request, state: &State, key: &str, on: bool) -> Reply {
+    let Some(who) = state.sessions.who(&http::cookies(request)) else {
+        return unknown("pin a marker");
+    };
+
+    let pin = match Pin::asked(&who.uid, key, on) {
+        Ok(pin) => pin,
+        Err(why) => return http::text(400, why),
+    };
+
+    if !state.pending.pin(pin) {
+        return http::text(503, "the game server is not collecting markers");
+    }
+
+    accepted(key)
+}
+
+/// A change to a land claim that already exists.
+///
+/// What it is called and who it lets in. Whether this person may is the mod's to
+/// answer against the claim itself: the service knows who owns what from a post
+/// that is seconds old, and the half holding the land is the one that can say.
+fn claim_changed(request: &mut Request, state: &State, key: &str) -> Reply {
+    let (who, body) = match asked(request, state, "change a claim") {
+        Ok(both) => both,
+        Err(refusal) => return refusal,
+    };
+
+    let edit = match ClaimEdit::asked(&who.uid, key, &body) {
+        Ok(edit) => edit,
+        Err(why) => return http::text(400, why),
+    };
+
+    if !state.pending.claim_edit(edit) {
+        return http::text(503, "the game server is not collecting claims");
+    }
+
+    accepted(key)
+}
+
+/// A claim somebody asked to give up.
+///
+/// No body: giving up land names a claim rather than describing one. Whether
+/// they may is the mod's to answer against the claim itself, as a change is.
+fn claim_removed(request: &mut Request, state: &State, key: &str) -> Reply {
+    let Some(who) = state.sessions.who(&http::cookies(request)) else {
+        return unknown("give up a claim");
+    };
+
+    let gone = match ClaimGone::asked(&who.uid, key) {
+        Ok(gone) => gone,
+        Err(why) => return http::text(400, why),
+    };
+
+    if !state.pending.claim_gone(gone) {
+        return http::text(503, "the game server is not collecting claims");
     }
 
     accepted(key)

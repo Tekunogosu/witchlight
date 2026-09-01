@@ -18,8 +18,17 @@
 //! does not. The arrays inside are never looked into — they are held as they
 //! arrived and handed on, and the most that happens to one is being joined to
 //! another end to end.
+//!
+//! Land claims arrive the same way and are sorted differently, because the
+//! question is a different one. A marker is private to whoever made it, so who
+//! may see one is answered per marker; a claim is public within the server or it
+//! is not, and who may see the lot is answered per person, by a privilege. So the
+//! claims travel as one list with the names of everyone the mod says may be sent
+//! it, rather than as a copy of that list per person — which on a server with
+//! fifty players and a hundred claims would be the same hundred claims fifty
+//! times over.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -46,6 +55,11 @@ struct Markers {
     open: String,
     /// Markers only their owner may see, by the uid of that owner.
     owned: HashMap<String, String>,
+    /// Which markers each person keeps in sight on their own map in game, by
+    /// their uid, as the list of marker names that arrived. Sorted by reader for
+    /// the reason the private markers are: a pin is one person's answer about one
+    /// marker, and nobody else has any business being handed it.
+    pinned: HashMap<String, String>,
 }
 
 impl Default for Markers {
@@ -58,6 +72,7 @@ impl Default for Markers {
             colors: "[]".to_owned(),
             open: "[]".to_owned(),
             owned: HashMap::new(),
+            pinned: HashMap::new(),
         }
     }
 }
@@ -73,6 +88,8 @@ struct Sorted {
     public: Option<Box<RawValue>>,
     #[serde(default)]
     private: HashMap<String, Box<RawValue>>,
+    #[serde(default)]
+    pins: HashMap<String, Box<RawValue>>,
 }
 
 /// Who is online, as the mod sorted them.
@@ -117,6 +134,59 @@ struct Watching {
     grouped: HashMap<String, Box<RawValue>>,
 }
 
+/// Every land claim, and who the mod says may be shown them.
+///
+/// One list rather than a list per person. Who may see a claim is not a fact
+/// about the claim — the game shares every one of them with every client — it is
+/// a fact about the reader, and the mod answers it from a privilege. So the
+/// claims are held once and the names of everyone entitled to them are held
+/// beside, which is the shape that stays one copy however many people are on.
+///
+/// Nothing is written down. Markers are filed because they are the one thing
+/// worth seeing when the game server is off and nothing else could give them
+/// back; a claim comes with a list of who may see it, and a file read back at
+/// start would be a list of claims whose permissions this build was told about
+/// some other day. The mod reposts within one share interval, and until it does
+/// the honest answer is that the map has not been told.
+#[derive(Default)]
+struct Claims {
+    /// The post as it arrived, so an unchanged one is recognised without being
+    /// taken apart again.
+    body: String,
+    /// Whether the claims are everybody's to see, which is what the setting says
+    /// on a server that has not narrowed it.
+    everyones: bool,
+    /// The claims themselves, as the text that arrived.
+    list: String,
+    /// Who may be shown them beyond that, by uid.
+    seen: HashSet<String>,
+    /// Who may draw a new one and what each of them is allowed, by uid, as the
+    /// text that arrived. Not about who may see: a server can show every boundary
+    /// to everybody and still let nobody but its landholders draw one.
+    making: HashMap<String, String>,
+    /// How tall this world is, so the form knows what the whole height of it
+    /// means. A fact about the world, carried with the claims because it is the
+    /// one thing a map drawn from above cannot show.
+    height: i32,
+}
+
+/// The envelope the mod posts for claims. Only its shape is read; the array
+/// inside is carried through untouched.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct Held {
+    #[serde(default)]
+    everyones: bool,
+    #[serde(default)]
+    claims: Option<Box<RawValue>>,
+    #[serde(default)]
+    seen: HashSet<String>,
+    #[serde(default)]
+    making: HashMap<String, Box<RawValue>>,
+    #[serde(default)]
+    height: i32,
+}
+
 pub struct Live {
     players: Mutex<Option<(Seen, Instant)>>,
     /// What the world's clock last said. Held rather than filed, and forgotten
@@ -124,6 +194,9 @@ pub struct Live {
     /// not the time, it is the time it stopped.
     world: Mutex<Option<(String, Instant)>>,
     markers: Mutex<Markers>,
+    /// Where the land claims are, and who may be shown them. Memory only, for
+    /// the reason [`Claims`] gives.
+    claims: Mutex<Claims>,
     /// Where markers are kept so they survive both programs stopping.
     path: PathBuf,
 }
@@ -143,7 +216,13 @@ impl Live {
             .and_then(|body| sorted(&body))
             .unwrap_or_default();
 
-        Self { players: Mutex::new(None), world: Mutex::new(None), markers: Mutex::new(markers), path }
+        Self {
+            players: Mutex::new(None),
+            world: Mutex::new(None),
+            markers: Mutex::new(markers),
+            claims: Mutex::new(Claims::default()),
+            path,
+        }
     }
 
     /// Takes a report of who is online, sorted by who may see them. In memory
@@ -189,6 +268,24 @@ impl Live {
         crate::files::publish(&self.path, body.as_bytes());
 
         *markers = taken;
+        true
+    }
+
+    /// Takes the land claims, sorted by who the mod says may see them.
+    ///
+    /// Held and not filed, unlike the markers. See [`Claims`] for why a list that
+    /// arrives with its own permissions is not a list to read back off a disk on
+    /// some later day.
+    pub fn set_claims(&self, body: String) -> bool {
+        let Some(taken) = held(&body) else {
+            return false;
+        };
+
+        if let Ok(mut claims) = self.claims.lock()
+            && claims.body != body
+        {
+            *claims = taken;
+        }
         true
     }
 
@@ -241,9 +338,43 @@ impl Live {
                 },
             );
 
-        let markers = self.markers.lock().map_or_else(
-            |_| "[]".to_owned(),
-            |held| mine(&held.open, uid.and_then(|uid| held.owned.get(uid))),
+        // The markers this person may see, and which of them they keep in sight in
+        // game. The pins go out only to whoever set them: what somebody has
+        // chosen to keep on their own map is nobody else's business, and the page
+        // has one question — is this one mine to see pinned — rather than a list
+        // per player to search.
+        let (markers, pins) = self.markers.lock().map_or_else(
+            |_| ("[]".to_owned(), "[]".to_owned()),
+            |held| {
+                (
+                    mine(&held.open, uid.and_then(|uid| held.owned.get(uid))),
+                    uid.and_then(|uid| held.pinned.get(uid))
+                        .cloned()
+                        .unwrap_or_else(|| "[]".to_owned()),
+                )
+            },
+        );
+
+        // Every claim, or none. Unlike the markers there is nothing to join: a
+        // reader is entitled to the lot or to none of it, because that is the
+        // shape of the question the mod answered.
+        //
+        // What this reader is allowed to claim goes out beside them, and only to
+        // them. It is what the form needs to say a rectangle's cost before asking
+        // for it — see the mod's `ClaimAllowance` — and it is nobody else's
+        // business how much land somebody has left.
+        let (claims, claiming, height) = self.claims.lock().map_or_else(
+            |_| ("[]".to_owned(), "null".to_owned(), 0),
+            |held| {
+                let allowed = held.everyones
+                    || uid.is_some_and(|uid| held.seen.contains(uid));
+                let list = if allowed { held.list.clone() } else { "[]".to_owned() };
+                let mine = uid
+                    .and_then(|uid| held.making.get(uid))
+                    .cloned()
+                    .unwrap_or_else(|| "null".to_owned());
+                (list, mine, held.height)
+            },
         );
 
         let world = self
@@ -255,7 +386,7 @@ impl Live {
             .map_or_else(|| "null".to_owned(), |(body, _)| body);
 
         format!(
-            r#"{{"Players":{players},"Online":{online},"Grouped":{grouped},"Waypoints":{markers},"World":{world}}}"#
+            r#"{{"Players":{players},"Online":{online},"Grouped":{grouped},"Waypoints":{markers},"Pins":{pins},"Claims":{claims},"Claiming":{claiming},"Height":{height},"World":{world}}}"#
         )
     }
 }
@@ -293,6 +424,7 @@ fn sorted(body: &str) -> Option<Markers> {
         colors: array(read.colors.as_deref()),
         open: array(read.public.as_deref()),
         owned: arrays(read.private),
+        pinned: arrays(read.pins),
     })
 }
 
@@ -314,6 +446,32 @@ fn watching(body: &str) -> Option<Seen> {
         open: array(read.public.as_deref()),
         owned: arrays(read.private),
         grouped: arrays(read.grouped),
+    })
+}
+
+/// The mod's claims, taken apart no further than they have to be.
+///
+/// Anything that is not the shape this build posts is nothing rather than a
+/// partial reading of it, for the reason the markers give: a body that arrived
+/// mangled is a body whose permissions are not known, and a claim shown to
+/// somebody the mod did not name is the one mistake this file exists to prevent.
+fn held(body: &str) -> Option<Claims> {
+    if !body.trim_start().starts_with('{') {
+        return None;
+    }
+
+    let read: Held = serde_json::from_str(body).ok()?;
+    Some(Claims {
+        body: body.to_owned(),
+        everyones: read.everyones,
+        list: array(read.claims.as_deref()),
+        seen: read.seen,
+        making: read
+            .making
+            .into_iter()
+            .map(|(uid, allowance)| (uid, allowance.get().trim().to_owned()))
+            .collect(),
+        height: read.height,
     })
 }
 
@@ -365,20 +523,43 @@ pub fn markers_path(exports: &Path) -> PathBuf {
 mod tests {
     use super::*;
 
-    /// One public marker, one of Ada's and one of Bob's.
+    /// One public marker, one of Ada's and one of Bob's — and Ada keeping the
+    /// public one in sight, which is a marker of neither of theirs.
     const POSTED: &str = r##"{
         "Colors":["#f9d0dc","#ed272a"],
         "Public":[{"Title":"trader","Key":"a"}],
         "Private":{
             "uid-ada":[{"Title":"ada's hoard","Key":"b"}],
             "uid-bob":[{"Title":"bob's hoard","Key":"c"}]
-        }
+        },
+        "Pins":{"uid-ada":["a"]}
     }"##;
 
     fn told() -> Live {
         let live = Live::load(Path::new("/nonexistent"));
         assert!(live.set_markers(POSTED.to_owned()), "the envelope this build posts is taken");
         live
+    }
+
+    #[test]
+    fn a_pin_reaches_whoever_set_it_and_nobody_else() {
+        let live = told();
+
+        assert!(live.body(Some("uid-ada")).contains(r#""Pins":["a"]"#), "Ada is sent her own");
+        // Bob and a stranger are shown the marker Ada pinned and told nothing
+        // about her keeping it: what somebody keeps on their own map is theirs.
+        assert!(live.body(Some("uid-bob")).contains(r#""Pins":[]"#));
+        assert!(live.body(None).contains(r#""Pins":[]"#));
+    }
+
+    #[test]
+    fn a_post_from_a_mod_that_knows_nothing_of_pins_has_none() {
+        let live = Live::load(Path::new("/nonexistent"));
+        assert!(live.set_markers(
+            r##"{"Colors":[],"Public":[{"Title":"trader","Key":"a"}],"Private":{}}"##.to_owned()));
+        // An empty array rather than a hole, for the reason every other list
+        // here is one: a page cannot parse what it was not sent.
+        assert!(live.body(Some("uid-ada")).contains(r#""Pins":[]"#));
     }
 
     #[test]
@@ -522,8 +703,82 @@ mod tests {
         assert!(live.body(Some("a")).contains(r#""Grouped":[]"#), "nor is somebody in none");
     }
 
+    /// Two claims, seen by Ada alone, and only Ada may draw one.
+    const CLAIMED: &str = r##"{
+        "Everyones": false,
+        "Height": 256,
+        "Claims": [{"Key":"a","Owner":"Ada","OwnerUid":"uid-ada","Areas":[
+            {"X1":10,"Z1":10,"X2":20,"Z2":20,"Y1":0,"Y2":256}]}],
+        "Seen": ["uid-ada"],
+        "Making": {"uid-ada":{"Allowance":262144,"Used":0,"MaxAreas":3,"Areas":0}}
+    }"##;
+
+    fn claimed() -> Live {
+        let live = Live::load(Path::new("/nonexistent"));
+        assert!(live.set_claims(CLAIMED.to_owned()), "the envelope this build posts is taken");
+        live
+    }
+
     #[test]
-    fn a_report_in_the_shape_an_older_mod_posted_is_refused() {
+    fn a_claim_reaches_whoever_the_mod_named_and_nobody_else() {
+        let live = claimed();
+
+        let ada = live.body(Some("uid-ada"));
+        assert!(ada.contains(r#""Key":"a""#), "Ada was named, so Ada is sent them");
+
+        // The whole point of the gate. A reader the mod did not name is sent an
+        // empty list rather than a list to be filtered in a browser, because a
+        // browser cannot be asked to hide what it has already been handed.
+        for who in [None, Some("uid-bob")] {
+            assert!(
+                live.body(who).contains(r#""Claims":[]"#),
+                "{who:?} was not named and is sent no claims"
+            );
+        }
+    }
+
+    #[test]
+    fn claims_open_to_everybody_reach_a_stranger() {
+        // What a server that has not narrowed `[claims] view` looks like: the
+        // game already sends every claim to every client, so the map saying less
+        // would be telling players less than the game does.
+        let live = Live::load(Path::new("/nonexistent"));
+        assert!(live.set_claims(
+            r#"{"Everyones":true,"Claims":[{"Key":"a"}],"Seen":[],"Making":{}}"#.to_owned()
+        ));
+        for who in [None, Some("uid-bob")] {
+            assert!(live.body(who).contains(r#""Key":"a""#), "{who:?} is shown an open claim");
+        }
+    }
+
+    #[test]
+    fn what_somebody_may_claim_is_said_to_them_alone() {
+        let live = claimed();
+
+        let ada = live.body(Some("uid-ada"));
+        assert!(ada.contains(r#""Allowance":262144"#), "Ada is told her own allowance");
+        assert!(ada.contains(r#""Height":256"#), "and how tall the world is");
+
+        // How much land somebody has left is nobody else's business, and a
+        // reader who may not claim at all is told nothing rather than zero.
+        for who in [None, Some("uid-bob")] {
+            assert!(
+                live.body(who).contains(r#""Claiming":null"#),
+                "{who:?} may not claim, so there is nothing to tell them"
+            );
+        }
+    }
+
+    #[test]
+    fn a_claim_post_this_build_cannot_read_is_refused() {
+        let live = Live::load(Path::new("/nonexistent"));
+        assert!(!live.set_claims(r#"[{"Key":"a"}]"#.to_owned()), "a bare array is not the envelope");
+        assert!(!live.set_claims("not json".to_owned()));
+        assert!(live.body(Some("uid-ada")).contains(r#""Claims":[]"#));
+    }
+
+    #[test]
+fn a_report_in_the_shape_an_older_mod_posted_is_refused() {
         // A bare array was every player, to everybody. Read that way it would be
         // exactly what an operator turned the setting off to prevent.
         let live = Live::load(Path::new("/nonexistent"));

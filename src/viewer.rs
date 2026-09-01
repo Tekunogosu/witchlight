@@ -44,9 +44,11 @@ pub const SCRIPT: &str = concat!(
     include_str!("viewer/search.js"),
     include_str!("viewer/compose.js"),
     include_str!("viewer/markers.js"),
+    include_str!("viewer/claims.js"),
     include_str!("viewer/blocks.js"),
     include_str!("viewer/presets.js"),
     include_str!("viewer/directory.js"),
+    include_str!("viewer/bulk.js"),
     include_str!("viewer/profile.js"),
     include_str!("viewer/poll.js"),
 );

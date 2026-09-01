@@ -90,6 +90,12 @@ function drawWho() {
     whoList.prepend(yours.element);
   }
 
+  // Which card is lit is settled here rather than only where a follow is taken
+  // up, because a card can appear after the follow does: somebody who has the
+  // map open on their own player signs in before their player is online, and the
+  // card built for them minutes later had no idea it was the one being followed.
+  showFollowed();
+
   for (const tab of who.querySelectorAll('.tab')) {
     tab.querySelector('.tally').textContent =
       tab.dataset.who === 'group' ? players.filter(inGroup).length : players.length;

@@ -226,13 +226,37 @@ let pickable = [];
 /** Which of them the keyboard is on, or -1 for none. */
 let pickedRow = -1;
 
-/** Takes one, and puts the list away. */
+/**
+ * The preset the keyboard is on, or nothing.
+ *
+ * What decides whether a press in the name box belongs to this list or to the
+ * form behind it. Asked rather than each of them reading `pickedRow` for itself:
+ * the two listeners on that box both have to agree about whether a list is open
+ * on a row, and a press that means two things at once is the bug this answers.
+ */
+function pickedPreset() {
+  return presetPick.classList.contains('open') && pickedRow >= 0
+    ? pickable[pickedRow]
+    : null;
+}
+
+/**
+ * Takes one, and puts the list away.
+ *
+ * The window stays open. A preset is what a marker starts as rather than what it
+ * is, and somebody who picked one may still want to move the place, change the
+ * colour, or take the name it gave them and add to it — so this fills the form
+ * in and stops there.
+ *
+ * The focus goes to Save. Not back into the name box, or the search opens again
+ * on the name the preset just put there; and not to the button that opened the
+ * list, where the next press would open it a second time. On Save, the press
+ * after this one does the thing the two presses were leading to.
+ */
 function takePreset(preset) {
   fillFromPreset(preset);
   showPresetPick(false);
-  // Not back into the name box, or the search would open again on the name the
-  // preset just put there.
-  presetPickButton.focus();
+  markerSave.focus();
 }
 
 /**
@@ -359,12 +383,13 @@ function buildPresets() {
       const back = event.key === 'ArrowUp' || (event.key === 'Tab' && event.shiftKey);
       pickedRow = nextRow(pickedRow, back ? -1 : 1, pickable.length);
       showPickedRow();
-    } else if (event.key === 'Enter' && pickedRow >= 0) {
+    } else if (event.key === 'Enter' && pickedPreset()) {
       // Only with a row under the keyboard. Typing a name and pressing Enter is
       // the other half of what this box is for, and it must not turn into
-      // whichever preset happened to be listed first.
+      // whichever preset happened to be listed first — which is the same
+      // question the form behind asks, through the same function.
       event.preventDefault();
-      takePreset(pickable[pickedRow]);
+      takePreset(pickedPreset());
     }
   });
 

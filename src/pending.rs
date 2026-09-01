@@ -1,4 +1,9 @@
-//! Markers asked for on the web, waiting for the game to make them.
+//! What the web asked for, waiting for the game to do it.
+//!
+//! Markers, and the land claims somebody drew a rectangle for. Two kinds of thing
+//! in one queue because they share the one thing that empties it: the mod
+//! collects on the tick that already posts positions, and a second queue would be
+//! a second round trip every two seconds to find out that nothing was in it.
 //!
 //! The two halves talk one way. The mod posts to this service and reads what it
 //! answers; nothing here can reach into a game server, which may not even be on
@@ -54,6 +59,11 @@ pub struct Marker {
     pub z: i32,
     /// Whether its owner asked to keep it to themselves.
     pub private: bool,
+    /// Which block this marker is about, where the page is saying so — the
+    /// pattern of a preset it is being made to look like. Empty is the ordinary
+    /// case and means the mod decides for itself, by reading the world under the
+    /// marker; a page cannot be trusted to name a block and is not asked to.
+    pub block: String,
 }
 
 /// What a browser sent. Every field of it is a claim, and none is taken as read.
@@ -71,6 +81,8 @@ struct Asked {
     z: i32,
     #[serde(default)]
     private: bool,
+    #[serde(default)]
+    block: String,
 }
 
 impl Marker {
@@ -121,6 +133,10 @@ impl Marker {
             return Err("a colour is six hex digits behind a hash");
         };
 
+        let Some(block) = block_pattern(asked.block.trim()) else {
+            return Err("that is not a block code");
+        };
+
         Ok(Self {
             key,
             uid: uid.to_owned(),
@@ -131,6 +147,7 @@ impl Marker {
             y: asked.y,
             z: asked.z,
             private: asked.private,
+            block,
         })
     }
 }
@@ -164,13 +181,297 @@ impl Gone {
     }
 }
 
+/// One marker somebody asked to keep in sight on their own map, or to stop
+/// keeping.
+///
+/// A key, whose ask it was, and which way. Nothing about the marker itself: a pin
+/// names a waypoint rather than describing one, and it changes nothing about the
+/// marker — it changes what one person's own map shows in game. Which is also why
+/// it is not folded into a change: a change to a marker is its owner's business
+/// and everybody sees the result, and this is neither.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct Pin {
+    /// The guid of the waypoint to keep in sight.
+    pub key: String,
+    /// Whose map it is for, taken from their session. The mod decides whether
+    /// they may see the marker at all, which is the whole of the permission.
+    pub uid: String,
+    /// Whether they are keeping it in sight or no longer are.
+    pub on: bool,
+}
+
+impl Pin {
+    /// A pin a page asked for, checked the way a removal is.
+    ///
+    /// The key reaches the mod as the identity of a waypoint, so it is checked
+    /// for shape rather than taken as a string: a page must not be able to name
+    /// a waypoint this map never named.
+    pub fn asked(uid: &str, key: &str, on: bool) -> Result<Self, &'static str> {
+        if !named(key) {
+            return Err("that is not a marker this map made");
+        }
+        Ok(Self { key: key.to_owned(), uid: uid.to_owned(), on })
+    }
+}
+
+/// The most a claim's description may be. A description is what shows in game
+/// when somebody walks into it, which is a line rather than a paragraph.
+const LONGEST_DESCRIPTION: usize = 128;
+
+/// One land claim somebody drew on the map.
+///
+/// A rectangle, how deep it goes, and a description. The depth is asked for
+/// rather than assumed even though the map is drawn from above: a role's
+/// allowance is measured in cubic metres and depth is most of what a claim's
+/// volume is made of, so a map that made every claim the full height of the world
+/// would hand a player a square thirty-two blocks across and no way to ask for a
+/// wider, shallower one.
+///
+/// Nothing here is a permission. Whether this person may take land is the mod's
+/// to answer against the game's own rules — the privilege, the allowance, the
+/// size, and whether it overlaps anybody — and a service that decided any of it
+/// would be a second opinion on a question the game already answers.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct Claim {
+    /// Who asked, taken from their session and never from the page.
+    pub uid: String,
+    pub description: String,
+    /// The corners, west and north first. Normalised here so the mod is never
+    /// handed a rectangle inside out.
+    pub x1: i32,
+    pub z1: i32,
+    pub x2: i32,
+    pub z2: i32,
+    /// How far down it starts and how far up it reaches, lower first. Clamped to
+    /// the world by the mod, which is the half that knows how tall it is.
+    pub y1: i32,
+    pub y2: i32,
+}
+
+/// What a browser sent for a claim. Every field of it is a claim, and none is
+/// taken as read.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct Drawn {
+    #[serde(default)]
+    description: String,
+    x1: i32,
+    z1: i32,
+    x2: i32,
+    z2: i32,
+    y1: i32,
+    y2: i32,
+}
+
+impl Claim {
+    /// A claim a page asked for, checked and squared up.
+    ///
+    /// The owner comes from the session rather than the body, for the reason a
+    /// marker's does: a page that could say whose claim it is making is a page
+    /// that can take land in somebody else's name.
+    ///
+    /// The error is what to tell the person, so each says which part was wrong.
+    pub fn drawn(uid: &str, body: &str) -> Result<Self, &'static str> {
+        let Ok(asked) = serde_json::from_str::<Drawn>(body) else {
+            return Err("expected a claim: two corners and a description");
+        };
+
+        let description = asked.description.trim();
+        if description.chars().count() > LONGEST_DESCRIPTION {
+            return Err("that description is too long");
+        }
+
+        // Squared up here rather than at the far end. A rectangle dragged
+        // north-west has its corners the other way round, and every reader of one
+        // that has to remember which way it was drawn is a reader that can forget.
+        let (x1, x2) = (asked.x1.min(asked.x2), asked.x1.max(asked.x2));
+        let (z1, z2) = (asked.z1.min(asked.z2), asked.z1.max(asked.z2));
+        if x1 == x2 || z1 == z2 {
+            return Err("a claim needs some ground in it");
+        }
+
+        Ok(Self {
+            uid: uid.to_owned(),
+            description: description.to_owned(),
+            x1,
+            z1,
+            x2,
+            z2,
+            y1: asked.y1.min(asked.y2),
+            y2: asked.y1.max(asked.y2),
+        })
+    }
+}
+
+/// The most people one claim may name. Far past a working set, and there so that
+/// a page in a loop cannot grow a claim without end.
+const MOST_PERMITTED: usize = 64;
+
+/// Who a claim lets in beyond its owner.
+///
+/// Named rather than numbered: what a browser sends is a list of player names
+/// typed into a box, and the mod is the half that can turn one into the uid a
+/// claim stores. It sends the names back too, so the form shows what it holds
+/// rather than a column of base64.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct Allowed {
+    /// The people named, by the name the game knows them as.
+    #[serde(default)]
+    pub names: Vec<String>,
+    /// Whether anybody at all may use what is on this land — doors, chests,
+    /// levers. The game's own `AllowUseEveryone`.
+    #[serde(default)]
+    pub everyone_uses: bool,
+    /// Whether anybody at all may walk across it. The game's own
+    /// `AllowTraverseEveryone`.
+    #[serde(default)]
+    pub everyone_walks: bool,
+}
+
+impl Allowed {
+    /// The same list, brought inside the bounds this will carry.
+    fn sane(mut self) -> Self {
+        for name in &mut self.names {
+            let trimmed = name.trim();
+            if trimmed.chars().count() > LONGEST_NAME {
+                *name = trimmed.chars().take(LONGEST_NAME).collect();
+            } else if trimmed.len() != name.len() {
+                *name = trimmed.to_owned();
+            }
+        }
+        self.names.retain(|name| !name.is_empty());
+        self.names.dedup();
+        self.names.truncate(MOST_PERMITTED);
+        self
+    }
+}
+
+/// The most a player name may be. The game's own limit is well under this.
+const LONGEST_NAME: usize = 64;
+
+/// A change to a claim that already exists.
+///
+/// Its name, and who it lets in. Not the ground it covers: moving a boundary is
+/// the one change that has to be judged against everybody else's claims and
+/// against an allowance, and the map has no way to show somebody what they would
+/// be giving up. Redrawing it is making a new one, which the form already does.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct ClaimEdit {
+    /// Which claim, by the name the mod gave it.
+    pub key: String,
+    /// Who asked, taken from their session. The mod decides whether they may.
+    pub uid: String,
+    pub description: String,
+    pub allowed: Allowed,
+}
+
+/// One claim somebody asked to be given up.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct ClaimGone {
+    pub key: String,
+    /// Who asked, taken from their session. The mod decides whether they may.
+    pub uid: String,
+}
+
+/// What a browser sent for a change to a claim.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct Edited {
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    allowed: Allowed,
+}
+
+impl ClaimEdit {
+    /// A change a page asked for, checked the way a new claim is.
+    pub fn asked(uid: &str, key: &str, body: &str) -> Result<Self, &'static str> {
+        if !claim_named(key) {
+            return Err("that is not a claim this map knows");
+        }
+        let Ok(edit) = serde_json::from_str::<Edited>(body) else {
+            return Err("expected a description and who is allowed");
+        };
+
+        let description = edit.description.trim();
+        if description.chars().count() > LONGEST_DESCRIPTION {
+            return Err("that description is too long");
+        }
+
+        Ok(Self {
+            key: key.to_owned(),
+            uid: uid.to_owned(),
+            description: description.to_owned(),
+            allowed: edit.allowed.sane(),
+        })
+    }
+}
+
+impl ClaimGone {
+    pub fn asked(uid: &str, key: &str) -> Result<Self, &'static str> {
+        if !claim_named(key) {
+            return Err("that is not a claim this map knows");
+        }
+        Ok(Self { key: key.to_owned(), uid: uid.to_owned() })
+    }
+}
+
+/// Whether this is a name the mod hands out for a claim.
+///
+/// The mod works one out from what the claim is, because the game gives a claim
+/// nothing to be known by. Checked for shape rather than taken as a string: a key
+/// arrives from a page and reaches the mod as the identity of a piece of land.
+fn claim_named(key: &str) -> bool {
+    !key.is_empty()
+        && key.len() <= 32
+        && key.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+/// Everything about claims that is waiting, in the shape the mod collects it in.
+#[derive(Debug, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct ClaimAsks {
+    pub make: Vec<Claim>,
+    pub change: Vec<ClaimEdit>,
+    pub remove: Vec<ClaimGone>,
+}
+
+impl ClaimAsks {
+    fn held(&self) -> usize {
+        self.make.len() + self.change.len() + self.remove.len()
+    }
+}
+
+/// Everything about markers that is waiting.
+#[derive(Debug, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct MarkerAsks {
+    pub make: Vec<Marker>,
+    pub change: Vec<Marker>,
+    pub remove: Vec<Gone>,
+    pub pin: Vec<Pin>,
+}
+
+impl MarkerAsks {
+    fn held(&self) -> usize {
+        self.make.len() + self.change.len() + self.remove.len() + self.pin.len()
+    }
+}
+
 /// Everything waiting, in the shape the mod collects it in.
 #[derive(Debug, Default, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct Collected {
-    pub make: Vec<Marker>,
-    pub change: Vec<Marker>,
-    pub remove: Vec<Gone>,
+    /// Made, changed and given up — said once per kind of thing, because the two
+    /// kinds answer the same three verbs and a flat envelope had already grown a
+    /// `Claims` beside a `Make` that only meant markers.
+    pub markers: MarkerAsks,
+    pub claims: ClaimAsks,
 }
 
 /// Every marker asked for and not yet collected.
@@ -188,23 +489,42 @@ impl Pending {
     /// Holds one new marker for the mod to collect. False where there is no room,
     /// which is a game server that has stopped collecting.
     pub fn want(&self, wanted: Marker) -> bool {
-        self.hold(|waiting| waiting.make.push(wanted))
+        self.hold(|waiting| waiting.markers.make.push(wanted))
     }
 
-    /// Holds one change. Bounded with the rest: the three share a queue because
+    /// Holds one change. Bounded with the rest: they all share a queue because
     /// they share the one thing that empties it.
     pub fn change(&self, edit: Marker) -> bool {
-        self.hold(|waiting| waiting.change.push(edit))
+        self.hold(|waiting| waiting.markers.change.push(edit))
     }
 
     /// Holds one removal.
     pub fn remove(&self, gone: Gone) -> bool {
-        self.hold(|waiting| waiting.remove.push(gone))
+        self.hold(|waiting| waiting.markers.remove.push(gone))
     }
 
-    /// Room for one more, and the putting of it. The bound is over all three
-    /// lists, because what fills them is one page and what empties them is one
-    /// ask.
+    /// Holds one marker somebody asked to keep in sight, or to stop keeping.
+    pub fn pin(&self, pin: Pin) -> bool {
+        self.hold(|waiting| waiting.markers.pin.push(pin))
+    }
+
+    /// Holds one land claim, bounded with the rest for the same reason.
+    pub fn claim(&self, drawn: Claim) -> bool {
+        self.hold(|waiting| waiting.claims.make.push(drawn))
+    }
+
+    /// Holds one change to a claim.
+    pub fn claim_edit(&self, edit: ClaimEdit) -> bool {
+        self.hold(|waiting| waiting.claims.change.push(edit))
+    }
+
+    /// Holds one claim somebody asked to give up.
+    pub fn claim_gone(&self, gone: ClaimGone) -> bool {
+        self.hold(|waiting| waiting.claims.remove.push(gone))
+    }
+
+    /// Room for one more, and the putting of it. The bound is over every list,
+    /// because what fills them is one page and what empties them is one ask.
     fn hold(&self, put: impl FnOnce(&mut Collected)) -> bool {
         let Ok(mut waiting) = self.waiting.lock() else {
             return false;
@@ -240,7 +560,7 @@ impl Pending {
 impl Collected {
     /// How many asks this is, whatever kind each of them is.
     fn held(&self) -> usize {
-        self.make.len() + self.change.len() + self.remove.len()
+        self.markers.held() + self.claims.held()
     }
 }
 
@@ -269,6 +589,32 @@ fn named(key: &str) -> bool {
             .map(str::len)
             .eq([8, 4, 4, 4, 12])
         && key.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
+}
+
+/// The most a block code may be. A code is a domain, a name and its variants,
+/// which is a line rather than a paragraph.
+const LONGEST_CODE: usize = 128;
+
+/// Which block a marker is about, as a browser said it.
+///
+/// A block code — `game:rock-granite` — or a preset's pattern, which is a code
+/// with `*` standing for a run of characters. Nothing here reaches a path or a
+/// query, so the check is about shape rather than safety: what this is for is a
+/// pattern the page matches presets against, and a value that could not be a
+/// block code is a value nothing will ever match.
+///
+/// Empty is not a refusal. It is the ordinary case — a page that is not saying
+/// anything about the block, leaving the mod to read the world under the marker.
+fn block_pattern(said: &str) -> Option<String> {
+    if said.is_empty() {
+        return Some(String::new());
+    }
+    if said.chars().count() > LONGEST_CODE {
+        return None;
+    }
+    said.bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || b"-_:*./".contains(&byte))
+        .then(|| said.to_ascii_lowercase())
 }
 
 /// A colour a browser sent, as the mod will store it. Lowercased, so the same
@@ -386,6 +732,20 @@ mod tests {
     const KEY: &str = "9e5738f0-303a-673d-a328-f19e0d08e7d1";
 
     #[test]
+    fn a_pin_names_a_marker_this_map_made_and_says_which_way() {
+        let kept = Pin::asked("uid-ada", KEY, true).expect("a pin");
+        assert_eq!(kept.uid, "uid-ada");
+        assert_eq!(kept.key, KEY);
+        assert!(kept.on);
+
+        assert!(!Pin::asked("uid-ada", KEY, false).expect("a pin").on);
+        // The key reaches the mod as the identity of a waypoint, so a page must
+        // not be able to name one this map never named.
+        assert!(Pin::asked("uid-ada", "../secret", true).is_err());
+        assert!(Pin::asked("uid-ada", "", true).is_err());
+    }
+
+    #[test]
     fn what_is_held_is_given_up_once() {
         let pending = Pending::new();
         let wanted = Marker::wanted("uid-ada", BODY).expect("a marker");
@@ -399,15 +759,12 @@ mod tests {
         assert_eq!(pending.waiting(), 3);
 
         let taken = pending.take();
-        assert_eq!(taken.make, vec![wanted]);
-        assert_eq!(taken.change, vec![edit]);
-        assert_eq!(taken.remove, vec![gone]);
+        assert_eq!(taken.markers.make, vec![wanted]);
+        assert_eq!(taken.markers.change, vec![edit]);
+        assert_eq!(taken.markers.remove, vec![gone]);
         assert_eq!(pending.waiting(), 0, "collecting empties it");
         let again = pending.take();
-        assert!(
-            again.make.is_empty() && again.change.is_empty() && again.remove.is_empty(),
-            "and a second collection finds nothing"
-        );
+        assert_eq!(again, Collected::default(), "and a second collection finds nothing");
     }
 
     #[test]
@@ -484,5 +841,67 @@ mod tests {
             );
             assert!(seen.insert(key), "a marker\'s name came round twice");
         }
+    }
+
+    /// What a browser sends for a claim, with the corners it was drawn between.
+    fn drawn(x1: i32, z1: i32, x2: i32, z2: i32) -> String {
+        format!(
+            r#"{{"Description":"the north field","X1":{x1},"Z1":{z1},"X2":{x2},"Z2":{z2},"Y1":90,"Y2":60}}"#
+        )
+    }
+
+    #[test]
+    fn a_claim_is_squared_up_however_it_was_drawn() {
+        // Dragged north-west, which puts every corner the other way round. A
+        // reader that had to remember which way it was drawn is a reader that
+        // can forget, so it is settled once here.
+        let claim = Claim::drawn("uid-ada", &drawn(60, 80, 20, 10)).expect("a claim");
+        assert_eq!((claim.x1, claim.z1, claim.x2, claim.z2), (20, 10, 60, 80));
+        assert_eq!((claim.y1, claim.y2), (60, 90), "and the depth with them");
+
+        // Dragged the other way, to the same answer.
+        let same = Claim::drawn("uid-ada", &drawn(20, 10, 60, 80)).expect("a claim");
+        assert_eq!((same.x1, same.z1, same.x2, same.z2), (20, 10, 60, 80));
+    }
+
+    #[test]
+    fn a_claims_owner_is_the_session_and_never_the_page() {
+        // The same rule a marker follows, and worth its own check because the
+        // stake is higher: a page that could say whose claim it is making is a
+        // page that can take land in somebody else's name.
+        let body = r#"{"Uid":"uid-bob","Description":"","X1":0,"Z1":0,"X2":10,"Z2":10,"Y1":0,"Y2":9}"#;
+        let claim = Claim::drawn("uid-ada", body).expect("a claim");
+        assert_eq!(claim.uid, "uid-ada", "what the page said about the owner is ignored");
+    }
+
+    #[test]
+    fn a_rectangle_with_no_ground_in_it_is_refused() {
+        for (x1, z1, x2, z2) in [(5, 5, 5, 40), (5, 5, 40, 5), (5, 5, 5, 5)] {
+            assert!(
+                Claim::drawn("uid-ada", &drawn(x1, z1, x2, z2)).is_err(),
+                "{x1},{z1} to {x2},{z2} is a line or a point, not a claim"
+            );
+        }
+    }
+
+    #[test]
+    fn a_description_longer_than_a_line_is_refused() {
+        let long = "x".repeat(LONGEST_DESCRIPTION + 1);
+        let body = format!(r#"{{"Description":"{long}","X1":0,"Z1":0,"X2":9,"Z2":9,"Y1":0,"Y2":9}}"#);
+        assert!(Claim::drawn("uid-ada", &body).is_err());
+    }
+
+    #[test]
+    fn a_claim_waits_with_the_markers_and_is_collected_with_them() {
+        // One queue, because what fills them is one page and what empties them is
+        // one ask on one tick.
+        let waiting = Pending::new();
+        assert!(waiting.claim(Claim::drawn("uid-ada", &drawn(0, 0, 9, 9)).expect("a claim")));
+        assert_eq!(waiting.waiting(), 1, "a claim counts against the same bound");
+
+        let taken = waiting.take();
+        assert_eq!(taken.claims.make.len(), 1);
+        assert_eq!(taken.claims.make[0].description, "the north field");
+        assert_eq!(waiting.waiting(), 0, "and collecting empties it");
     }
 }

@@ -37,6 +37,12 @@
   </filter>
 </defs></svg>
 <div id="map"></div>
+<!-- The top right corner: the world's clock, and who is on the world. Read right
+     to left, because the list is the taller of the two and the corner is where a
+     page puts an account — so the clock stands beside it rather than under it,
+     and takes the corner itself on a server with nobody on. The clock is put
+     here from script; see `corner.js`, which builds it. -->
+<div id="upper">
 <!-- Who is online. The tabs sort what is already here rather than asking for
      anything different: everybody the server shares, or the people in a group
      with you. -->
@@ -49,6 +55,7 @@
   </div>
   <div id="who-list" role="tabpanel"></div>
   <p id="who-said" class="note"></p>
+</div>
 </div>
 <div id="corner"></div>
 <div id="settings"><h2>Show</h2></div>
@@ -101,6 +108,12 @@
     <button id="marker-remember" class="keepsake" type="button"
             aria-pressed="false"><span class="chrome masked mark-bookmarks-simple"
             aria-hidden="true"></span></button>
+    <!-- Whether this reader keeps the marker in sight on their own map in game.
+         Beside the other two because it is the same kind of thing: a state the
+         form is holding about the marker, rather than a way out of the window.
+         The mark it wears is set from script, since a pin and a pin struck
+         through are one subject in two states. -->
+    <button id="marker-pin" class="keepsake" type="button" aria-pressed="false"></button>
     <!-- What the row ends with is pushed to the far side by this rather than by a
          margin on whichever button happens to be first of them: the bin comes and
          goes with what the form is open on, and a margin hung on it would take the
@@ -164,6 +177,11 @@
        so: the service sends the markers everybody can see and then the ones only
        you can, so making a marker private moved its row to the bottom. -->
   <div id="marker-head" class="head">
+    <!-- The tick column, shown only while the list is in bulk edit. Its heading
+         is the box that ticks every row under it, which is what a column of
+         boxes means everywhere else. -->
+    <span class="tick"><input id="marker-tick-all" type="checkbox"
+          aria-label="Tick every marker listed"></span>
     <button class="sort" type="button" data-sort="name" aria-sort="ascending"
             title="Sort by name">Name<span class="caret chrome masked mark-caret-up" aria-hidden="true"></span></button>
     <button class="sort" type="button" data-sort="spawn" aria-sort="none"
@@ -183,6 +201,148 @@
     <button id="marker-hide" class="word" type="button">Make all private</button>
     <button id="marker-show" class="word" type="button">Make all public</button>
   </div>
+  <!-- What is done to many markers at once. The row above changes who may see
+       them and is offered whether or not anything is ticked, because "every
+       marker on this screen" is a set a reader can already see. These two need
+       one chosen, so they arrive with the boxes that choose it. -->
+  <div class="deed">
+    <button id="marker-bulk" class="word" type="button" aria-pressed="false">Bulk edit</button>
+    <span class="gap"></span>
+    <button id="marker-from-preset" class="word" type="button">From preset</button>
+    <button id="marker-bulk-drop" class="drop" type="button"
+            title="Delete the ticked markers" aria-label="Delete the ticked markers"><span
+            class="chrome masked mark-trash" aria-hidden="true"></span></button>
+  </div>
+</div>
+
+<!-- Which preset a screenful of markers is being made to look like. Its own
+     window rather than the presets list, which is where a preset is made and
+     changed: this one picks exactly one, says so, and is answered by Update or
+     Cancel. -->
+<div id="apply" class="window">
+  <div class="bar">
+    <h2>From preset</h2>
+    <button class="shut" type="button" title="Close" aria-label="Close"><span class="chrome masked mark-x" aria-hidden="true"></span></button>
+  </div>
+  <p class="note" id="apply-what"></p>
+  <div class="find">
+    <span class="chrome masked mark-magnifying-glass" aria-hidden="true"></span>
+    <input id="apply-find" type="search" autocomplete="off" placeholder="find a preset"
+           aria-label="Find a preset by name or pattern">
+  </div>
+  <div id="apply-list" role="listbox" aria-label="Your presets"></div>
+  <p id="apply-said"></p>
+  <div class="deed">
+    <span class="gap"></span>
+    <button id="apply-cancel" class="word" type="button">Cancel</button>
+    <button id="apply-save" class="word go" type="button">Update</button>
+  </div>
+</div>
+
+<!-- Taking land, which the game decides and this only asks for. Narrow, because
+     every value in it is short: a name, six numbers in three pairs, and a list of
+     people. Laid out as a column of labelled sections rather than a wide row of
+     boxes, so what each number is, is written beside it instead of guessed at
+     from where it sits. -->
+<div id="claim" class="window">
+  <div class="bar">
+    <h2 id="claim-title">New land claim</h2>
+    <button class="shut" type="button" title="Close" aria-label="Close"><span class="chrome masked mark-x" aria-hidden="true"></span></button>
+  </div>
+  <label class="part" for="claim-name">Name</label>
+  <input id="claim-name" type="text" maxlength="128" placeholder="What this land is">
+
+  <!-- Two corners, each its own labelled pair. West/north and east/south rather
+       than "x1, z1": a corner of a rectangle on a north-up map has a compass
+       direction, and that is what somebody reads it as. -->
+  <div id="claim-ground">
+    <span class="part">Area</span>
+    <div class="pair">
+      <label for="claim-x1">West</label><input id="claim-x1" type="number" placeholder="x">
+      <label for="claim-z1">North</label><input id="claim-z1" type="number" placeholder="z">
+    </div>
+    <div class="pair">
+      <label for="claim-x2">East</label><input id="claim-x2" type="number" placeholder="x">
+      <label for="claim-z2">South</label><input id="claim-z2" type="number" placeholder="z">
+    </div>
+  </div>
+
+  <!-- Asked rather than assumed. An allowance is measured in cubic metres and
+       depth is most of what a claim's volume is, so the whole height of the world
+       would buy a square thirty-two blocks across and leave no way to ask for a
+       wider, shallower one. Filled in from the ground under the middle of what
+       was drawn, which is where somebody marking out a base is standing. -->
+  <div id="claim-depth">
+    <span class="part">Depth</span>
+    <div class="pair">
+      <label for="claim-y1">Bottom</label><input id="claim-y1" type="number" placeholder="y">
+      <label for="claim-y2">Top</label><input id="claim-y2" type="number" placeholder="y">
+    </div>
+    <!-- On its own line rather than at the end of the row above, so every box in
+         the form lines up in one column. Squeezed in beside the numbers it took
+         the width the Top box needed and left that one out of step with the two
+         above it. Set apart from the pair it acts on, and no wider than the words
+         on it: a button the width of the window reads as the section's own
+         heading rather than as one shortcut inside it. -->
+    <button id="claim-full-height" class="apart" type="button">Max height</button>
+  </div>
+
+  <!-- Who else may do anything here. The game offers two everybody-permissions
+       and a list of named people; this offers exactly those, because inventing a
+       third would be a permission system the game would not enforce. -->
+  <div id="claim-access">
+    <span class="part">Permissions</span>
+    <label class="line"><input id="claim-everyone-walks" type="checkbox">Anyone may walk across it</label>
+    <label class="line"><input id="claim-everyone-uses" type="checkbox">Anyone may use doors and chests</label>
+    <!-- Both of the game's everybody-permissions at once, which is the common
+         case for a road or a market and two presses otherwise. It ticks the
+         boxes above rather than being a third state of its own, so what is
+         granted is always readable off them. -->
+    <button id="claim-open-up" class="wide" type="button">Let anyone in</button>
+    <label class="part quiet" for="claim-guests">Players who may build here</label>
+    <div class="find">
+      <input id="claim-guests" type="text" autocomplete="off"
+             placeholder="names, separated by commas"
+             aria-label="Players allowed to build here">
+    </div>
+  </div>
+
+  <p id="claim-what" class="note"></p>
+  <p id="claim-left" class="note"></p>
+  <p id="claim-said"></p>
+  <div class="deed">
+    <button id="claim-drop" class="drop" type="button"
+            title="Give up this claim" aria-label="Give up this claim"><span
+            class="chrome masked mark-trash" aria-hidden="true"></span></button>
+    <button id="claim-draw-again" class="word" type="button">Redraw</button>
+    <span class="gap"></span>
+    <button id="claim-cancel" class="word" type="button">Cancel</button>
+    <button id="claim-save" class="word go" type="button">Claim</button>
+  </div>
+</div>
+
+<!-- Every claim there is, as a list. The map says where each one is; this says
+     what there is, and is the only way to reach one to rename, re-permission or
+     give up. The same shape as the marker list, because it answers the same
+     question about a different thing. -->
+<div id="claims-list" class="window">
+  <div class="bar">
+    <h2>Land claims</h2>
+    <button class="shut" type="button" title="Close" aria-label="Close"><span class="chrome masked mark-x" aria-hidden="true"></span></button>
+  </div>
+  <div class="tabs" role="tablist" aria-label="Which claims are listed">
+    <button class="tab on" type="button" role="tab" data-claims="mine"
+            aria-selected="true" aria-controls="claim-rows">Mine<span class="tally"></span></button>
+    <button class="tab" type="button" role="tab" data-claims="all"
+            aria-selected="false" aria-controls="claim-rows">All<span class="tally"></span></button>
+  </div>
+  <div class="find">
+    <span class="chrome masked mark-magnifying-glass" aria-hidden="true"></span>
+    <input id="claim-find" type="search" autocomplete="off" placeholder="find a claim"
+           aria-label="Find a claim by name or owner">
+  </div>
+  <div id="claim-rows" role="tabpanel"></div>
+  <p id="claims-said" class="note"></p>
 </div>
 
 <div id="profile" class="window">
@@ -193,6 +353,10 @@
   </div>
   <label class="line"><input id="want-presets" type="checkbox">New markers become presets by default</label>
   <label class="line"><input id="want-private" type="checkbox">New markers are private by default</label>
+  <!-- About the person rather than the screen, which is why it is kept with the
+       two above it: somebody who wants the map to open on where they are
+       standing wants that wherever they open it. -->
+  <label class="line"><input id="want-follow" type="checkbox">Follow my player when I sign in</label>
   <p id="want-said" class="note"></p>
   <p id="profile-said"></p>
   <div class="deed">

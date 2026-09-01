@@ -97,7 +97,7 @@ accountName.className = 'who';
 accountName.textContent = 'Unauthenticated';
 accountBar.querySelector('a').append(accountName);
 /**
- * What the world's clock says, beside who is looking at it.
+ * What the world's clock says, in the corner opposite the tools.
  *
  * Two columns of two: the year over the date, the season over the time. The
  * upper line of each is the quieter one — a year and a season are what the date
@@ -105,9 +105,17 @@ accountBar.querySelector('a').append(accountName);
  * out which is which every time they glance at it. The quiet line goes above the
  * loud one the way a heading goes above what it heads: the eye lands on the date
  * and has already passed the year it is in.
+ *
+ * It sits with the players rather than with the buttons, because it says what
+ * the world is doing rather than offering anything to do to it — and because the
+ * left column is a column of controls, which a readout in the middle of reads as
+ * one more thing to press. First in that group, so it gives the corner to the
+ * list of players and takes it back on a server with nobody on.
  */
-const whenBar = L.DomUtil.create('div', 'leaflet-bar', row);
+const upper = document.getElementById('upper');
+const whenBar = L.DomUtil.create('div', 'leaflet-bar');
 whenBar.id = 'when';
+upper.prepend(whenBar);
 /** The same box the account wears, so the two sit level and read as one row of
  *  furniture rather than as a control and a label that happen to be adjacent. */
 const whenBox = L.DomUtil.create('div', 'tool clock', whenBar);
@@ -167,6 +175,28 @@ const presetButton = cornerAnchor(mineBar, 'bookmarks-simple', 'Presets');
 const directoryButton = cornerAnchor(mineBar, 'list-bullets', 'All markers');
 
 /**
+ * Brings the map's own controls into the column the rest of the tools are in.
+ *
+ * Leaflet hangs what it adds off a corner of the map container, and the zoom and
+ * the block picker were in that corner: one stack anchored to the middle of the
+ * left edge while everything else hung from the top. Two stacks on one edge is
+ * two things that move against each other, and a window short enough put the
+ * top one straight through the middle one.
+ *
+ * So Leaflet's corner is taken into this one and laid out with the rest. The
+ * container itself rather than the buttons in it, because anything Leaflet adds
+ * at `topleft` from here on lands in the column without being told — one place
+ * that decides where the map's furniture goes.
+ *
+ * Called after everything that adds a bar has run, so the order down the column
+ * is the order the page builds them in and the map's own controls come last.
+ */
+function gatherCorner() {
+  const owned = map.getContainer().querySelector('.leaflet-top.leaflet-left');
+  if (owned) corner.append(owned);
+}
+
+/**
  * Says who is looking, and offers what only they can act on.
  *
  * The account button is always there and is greyed when nobody has followed a
@@ -201,4 +231,7 @@ async function pollMe() {
   showAccount(viewer);
   await pollMine();
   drawProfile();
+  // After both, because it needs who is looking and what they set, and this is
+  // the one place that has just read the pair of them.
+  followSelf();
 }

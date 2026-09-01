@@ -206,6 +206,10 @@ function showSeenHead() {
 function drawDirectory() {
   const list = document.getElementById('marker-list');
   list.textContent = '';
+  // A tick is about a marker, and a marker that has stopped arriving has none to
+  // be about. Dropped here rather than on the poll, because this is the one
+  // place that runs whenever what there is has changed.
+  pruneTicked();
 
   for (const tab of directory.querySelectorAll('.tab')) {
     const holds = listings[tab.dataset.tab].holds;
@@ -229,7 +233,7 @@ function drawDirectory() {
   }
 
   showSort();
-  showBulk();
+  showFooter();
   showFound(found);
 
   if (drawn > 0) return;
@@ -256,7 +260,12 @@ function markerRow(place, shaded) {
   const [x, z] = said(place.X, place.Z);
 
   const { line, open } = listedRow(place.Icon, place.Color, title, '', shaded);
-  if (mode === 'marker' && editing && editing.Key === place.Key) line.classList.add('chosen');
+  if (editing && editing.Key === place.Key) line.classList.add('chosen');
+  // The box that chooses this row, while the list is in bulk edit — and nothing
+  // at all the rest of the time, because the heading and the rows share one grid
+  // template and a cell nobody draws would still take a column. See `tickCell`.
+  const tick = tickCell(place);
+  if (tick) line.prepend(tick);
   // A cell apiece, under the heading that sorts by it. They were one grey line
   // reading `x, y, z · owner` beneath the name, which left three of the four
   // headings pointing at nothing a reader could find under them.
@@ -273,11 +282,14 @@ function markerRow(place, shaded) {
   // One of a list of identical rows, so the marker it stands for is the only
   // thing telling a reader — or a test — which one this is. What the row will
   // do is in the name too, because it is not the same for every row.
-  open.setAttribute('aria-label', ours ? `Edit marker ${title}` : `Show ${title} on the map`);
+  open.setAttribute('aria-label', ours ? `Edit marker ${title}` : `Open marker ${title}`);
   open.title = ours ? '' : "Only this marker's owner may change it";
   open.addEventListener('click', () => {
     showOnMap(place);
-    if (!ours) return;
+    // On every marker, not only the ones this reader may change: a marker
+    // somebody else made can still be kept in sight or copied into a preset, and
+    // the window is where both of those are. Which of them it offers is
+    // `editCompose`'s to decide.
     editCompose(place);
     besideWindow(directory);
     drawDirectory();
@@ -328,16 +340,14 @@ function showOnMap(place) {
  * The markers a bulk change would touch: the ones on the screen that this person
  * may change and that are not already the way they would be put.
  *
- * What is on the screen rather than what is on the tab. Somebody who has typed
- * into the search box has narrowed what they are looking at, and a button under a
- * list of three that quietly changes forty is a button nobody can trust.
+ * Which markers those are is `chosenMarkers`: what is ticked while the list is in
+ * bulk edit, and what is on the screen the rest of the time. One rule for every
+ * button under the list, because a reader must not have to remember which of
+ * them means which set — and the count on each of them says what it found.
  */
 function wouldFlip(hidden) {
-  return listed.filter(place =>
-    listings[listing].holds(place)
-    && looksLike(markerFind.value, place.Title, place.Owner)
-    && mayEdit(place)
-    && Boolean(place.Private) !== hidden);
+  return chosenMarkers().filter(place =>
+    mayEdit(place) && Boolean(place.Private) !== hidden);
 }
 
 /**
@@ -450,5 +460,6 @@ function buildDirectory() {
   // Typing narrows what a bulk button would touch, so a confirmation given for
   // one list must not be spent on another.
   findingIn(markerFind, () => { armed = null; drawDirectory(); });
+  buildBulk();
   chooseTab(listing);
 }

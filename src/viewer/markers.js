@@ -22,6 +22,10 @@ function drawColours() {
     const swatch = document.createElement('button');
     swatch.type = 'button';
     swatch.className = 'swatch' + (colour === chosenColour ? ' chosen' : '');
+    // Nothing to choose on a marker nobody here may change: the picker shows
+    // what the marker is, and a swatch that took a press would be the window
+    // pretending to an edit it cannot send.
+    swatch.disabled = mode === 'seen';
     swatch.style.background = colour;
     swatch.title = colour;
     // One of thirty-odd identical squares, so the colour is the only thing that
@@ -81,6 +85,7 @@ function pictureButton(name, colour, chosen, chose) {
   const swatch = document.createElement('button');
   swatch.type = 'button';
   swatch.className = 'swatch' + (chosen ? ' chosen' : '');
+  swatch.disabled = mode === 'seen';
   swatch.title = name;
   swatch.setAttribute('aria-label', `Picture ${name}`);
   swatch.setAttribute('aria-pressed', String(chosen));
@@ -147,6 +152,15 @@ async function askForMarker() {
     return;
   }
 
+  // A marker nobody here may change has nothing to ask the game for. What the
+  // button offers instead is the one thing about it that is this reader's own —
+  // a preset shaped like it — and pressing it turns this same window into the
+  // form for that, with the pattern left to type.
+  if (mode === 'seen') {
+    if (editing) newPreset(presetLike(editing));
+    return;
+  }
+
   const x = Number(markerX.value);
   const y = Number(markerY.value);
   const z = Number(markerZ.value);
@@ -179,6 +193,10 @@ async function askForMarker() {
     Y: Math.round(y),
     Z: worldZ,
     Private: privately,
+    // Which block this marker is about. Said where the form knows it — a right
+    // click on the map names the block under the pointer — and left empty
+    // otherwise, which is the mod reading the world under the marker for itself.
+    Block: (clicked && clicked.code) || '',
   };
 
   markerSave.disabled = true;
@@ -348,6 +366,10 @@ function markerFrom(place, changes) {
     Y: place.Y,
     Z: place.Z,
     Private: Boolean(place.Private),
+    // Carried rather than dropped. An empty block is the mod being asked to read
+    // the world again, and an ordinary edit — a colour, a lock — is not a reason
+    // to forget which block a preset said this marker was about.
+    Block: place.Block || '',
   };
   return { ...asked, ...changes };
 }
@@ -457,6 +479,47 @@ function arrived(waypoints) {
     Z: found.Z,
     Private: found.Private,
   }) === changedShape;
+}
+
+/**
+ * Which markers this reader keeps in sight on their own map in game.
+ *
+ * The keys alone, sent by the service to whoever set them and to nobody else: a
+ * pin is one person's answer about one marker and changes nothing anybody else
+ * sees. Held as a set because the only question ever asked of it is whether one
+ * marker is in it.
+ */
+let pins = new Set();
+
+/** Whether this reader keeps this marker in sight. */
+function keptInSight(place) {
+  return Boolean(place && place.Key && pins.has(place.Key));
+}
+
+/**
+ * Asks the game server to keep this marker in sight, or to stop keeping it.
+ *
+ * Which way it goes is the method rather than a body, because a pin names a
+ * marker rather than describing one. Nothing waits here: the pin arriving on the
+ * next poll is the answer, exactly as it is for who may see a marker, and what
+ * comes back is only whether the service took the ask.
+ *
+ * The set is moved at once so the mark answers the press. A pin the game refuses
+ * is put back by the next poll, which is where the truth about it comes from.
+ */
+async function askPin(place, keep) {
+  if (!place || !place.Key) return false;
+  if (keep) pins.add(place.Key);
+  else pins.delete(place.Key);
+
+  try {
+    const answer = await fetch(`/markers/${encodeURIComponent(place.Key)}/pin`, {
+      method: keep ? 'PUT' : 'DELETE',
+    });
+    return answer.ok;
+  } catch (error) {
+    return false;
+  }
 }
 
 /**

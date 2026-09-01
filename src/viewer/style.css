@@ -55,6 +55,12 @@
   /* Refusals and the one irreversible button. Red at a weight that clears
      4.5:1 on every surface above, since it is only ever used for words. */
   --warn: #ff8a80;
+  /* A number the page worked out, rather than one somebody typed. Green because
+     it is the answer to a sum and not a warning about one — the claim form says
+     how big a rectangle is and how much allowance it leaves, and both are read
+     off a sentence rather than out of a box. Its own colour rather than the
+     green a public marker wears: one colour meaning two things means neither. */
+  --count: #86e0a6;
   /* Who may see a marker, wherever one is drawn. Two colours because it is one
      question with two answers and neither is the exception: a marker its owner
      keeps and a marker the whole server can see are equally ordinary, and a pair
@@ -88,7 +94,12 @@
   --round: 6px;
   --round-sm: 5px;
 }
-html, body { margin: 0; height: 100%; overflow: hidden;
+/* The page is dark and the browser has to be told, or the parts it draws itself
+   are not: a checkbox, a scrollbar and a text box the stylesheet has not reached
+   come out of a light theme and sit in a dark window as white blocks. Said here
+   rather than fought one control at a time — most of them cannot be styled at
+   all, and this is the one declaration they all read. */
+html, body { margin: 0; height: 100%; overflow: hidden; color-scheme: dark;
              background: var(--bg); color: var(--text);
              font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; }
 #map { position: absolute; inset: 0; background: var(--bg);
@@ -118,13 +129,36 @@ html, body { margin: 0; height: 100%; overflow: hidden;
    one thing it must not do; an arrow's tip is the point and its body lies
    away from it. Against the map's usual grab hand it still reads as a mode. */
 .leaflet-container.picking { cursor: default; }
+/* A crosshair, which is the opposite decision and the right one here. What is
+   being marked out is an area rather than a block, so nothing is covered by the
+   cursor sitting on a corner of it — and a crosshair is what says "drag from
+   here", which is exactly the gesture this mode is waiting for.
+
+   `!important` because Leaflet writes `cursor` onto this element itself as it
+   drags, and the whole point of this mode is that a drag is not a drag of the
+   map. Nothing else on the page needs it; this is the one property the library
+   sets inline on the element the page is trying to dress. */
+.leaflet-container.drawing,
+.leaflet-container.drawing .leaflet-interactive { cursor: crosshair !important; }
 /* Who is online: a row of tabs, the cards, and a line saying why there are
    fewer cards than people where there are. The panel is the column and the cards
    scroll inside it, so the tabs stay put while a busy server's list moves. */
-#who { position: absolute; right: 12px; top: 12px; z-index: 500; width: 216px;
-       max-height: calc(100% - 24px);
-       display: flex; flex-direction: column; gap: 6px;
-       transform: scale(var(--scale-people)); transform-origin: top right; }
+/* The top right corner, as one group: the world's clock and then who is on it,
+   in a row. One box rather than each of them positioned against the corner on
+   its own — the clock has to sit clear of a list whose width is the list's
+   business, and a list that takes itself off has to give the corner back.
+
+   Full height with its contents held to the top, so the list has something
+   definite to be capped against and the map underneath is still reachable
+   everywhere the group is not actually drawing. One scale for both, because two
+   transforms would slide them across each other: a scaled box keeps the size it
+   laid out at, so the gap between them is the only thing that could not follow. */
+#upper { position: absolute; right: 12px; top: 12px; bottom: 12px; z-index: 500;
+         display: flex; align-items: flex-start; gap: 6px; pointer-events: none;
+         transform: scale(var(--scale-people)); transform-origin: top right; }
+#upper > * { pointer-events: auto; }
+#who { width: 216px; max-height: 100%; min-height: 0;
+       display: flex; flex-direction: column; gap: 6px; }
 #who-list { display: flex; flex-direction: column; gap: 6px;
             min-height: 0; overflow-y: auto; }
 /* Nothing to show and nothing to say about it: an empty panel over the map is
@@ -195,7 +229,13 @@ html, body { margin: 0; height: 100%; overflow: hidden;
    are somebody's answers about their own eyes and move on a slider; the third is
    a fixed step above whatever they set, because what it says is "this one of
    them", which is a comparison rather than a size. */
-:root { --mark-scale: 1; --mark-name-scale: 1; --mark-found: 1.65; }
+:root { --mark-scale: 1; --mark-name-scale: 1; --mark-found: 1.65;
+        /* What Leaflet sizes a bar button at, and so what "a button's height"
+           means wherever this page leaves a gap of one. Leaflet draws them four
+           pixels larger where it believes there is a touch screen, and says so
+           with a class on the column — so the two numbers stay its. */
+        --tool-square: 26px; }
+.leaflet-touch#corner { --tool-square: 30px; }
 /* Which build is serving this page, quiet enough to read past: the only
    question it answers is whether the half someone is looking at is the half
    they just deployed. No box — a shadow keeps it legible over pale terrain
@@ -326,8 +366,16 @@ html, body { margin: 0; height: 100%; overflow: hidden;
    the top of a window rather than alone in a square, and at the full size it
    shouts over the heading beside it. */
 .window .shut .chrome { width: 13px; height: 13px; }
-#compose { left: 260px; top: 92px; width: 266px; }
+/* Wide enough for its last row. Four marks, a Cancel and a Save is what the
+   window holds when it is open on a marker of this reader's own, and at 266 the
+   bin arriving pushed the two words off the right edge — a row that moved when
+   what it held changed. */
+#compose { left: 260px; top: 92px; width: 290px; }
 #presets { left: 300px; top: 130px; width: 374px; }
+/* Which preset a screenful of markers is being made to look like. The presets'
+   own width, because it lists the same rows — and opened beside the marker list
+   from script, so the list it is about is still readable behind it. */
+#apply { left: 380px; top: 190px; width: 374px; }
 #directory { left: 340px; top: 150px; width: 490px; }
 #profile { left: 50%; top: 90px; width: 334px; }
 /* The two windows that list things somebody may have a great many of. Their own
@@ -339,18 +387,19 @@ html, body { margin: 0; height: 100%; overflow: hidden;
    class it wears — which is a window whose close mark removes a class and
    changes nothing anybody can see. `.open` is on this selector for that reason
    and not for tidiness. */
-#presets.open, #directory.open { display: flex; flex-direction: column; }
-#presets, #directory { overflow: hidden; }
-#presets > *, #directory > * { flex: none; }
+#presets.open, #directory.open, #apply.open { display: flex; flex-direction: column; }
+#presets, #directory, #apply { overflow: hidden; }
+#presets > *, #directory > *, #apply > * { flex: none; }
 /* The gutter is held whether or not there is anything to scroll. The markers are
    a table with its headings in a box of their own, and a scrollbar that appears
    with the thirteenth marker narrows the rows by its own width — which slides
    every column out from under the heading that names it. */
-#preset-list, #marker-list { flex: 1 1 auto; min-height: 0; overflow-y: auto;
+#preset-list, #marker-list, #claim-rows, #apply-list { flex: 1 1 auto; min-height: 0; overflow-y: auto;
                              scrollbar-gutter: stable; max-height: 264px; }
 /* Once a reader has said how tall the window is, the list is what fills it, so
    the standing cap on the list has to give way to what they asked for. */
-.window.sized #preset-list, .window.sized #marker-list { max-height: none; }
+.window.sized #preset-list, .window.sized #marker-list, .window.sized #apply-list,
+.window.sized #claim-rows { max-height: none; }
 /* The corner that resizes a window. Two rules rather than a mark of its own: it
    is what every desktop draws for the same job, so a reader who has met one
    before does not have to be told what it is. */
@@ -430,18 +479,26 @@ html, body { margin: 0; height: 100%; overflow: hidden;
 #compose .field > span { display: block; font-size: var(--font-sm);
                          letter-spacing: .07em; text-transform: uppercase;
                          color: var(--text-dim); margin-bottom: var(--gap-1); }
-#compose input[type=text], #compose input[type=number] {
+/* A box somebody types into, in either of the two forms that have any. One rule
+   rather than one per window: the claim form had none of its own and so wore
+   whatever the browser draws an input as, which on this page is a white box in a
+   dark window — and the two forms ask the same kind of question. */
+#compose input[type=text], #compose input[type=number],
+#claim input[type=text], #claim input[type=number] {
     width: 100%; box-sizing: border-box; padding: 6px var(--gap-2);
     font: inherit; font-size: var(--font-md); color: var(--text-strong);
     background: var(--surface-sunk); border: 1px solid var(--line-edge);
     border-radius: var(--round-sm); }
-#compose input:focus { outline: none; border-color: var(--accent); }
+#compose input:focus, #claim input:focus { outline: none; border-color: var(--accent); }
 /* Spinners take a third of a three-across box and nobody nudges a coordinate
    one block at a time. The field is still a number field, for the keyboard a
    phone puts up and for what the browser will accept. */
-#compose input[type=number] { -moz-appearance: textfield; appearance: textfield; }
+#compose input[type=number], #claim input[type=number] {
+    -moz-appearance: textfield; appearance: textfield; }
 #compose input[type=number]::-webkit-outer-spin-button,
-#compose input[type=number]::-webkit-inner-spin-button {
+#compose input[type=number]::-webkit-inner-spin-button,
+#claim input[type=number]::-webkit-outer-spin-button,
+#claim input[type=number]::-webkit-inner-spin-button {
     -webkit-appearance: none; margin: 0; }
 .swatches { display: flex; flex-wrap: wrap; gap: 4px; }
 #colours .swatch { width: 18px; height: 18px; border-radius: var(--round-sm);
@@ -477,6 +534,10 @@ html, body { margin: 0; height: 100%; overflow: hidden;
 .mark-bookmarks { -webkit-mask-image: url(/chrome/bookmarks.svg); mask-image: url(/chrome/bookmarks.svg); }
 .mark-eyedropper { -webkit-mask-image: url(/chrome/eyedropper.svg); mask-image: url(/chrome/eyedropper.svg); }
 .mark-list-bullets { -webkit-mask-image: url(/chrome/list-bullets.svg); mask-image: url(/chrome/list-bullets.svg); }
+.mark-polygon { -webkit-mask-image: url(/chrome/polygon.svg);
+                mask-image: url(/chrome/polygon.svg); }
+.mark-selection-plus { -webkit-mask-image: url(/chrome/selection-plus.svg);
+                       mask-image: url(/chrome/selection-plus.svg); }
 .mark-magnifying-glass { -webkit-mask-image: url(/chrome/magnifying-glass.svg);
                          mask-image: url(/chrome/magnifying-glass.svg); }
 .mark-lock { -webkit-mask-image: url(/chrome/lock.svg); mask-image: url(/chrome/lock.svg); }
@@ -489,6 +550,10 @@ html, body { margin: 0; height: 100%; overflow: hidden;
                            mask-image: url(/chrome/person-arms-spread.svg); }
 .mark-x { -webkit-mask-image: url(/chrome/x.svg); mask-image: url(/chrome/x.svg); }
 .mark-trash { -webkit-mask-image: url(/chrome/trash.svg); mask-image: url(/chrome/trash.svg); }
+.mark-push-pin { -webkit-mask-image: url(/chrome/push-pin.svg);
+                 mask-image: url(/chrome/push-pin.svg); }
+.mark-push-pin-slash { -webkit-mask-image: url(/chrome/push-pin-slash.svg);
+                       mask-image: url(/chrome/push-pin-slash.svg); }
 
 #pictures { max-height: 108px; overflow-y: auto; padding: 3px;
             background: var(--bg); border: 1px solid var(--line);
@@ -524,18 +589,110 @@ html, body { margin: 0; height: 100%; overflow: hidden;
 #block-found span { display: block; font-size: var(--font-sm); color: var(--text-dim);
                     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .place { display: grid; grid-template-columns: 1fr 1fr 1fr 28px; gap: 4px; }
-#compose .tool { display: grid; place-items: center; height: 28px; padding: 0;
+/* The claim form. Narrow, because everything in it is short: a name, six numbers
+   in three pairs, and a list of people. It was as wide as four number boxes in a
+   row, which made the window the widest thing on the screen to hold values none
+   of which is more than five digits.
+
+   A column of labelled sections. What each number is, is written beside it — a
+   corner of a rectangle on a north-up map has a compass direction, and "West" is
+   what a reader calls it rather than `x1`. */
+#claim { width: 320px; }
+#claim > input[type="text"] { width: 100%; }
+/* The heading over one section. Small and spaced like the labels on the readout
+   at the foot of the map, and bold, because it is the one thing in a column of
+   boxes that says which question the next three answer — set quiet it read as
+   another label rather than as the heading over them. The space above it is what
+   separates one section from the next: they were touching, and a form with no
+   gaps in it is one block of text to read. */
+.part { display: block; margin: var(--gap-3) 0 var(--gap-1);
+        font-size: var(--font-sm); font-weight: 700; letter-spacing: .07em;
+        text-transform: uppercase; color: var(--text); }
+/* The first needs none: the window's own bar is already the gap above it. */
+#claim > .part:first-of-type { margin-top: 0; }
+/* A row of labelled numbers. The label column is a fixed width so the boxes line
+   up down the whole form, rather than each row starting wherever its own word
+   happened to end. */
+#claim .pair { display: grid; grid-template-columns: 4.4em 1fr 4.4em 1fr;
+               align-items: center; gap: var(--gap-1); margin-bottom: var(--gap-1); }
+#claim .pair label { font-size: var(--font-md); color: var(--text-dim); }
+#claim .pair input { min-width: 0; }
+/* A button that stands under what it acts on rather than beside it. Two of
+   these: the height of the world, and letting anybody in. Both are a shortcut
+   for typing something that is already visible, so neither takes the emphasis of
+   a button in the deed row. */
+#claim .wide, #claim .apart {
+               display: block; min-height: 26px; padding: var(--gap-1) var(--gap-2);
+               font: inherit; font-size: var(--font-md); color: var(--text-dim);
+               cursor: pointer; background: var(--surface-bar);
+               border: 1px solid var(--line); border-radius: var(--round-sm); }
+/* One fills the width the boxes above it do, because what it grants is written
+   across the whole of the section it ends. */
+#claim .wide { width: 100%; margin-top: var(--gap-1); }
+/* The other is only as wide as the words on it, and stands clear of the pair it
+   fills in. Hard against those two boxes and as wide as them it read as a third
+   number rather than as a shortcut for the two above it. */
+#claim .apart { width: auto; margin-top: var(--gap-3);
+                min-height: 22px; padding: 2px var(--gap-2);
+                font-size: var(--font-sm); }
+#claim .wide:hover, #claim .apart:hover { color: #fff; border-color: var(--accent-soft); }
+#claim .wide[disabled], #claim .apart[disabled] {
+                         color: var(--line); cursor: default;
+                         border-color: var(--line-soft); }
+#claim .wide[disabled]:hover, #claim .apart[disabled]:hover {
+                         color: var(--line); border-color: var(--line-soft); }
+/* A section heading standing in as a field's label. Same words, no shouting:
+   this one names one box rather than a group of them. */
+#claim .part.quiet { text-transform: none; letter-spacing: 0;
+                     margin-top: var(--gap-2); }
+/* Who else may. The checkboxes are the page's own `.line`, so they look like the
+   ones in the profile window; the names under them sit in the sunken box a
+   search sits in, because it is the same act — typing something to be looked up. */
+#claim-access .line { min-height: 20px; }
+#claim-access .find { margin: var(--gap-1) 0 0; }
+#claim-access .find input { padding-left: var(--gap-2); }
+/* Two different sentences — what this costs, and what it leaves — with air
+   around them. Run together they read as one paragraph nobody finishes. */
+#claim .note { margin: var(--gap-2) 0 0; }
+/* A number the window worked out rather than one somebody typed. Coloured, so
+   that "how big is it" and "how much is left" are read off a sentence at a
+   glance instead of being found in it — which is the whole reason those two
+   lines are there. The boxes above are left alone: a value being edited is
+   already the loudest thing in the form. */
+#claim .count { color: var(--count); font-weight: 700; font-variant-numeric: tabular-nums; }
+#claim #claim-said { margin: var(--gap-2) 0 var(--gap-3); min-height: 17px;
+                     font-size: var(--font-md); color: var(--text-dim); }
+#claim #claim-said.wrong, #claim .note.wrong { color: var(--warn); }
+/* The whole height of the world, offered beside the two numbers it fills in. A
+   word rather than a mark: there is no silhouette for "all of it", and at three
+   letters it is narrower than a picture of one would be. */
+#claim-full-height { font-size: var(--font-sm); }
+/* The small square button that sits in a form's row of numbers. Named for both
+   windows rather than for the one it appeared in first: the marker form's picker
+   and the claim form's full height are the same control in the same place, and a
+   rule scoped to `#compose` left the second one wearing the browser's own. */
+#compose .tool, #claim .tool { display: grid; place-items: center; height: 28px;
+                 padding: 0;
                  font-size: var(--font-lg); line-height: 1; color: var(--text);
                  cursor: pointer; background: var(--surface-bar);
                  border: 1px solid var(--line-edge); border-radius: var(--round-sm); }
-#compose .tool:hover { border-color: var(--accent-soft); color: #fff; }
-#compose .tool.armed { background: var(--surface-on); color: var(--accent); }
+#compose .tool:hover, #claim .tool:hover { border-color: var(--accent-soft); color: #fff; }
+#compose .tool.armed, #claim .tool.armed { background: var(--surface-on); color: var(--accent); }
+/* Nothing to point at on a marker nobody here may move. Quieted like the boxes
+   beside it, so the whole row reads as a record rather than as a control that
+   happens not to work. */
+#compose .tool[disabled] { color: var(--line); cursor: default;
+                           border-color: var(--line-soft); }
+#compose .tool[disabled]:hover { color: var(--line); border-color: var(--line-soft); }
 /* What the form last did, or why it did not. Always present, so the buttons
    under it do not jump when there is something to say. */
 #said { margin: var(--gap-1) 0 var(--gap-3); font-size: var(--font-md);
         line-height: var(--lead); color: var(--text-dim); min-height: 17px; }
 #said.wrong { color: var(--warn); }
-.deed { display: flex; align-items: center; gap: var(--gap-2);
+/* Tight between neighbours, because what separates the two groups is the spacer
+   below rather than the gap between every pair: at eight the row could not hold
+   what the marker form puts in it and the far group hung off the edge. */
+.deed { display: flex; align-items: center; gap: var(--gap-1);
         margin-top: var(--gap-2); }
 #presets .deed { justify-content: flex-end; }
 /* The form's two states sit at one end and the two ways out at the other: what
@@ -567,7 +724,7 @@ html, body { margin: 0; height: 100%; overflow: hidden;
    than reached for as every button in the row: the two that wear a mark instead
    are the shape they are wherever they are drawn — see `.seen` — and this padding
    and border laid over that shape is what made them boxes twice the size. */
-.deed .word { min-height: 26px; padding: var(--gap-1) var(--gap-3);
+.deed .word { min-height: 26px; padding: var(--gap-1) var(--gap-2);
               font: inherit; font-size: var(--font-md); color: var(--text);
               cursor: pointer; background: var(--surface-bar);
               border: 1px solid var(--line-edge); border-radius: var(--round-sm); }
@@ -622,6 +779,13 @@ html, body { margin: 0; height: 100%; overflow: hidden;
 /* Two things a preset row can do rather than one, so the trailing column is a
    pair. Only this list: a marker row's columns are its own. */
 #preset-list .listed, .flyout .listed { grid-template-columns: 22px 1fr auto auto; }
+/* A row here is picked and nothing more — no dropper, no bin — so it is the mark
+   and the name and that is all. */
+#apply-list .listed { grid-template-columns: 22px 1fr; }
+/* A claim row is a mark, what it is called, and a way in — the third column is
+   there only for the claims this reader may change, so it is sized to what it
+   holds rather than reserved on every row. */
+#claim-rows .listed { grid-template-columns: 22px 1fr auto; }
 .flyout .listed { grid-template-columns: 22px 1fr; }
 .listed .use { background: none; border: none; padding: 4px; cursor: pointer;
                color: var(--text-off); display: grid; place-items: center; }
@@ -644,14 +808,37 @@ html, body { margin: 0; height: 100%; overflow: hidden;
    twice without drifting. The name takes what is left; the rest are held to what
    they hold, and the mark a marker wears has no heading of its own, so the name
    is what stands over it. */
-#directory { --marker-cols: 22px minmax(0, 1fr) 112px 64px 58px var(--seen-box); }
-#marker-head, #marker-list .listed { grid-template-columns: var(--marker-cols); }
+#directory { --marker-cols: 22px minmax(0, 1fr) 112px 64px 58px var(--seen-box);
+             --marker-gap: 7px; }
+/* The gap is shared as well as the widths, and has to be: two grids of the same
+   columns and different gaps cannot line up, whatever the columns say. The
+   heading was on the panel's own small gap and the rows on the row's, which left
+   the flexible column three pixels wider per gap in the heading — so every
+   column after the name sat to the right of the one it was naming, by more the
+   further along it was. */
+#marker-head, #marker-list .listed { grid-template-columns: var(--marker-cols);
+                                     column-gap: var(--marker-gap); }
+/* The same template with a column of boxes in front of it, while the list is in
+   bulk edit. One variable rather than a second template: the heading and the
+   rows have to agree about every column, and two lists of widths is the one
+   thing that guarantees they eventually will not. */
+#directory.bulk { --marker-cols: 20px 22px minmax(0, 1fr) 112px 64px 58px var(--seen-box); }
+/* The box that ticks every row under it. Absent rather than hidden when the list
+   is not in bulk edit: a grid item that is not displayed takes no column, which
+   is what keeps the six-column heading over the six-column rows. */
+.tick { display: none; }
+#directory.bulk .tick { display: grid; place-items: center; }
+.tick input { accent-color: var(--accent); margin: 0; cursor: pointer; }
 /* The heading is not inside the list it heads, so it has to be told about the
    list's scrollbar: both hold the gutter, and the columns stay under their own
    names whether the list scrolls or not. A gutter is only reserved on something
    that could scroll, which is what the `overflow` is here for. */
 #marker-head { overflow: hidden; scrollbar-gutter: stable; }
-#marker-head .sort:first-child { grid-column: 1 / 3; }
+/* The name stands over the mark as well as over itself, since a marker's picture
+   has no heading of its own. By type rather than by place, because in bulk edit
+   the first child of the heading is the box that ticks every row. */
+#marker-head .sort:first-of-type { grid-column: 1 / 3; }
+#directory.bulk #marker-head .sort:first-of-type { grid-column: 2 / 4; }
 /* What each column holds, quieter than the name it is read beside. The
    coordinates are figures in a column, so they are set in the one width. */
 #marker-list .where, #marker-list .away, #marker-list .owner {
@@ -715,10 +902,29 @@ button.seen[disabled]:hover { background: none; }
    until it is on, because off is what it nearly always is. */
 .keepsake { color: var(--text-off); }
 .keepsake.on { color: var(--accent); }
+/* A form open on somebody else's marker. Every box in it is filled in and none
+   of them is this reader's to type into, so they read as what they are — a
+   record rather than a form — and the picker below them cannot be pressed
+   either. Said as a state on the window because it is one answer about the whole
+   of it, rather than a rule per field. */
+#compose.reading input[disabled], #compose.reading .swatch[disabled] { opacity: .65; }
+#compose.reading input[disabled] { cursor: default; }
+#compose.reading .swatch[disabled] { cursor: default; }
 /* The two bulk buttons, side by side under the list. Each says the number it
    would touch, so what is about to happen is on the button rather than in a
    sentence beside it. */
 #directory .deed { gap: var(--gap-2); }
+#directory .deed .word { padding: var(--gap-1) var(--gap-3); }
+/* The row that acts on what is ticked. Its buttons are sized by their words
+   rather than sharing the width, because what it holds comes and goes: the two
+   above it are a pair and always both there, and these are one switch and two
+   things that only apply once something is chosen. */
+#directory .deed:last-of-type .word { flex: none; }
+#directory .deed:last-of-type { margin-top: var(--gap-1); }
+/* On, and saying so the way an armed tool does: the surface lifts a step and the
+   word takes the accent, which is two signals rather than one. */
+#marker-bulk[aria-pressed="true"] { color: var(--accent); background: var(--surface-on);
+                                    border-color: var(--accent); }
 #directory .deed .word { flex: 1; min-width: 0; }
 /* Asked once and waiting to be asked again. The warning colour, because the
    press after this one changes markers in bulk. */
@@ -726,7 +932,7 @@ button.seen[disabled]:hover { background: none; }
 #marker-said { margin: var(--gap-2) 0 0; font-size: var(--font-md);
                color: var(--text-dim); min-height: 17px; }
 #marker-said.wrong { color: var(--warn); }
-#preset-list, #marker-list { display: flex; flex-direction: column; }
+#preset-list, #marker-list, #claim-rows, #apply-list { display: flex; flex-direction: column; }
 /* What a list says when it has nothing to show. Written by the page rather than
    by the stylesheet, because there are two ways to have no rows — nothing kept,
    and nothing matching what was typed — and they need different words. */
@@ -901,13 +1107,19 @@ body.show-marker-names .marker .tag { display: block; }
    silhouette filled with `currentColor`, so colouring it is the button's own
    business — this is what the ring drawn around an emoji used to stand in for. */
 .leaflet-bar a.tool.armed { background: var(--surface-on); color: var(--accent); }
-/* Two columns down the left edge, because they answer to different things.
-   What moves the map hangs from the middle, where a hand reaches for it and
-   where there is room either side of it to grow. Who you are sits in the
-   corner, out of the way of the map and where a page puts an account. */
-.leaflet-top.leaflet-left { top: 50%;
-    transform: translateY(-50%) scale(var(--scale-tools));
-    transform-origin: left center; }
+/* One column down the left edge, and Leaflet's own corner is part of it — see
+   `gatherCorner`, which moves that corner in here. It was two: what moves the
+   map hung from the middle of the edge and everything else from the top, so the
+   two stacks slid against each other as the window changed size and a short one
+   put the top stack straight through the middle one. Laid out by the column now,
+   so the margins Leaflet spaces a floating control with come off. */
+/* A column rather than a stack of floats. Leaflet floats a control and clears
+   the next one, which lays them out correctly and leaves the container itself
+   no height at all — fine where it is absolutely positioned over a map, and a
+   nothing-tall box in the middle of a column that is trying to flow around it. */
+#corner .leaflet-top.leaflet-left { position: static; transform: none;
+                                    display: flex; flex-direction: column; }
+#corner .leaflet-control { float: none; margin: 0; }
 /* Above Leaflet's own controls, which sit at 1000, and below the windows at
    1100. The number matters because this column stacks as one thing: a panel
    hung off a button in here cannot climb out of it however high it is told to
@@ -948,8 +1160,17 @@ body.show-marker-names .marker .tag { display: block; }
 #corner .leaflet-bar { margin: 0; width: max-content; }
 #corner #row { margin-bottom: 8px; }
 /* One clear button's height between what anybody may use and what only a signed
-   in reader may, so the two read as different things rather than one column. */
-#corner #access { margin-bottom: 26px; }
+   in reader may, so the two read as different things rather than one column.
+   The same gap again below the markers, because the land is a third subject and
+   not a fourth button about markers. Both are a button's height, which is what
+   `--tool-square` is: the number Leaflet sizes its own bar buttons at, said once
+   so a gap meant to be one button tall stays one button tall. */
+#corner #access, #corner #mine, #corner #claims { margin-bottom: var(--tool-square); }
+/* What moves the map, and what reads one block of it: Leaflet's own two, last in
+   the column because they are the map's rather than the reader's. Apart from
+   each other by the gap the top of the column uses, since they are two subjects
+   and not one control with two buttons. */
+#corner .leaflet-control + .leaflet-control { margin-top: 8px; }
 /* A mark for whoever is looking, so the button reads as a person and not as a
    word. Drawn rather than typed: the character this was fell to whatever the
    machine had, and being an emoji it would not grey out with the button when
@@ -996,5 +1217,10 @@ body.show-marker-names .marker .tag { display: block; }
    about markers you own, and owning anything means the game named you. */
 #mine { display: none; }
 #mine.on { display: block; }
+/* Shown only to somebody who may act on them, the way the markers are. Seeing
+   where the claims are is not gated here — that is the service's answer, and a
+   reader who may see none is shown an empty layer rather than a hidden button. */
+#claims .claim-make { display: none; }
+#claims.may-claim .claim-make { display: block; }
 
 .leaflet-control-attribution { display: none; }

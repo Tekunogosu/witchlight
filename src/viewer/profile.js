@@ -21,6 +21,7 @@
 const profile = document.getElementById('profile');
 const wantPresets = document.getElementById('want-presets');
 const wantPrivate = document.getElementById('want-private');
+const wantFollow = document.getElementById('want-follow');
 const wantSaid = document.getElementById('want-said');
 
 /** Reads back what this person has set. Nobody signed in has set nothing. */
@@ -90,8 +91,10 @@ function drawProfile() {
 
   wantPresets.checked = Boolean(mine.PresetsByDefault);
   wantPrivate.checked = privateByDefault();
+  wantFollow.checked = Boolean(mine.FollowSelf);
   wantPresets.disabled = !named;
   wantPrivate.disabled = !named;
+  wantFollow.disabled = !named;
   wantSaid.textContent = named
     ? (mine.PrivateByDefault === true || mine.PrivateByDefault === false
       ? 'Your own choice, over the server default.'
@@ -117,7 +120,11 @@ let draft = null;
 
 /** Reads the switches into a draft, so what is shown is what Save will keep. */
 function draftProfile() {
-  draft = { presets: wantPresets.checked, private: wantPrivate.checked };
+  draft = {
+    presets: wantPresets.checked,
+    private: wantPrivate.checked,
+    follow: wantFollow.checked,
+  };
 }
 
 function sayProfile(what, wrong) {
@@ -140,6 +147,7 @@ async function keepProfile() {
     ...mine,
     PresetsByDefault: draft.presets,
     PrivateByDefault: draft.private,
+    FollowSelf: draft.follow,
   });
   drawProfile();
   sayProfile(kept ? 'Kept.' : 'The map service is not answering.', !kept);
@@ -168,11 +176,32 @@ function buildProfile() {
     .addEventListener('click', () => started(keepProfile(), 'keeping your settings'));
   document.getElementById('profile-revert').addEventListener('click', revertProfile);
 
-  for (const box of [wantPresets, wantPrivate]) {
+  for (const box of [wantPresets, wantPrivate, wantFollow]) {
     box.addEventListener('change', () => {
       draftProfile();
       sayProfile('Not kept yet.');
     });
   }
 
+}
+
+/**
+ * Takes up following this person's own player, where they asked the map to.
+ *
+ * Once, when the map first learns who is looking, and never again: following is
+ * a standing instruction that dragging the map ends, and a page that took it up
+ * again on the next poll would be a map somebody could not look away from.
+ *
+ * Their player need not be online. Nothing is panned until one turns up — see
+ * `keepUp`, which is what actually moves the view — so somebody who opens the map
+ * before joining the server has the map land on them when they do.
+ */
+function followSelf() {
+  if (!(viewer && viewer.Uid) || !mine.FollowSelf) return;
+  // Lights their card as well as moving the map, which is the whole of what
+  // clicking that card does — a map following somebody with nothing saying so is
+  // a map that has quietly stopped answering the pointer. `drawWho` applies it
+  // to a card that does not exist yet, which is the usual case here.
+  keeping(String(viewer.Uid));
+  keepUp();
 }

@@ -257,10 +257,11 @@ function shutWindow(panel) {
  * added without ever being made draggable. What a window is, is decided here.
  */
 function buildWindows() {
-  for (const panel of [composer, presetPanel, directory, profile]) dragBy(panel);
+  for (const panel of [composer, presetPanel, directory, profile, claimPanel, claimsPanel])
+    dragBy(panel);
   // Only the two that list things. A form is as big as its fields and a window
   // with a size nobody can use is a corner that does nothing when pulled.
-  for (const panel of [presetPanel, directory]) growBy(panel);
+  for (const panel of [presetPanel, directory, claimsPanel]) growBy(panel);
 }
 
 /**

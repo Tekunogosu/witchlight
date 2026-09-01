@@ -237,6 +237,7 @@ map.on('mousemove', event => {
   pointer = event.latlng;
   pick(event.latlng);
   hover(event.latlng);
+  stretchClaim(event.latlng);
   say();
 });
 map.on('mouseout', () => { pointer = null; forget(); say(); });

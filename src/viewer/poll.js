@@ -48,8 +48,19 @@ async function pollLive() {
     // browser cannot be asked to hide what it has already been handed.
     online = Number.isFinite(live.Online) ? live.Online : players.length;
     grouped = new Set(live.Grouped || []);
+    // Both from the same post: the claims this reader may be sent, and whether
+    // the mod says they may draw one. The second rides the live poll rather than
+    // `/me.json` because it is the mod's answer and arrives when the mod does —
+    // a page opened before the game server was up learns it on the next beat
+    // instead of needing a reload.
+    claims = live.Claims || [];
+    allowance = live.Claiming || null;
+    worldHeight = Number.isFinite(live.Height) ? live.Height : worldHeight;
     showWhen(live.World);
     const waypoints = live.Waypoints || [];
+    // Which of them this reader keeps in sight in game. Sent to whoever set them
+    // and to nobody else, so what arrives is already this reader's own answer.
+    pins = new Set(live.Pins || []);
 
     // A marker naming a picture nobody has heard of means the set has grown.
     if (waypoints.some(place => place.Icon && !icons.has(String(place.Icon)))) {
@@ -74,6 +85,13 @@ async function pollLive() {
     drawWho();
     keepUp();
     drawPlaces(waypoints);
+    // The form may be open on a marker whose pin was set from another browser,
+    // or refused by the game since it was pressed. The mark is drawn from what
+    // arrived rather than from what was asked for.
+    if (composer.classList.contains('open')) showPin();
+    drawClaims(claims);
+    showClaims();
+    watchClaim();
     say();
   } catch (error) {
     /* the service may be restarting */
@@ -139,6 +157,10 @@ buildCompose();
 buildPresets();
 buildDirectory();
 buildProfile();
+buildClaims();
+// After every bar that hangs in the tool column exists, including the map's own
+// zoom and the block picker — which are Leaflet's and are moved into it.
+gatherCorner();
 started(pollMe(), 'reading who is signed in');
 for (const setting of Object.values(settings)) setting.apply(setting.on);
 

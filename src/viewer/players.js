@@ -191,12 +191,14 @@ function drawPlaces(waypoints) {
     drawn.on('click', forgetHovered);
 
     // A right click on a marker opens it rather than opening a new one on top of
-    // it. Offered only to somebody who may change it — see `mayEdit`, and the
-    // mod, which decides it again for real.
+    // it. On every marker this reader is sent, whether or not it is theirs to
+    // change: what the window then offers is `editCompose`'s to decide — an edit
+    // where the mod would allow one, and otherwise the two things about somebody
+    // else's marker that are this reader's own.
     drawn.on('contextmenu', event => {
       L.DomEvent.preventDefault(event.originalEvent);
       L.DomEvent.stopPropagation(event);
-      if (mayEdit(place)) editCompose(place);
+      editCompose(place);
     });
 
     if (place.Key) drawnMarks.set(place.Key, drawn);

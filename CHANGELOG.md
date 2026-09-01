@@ -9,6 +9,202 @@ which is where that rule is kept rather than in anybody's memory.
 A version that moved for the other half says so and lists nothing, which is not an
 omission: it is what "one release" looks like from the side that did not change.
 
+## 0.38.0
+
+**Deploy note:** both halves, upgraded together. Nothing is cleared and nothing
+has to be edited.
+
+**The marker list has a bulk edit.** Pressing it puts a column of boxes down the
+left of the rows, headed by one that ticks the lot, and the row of buttons under
+the list then acts on what is ticked rather than on what is listed — one rule for
+all of them, and each still says the number it found. Two of those are new: a bin
+that asks twice, and **From preset**, which opens a searchable list of your
+presets and rewrites every ticked marker's name, picture, colour and block from
+the one you pick. Where a marker is stays where it is, and so does who may see
+it: that is a choice about one marker rather than a property of the kind of thing
+it is.
+
+**A marker knows which block it is about.** The game reads it under the marker
+when it is made and again wherever one moves, and it travels with the marker — so
+turning an existing marker into a preset arrives with the pattern already filled
+in. It had nothing at all, and a preset with no pattern names no block. A marker
+made before this was kept falls back to what the map drew at that spot.
+
+**Enter over the preset list fills the form in and stops there.** Typing a name,
+pressing Tab to reach the preset under it and then Enter asked the game for a
+marker under the half-typed name and *then* filled the form in from the preset —
+two listeners answering one key, one of them wired first. Now one place says what
+Enter in the name box means: take the preset while the list is open on a row, and
+otherwise save. The window stays open, with the focus on Save, so the press after
+that saves and anything the preset gave you can be changed first.
+
+**Every button the map wears is in one column.** The zoom and the block picker
+hung from the middle of the left edge while everything else hung from the top,
+which is two stacks that slide against each other as the window changes size —
+and on a short window one went straight through the other. Leaflet's own corner
+is now part of the column, so anything it puts there arrives in the right place.
+
+**The world's clock is in the opposite corner**, beside the list of who is on. It
+says what the world is doing rather than offering something to do to it, and a
+readout in the middle of a column of controls reads as one more thing to press.
+It takes the corner itself on a server with nobody on, since the list takes
+itself off then. Both are sized by one setting, now called *Players and clock*.
+
+**The marker list's columns line up with their own headings.** The heading and
+the rows shared their widths and not the gap between them, so the flexible column
+came out fifteen pixels wider in the heading and every column after the name sat
+to the right of the one that named it, by more the further along it was.
+
+## 0.37.1
+
+**Deploy note:** both halves, upgraded together. Nothing is cleared and nothing
+has to be edited.
+
+**A marker can be kept in sight on your own map in game.** The game holds a
+pinned waypoint against the edge of the map instead of letting it scroll off, and
+the pin is now on the marker form: right-click a marker, press the pin. It is one
+person's choice about one marker — pinning somebody's marker puts it on your map
+and on nobody else's — so any marker you are sent may be pinned, since being able
+to see it is the whole of the permission. Your own is the flag the game already
+keeps on the waypoint, so the in-game dialog and this one are the same switch.
+
+**Right-clicking somebody else's marker opens it.** It opened nothing at all
+unless the marker was yours to change, which meant the two things about one that
+*are* yours had nowhere to be: keeping it in sight, and taking a preset shaped
+like it. The window opens as a record rather than a form — every box filled in,
+none of them writable, the picker below them quiet — and the button that would
+have saved it offers the preset instead. The marker list opens the same window
+from a row, for the same reason.
+
+**The last row of the marker form stops moving.** Opening it on a marker of your
+own added the bin, and the row could not hold what it then had: Cancel and Save
+were pushed sixteen pixels off the right edge, so the two words a hand reaches
+for sat somewhere different depending on what the window was open on. The window
+is wide enough for the row it can hold, and the bin now simply appears.
+
+**The button that draws a claim shows its whole mark again.** It wore the filled
+weight of a picture that, filled, is a solid square with its own outline knocked
+out of it — a blot at sixteen pixels rather than a selection with a plus in it.
+
+**The claim window reads as sections.** Its headings are bold, so the one thing
+in a column of boxes that says which question the next three answer stops reading
+as another label; *Who else may* is *Permissions*; and the numbers the window
+works out for itself — how big a rectangle is, how much allowance it leaves — are
+green, since those two lines exist to be read at a glance rather than searched.
+
+**The whole height of the world is *Max height*, and stands clear of the two
+boxes it fills in.** As wide as them and hard against them it read as a third
+number rather than as a shortcut for the two above it.
+
+**The claim window's boxes are the map's own boxes.** It had no styling of its
+own for a box you type into, so it wore whatever the browser draws one as, which
+on this page is a white block in a dark window. The page also says out loud that
+it is dark, which is what a checkbox and a scrollbar read rather than a
+stylesheet.
+
+## 0.37.0
+
+**Deploy note:** both halves, upgraded together. Nothing is cleared and nothing
+has to be edited.
+
+**A claim is dragged out, not clicked twice.** Press, move, release — one
+gesture, with a crosshair to say so, and the map held still underneath for as
+long as the tool is armed. It was a click, a release, a move and a second click,
+which reads as the map having missed the first one. A drag that never moved is a
+press to think again rather than a claim one block across.
+
+**The claim form is a column of labelled sections.** It was four number boxes in
+a row, which made it the widest window on the screen to hold six values none of
+which is more than five digits. Now 320 pixels: a name, an area and a depth as
+labelled pairs — *West*, *North*, *East*, *South* rather than `x1` — and space
+between each section, which they had none of.
+
+**Who else may use a claim is set from the map.** The game's two
+everybody-permissions and a list of players who may build, exactly what
+`/land claim grant` offers, with one button for granting both of the first two.
+A third of anything would be a permission system the game would not enforce.
+
+**Every claim there is, as a list**, under the claims button: what there is,
+whose it is, where, and a way into the one claim you may change. Renaming,
+re-permissioning and giving one up all happen there. The ground is shown and not
+editable — moving a boundary has to be judged against every other claim and
+against an allowance, and redrawing is making a new one.
+
+**The map lights the card of whoever it is following**, including when it takes
+up following at sign-in. Which card is lit is settled wherever the list is drawn
+now, because a card can be built minutes after the follow was taken up — a player
+who was not online when their own map opened had the map on them and nothing
+saying so.
+
+**The claim buttons sit under the markers**, a button's height clear of them, in
+the page's own column rather than in Leaflet's.
+
+## 0.36.2
+
+**Deploy note:** both halves, upgraded together. Nothing is cleared.
+
+Moved for the mod's packaging, which now builds this half itself rather than
+bundling whatever binary was lying about. This half's code did not change.
+
+The repository's `target` was a symlink to a directory nothing had written to
+since `CARGO_TARGET_DIR` was set, so `target/release/witchlight` named a binary
+that was not there. It points where cargo actually builds now.
+
+## 0.36.1
+
+**Deploy note:** both halves, upgraded together. Nothing is cleared.
+
+**The land claim buttons are reachable.** They were drawn ten pixels left of the
+zoom they stack over, flush against the edge of the screen, and no click ever
+landed on one — the outline sat where the button belonged and the button did not.
+Leaflet's corner containers take no pointer events at all and hand both the
+pointer events and the margin to children wearing `leaflet-control`, which every
+control it makes does and this bar did not. It wears the same class as the zoom
+now, which is the whole of the fix: the class is the styling, not a copy of it.
+
+The *All* button in the claim form carried a class that styles buttons in a
+window's last row and does nothing anywhere else. It wears the same square the
+marker form's coordinate picker does, which is what it is.
+
+## 0.36.0
+
+**Deploy note:** both halves, upgraded together. Nothing is cleared and nothing
+has to be edited. A settings file written before this says nothing about
+`[claims]`, and an absent table means the defaults — which are that anybody may
+see where the claims are and that drawing one asks what the game asks.
+
+**The map draws the land claims, and can take one.** A button above the zoom
+shows them: every claim on the server, one shaded rectangle per area, with its
+owner and description on the boundary. A second button beside it draws a new one
+— two corners, a depth and a name — and the claim appears on the map and in the
+game when the server has made it.
+
+**Who sees them and who may draw one are two settings, not one.** `[claims] view`
+and `[claims] create` in the settings file, spelled the way `[commands]` is:
+`admin`, `player`, or any privilege the game knows. Seeing where a claim is
+starts open, because the game already sends every claim to every client and a map
+that hid them would tell players less than the game does. Drawing one starts at
+`claimland`, which is exactly what `/land claim` asks — the map is never a way
+round a rule the server already has, and narrowing this narrows the map alone.
+
+**A reader is never handed a claim they may not see.** The mod says who may, this
+half holds the list, and a browser that is not on it is sent an empty array
+rather than a full one to filter — the same rule the private markers and the
+hidden player positions already follow.
+
+**The form says what a claim will cost before it asks for it.** How much land the
+reader's role allows, how much they have already used, and what a rectangle at
+this depth comes to, so a claim that is too large says so in the window instead
+of disappearing into a round trip. Depth is asked for rather than assumed: an
+allowance is measured in cubic metres and depth is most of a claim's volume, so
+the whole height of the world would buy a survival player a square thirty-two
+blocks across. It is offered as a button for the claims that want it.
+
+**The map can open on your own player.** A switch in the profile window, kept
+against your uid like the rest of what is in there, so a map opened on any
+machine lands where you are standing. Dragging the map still ends the follow, as
+it always has.
+
 ## 0.35.3
 
 **Deploy note:** both halves, upgraded together. Nothing is cleared.

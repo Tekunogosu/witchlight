@@ -61,6 +61,23 @@ const ICONS: &[(&str, &str)] = chrome![
     // what a thing is made of and applying it elsewhere, which is the whole of
     // what the button does.
     "eyedropper" @ "fill",
+    // The land people have spoken for, on the button that shows it. An outline
+    // of an area rather than anything standing on one: a claim is ground, and
+    // every other mark in this table is a thing on top of some.
+    "polygon" @ "fill",
+    // Drawing a new one. The same outline with a plus in it, so that "the
+    // claims" and "one more claim" read as one subject and two verbs. Bold
+    // rather than filled, and for the reason the `x` below is: in the filled
+    // weight this mark is a solid square with its own outline knocked out of it,
+    // which at sixteen pixels is a blot beside the polygon it belongs with.
+    "selection-plus" @ "bold",
+    // Keeping a marker where this reader can see it in game. The game's own
+    // word for the flag it sets — a pinned waypoint is held against the edge of
+    // the map rather than scrolling off it — so the mark is a pin.
+    "push-pin" @ "fill",
+    // The same flag taken off again, which is a pin with a stroke through it
+    // rather than a second picture: one subject, two states.
+    "push-pin-slash" @ "fill",
     // Every marker there is, as a list rather than as pins on a map.
     "list-bullets" @ "fill",
     // Whoever is looking, beside their name; and standing in for a portrait
