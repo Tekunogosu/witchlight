@@ -40,8 +40,11 @@ pub fn serve(
     threads: usize,
     cache_mb: usize,
     rules: Rules,
+    autosave_interval: std::time::Duration,
+    backfill_radius_chunks: i32,
 ) -> Result<()> {
     let state = Arc::new(State::load(data, palette, cache_mb.max(1) * 1024 * 1024, rules)?);
+    let puller = Arc::new(crate::pull::Puller::new(data, backfill_radius_chunks));
 
     // The map is the product and live data is a garnish, so an API channel that
     // will not bind is said out loud and stepped over rather than taken as fatal.
@@ -51,6 +54,7 @@ pub fn serve(
         Arc::clone(&state.sessions),
         Arc::clone(&state.pending),
         Arc::clone(&state.preferences),
+        Arc::clone(&puller),
         data,
     ) {
         warn!(
@@ -75,6 +79,10 @@ pub fn serve(
 
     settle(&state, data);
     watch::start(&state);
+    start_autosave(&state, data, autosave_interval);
+
+    start_frontier(&puller, &state);
+    crate::pull::start(Arc::clone(&puller), Arc::clone(&state));
 
     let mut others = Vec::with_capacity(threads - 1);
     for _ in 1..threads {
@@ -90,6 +98,91 @@ pub fn serve(
     }
 
     Ok(())
+}
+
+/// How often the map's own edge is re-offered to the puller.
+///
+/// Slower than a pull step: this walks every chunk currently held to find its
+/// edge, which is worth doing far less often than the puller drains what it
+/// already has queued.
+const FRONTIER_EVERY: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// How often a player's own position is re-offered.
+///
+/// The mod posts a position every couple of seconds — see `LiveIntervalMs` on
+/// its side — so asking more often than that would only ever see the same
+/// answer twice.
+const NEAR_EVERY: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Starts the two clocks that keep the puller's frontier fed: a player's own
+/// position, fast and first, and the map's own edge, slow and behind it.
+fn start_frontier(puller: &Arc<crate::pull::Puller>, state: &Arc<State>) {
+    {
+        let puller = Arc::clone(puller);
+        let state = Arc::clone(state);
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(NEAR_EVERY);
+                let positions = state.live.positions();
+                if positions.is_empty() {
+                    continue;
+                }
+
+                let edge = state.world.read().map(|world| world.edge).unwrap_or(0).max(1) as i32;
+                let chunks: Vec<(i32, i32)> =
+                    positions.iter().map(|&(x, z)| (x.div_euclid(edge), z.div_euclid(edge))).collect();
+
+                puller.visit(chunks.iter().copied());
+                let held: std::collections::HashSet<(i32, i32)> = state
+                    .world
+                    .read()
+                    .map(|world| world.chunks.keys().copied().collect())
+                    .unwrap_or_default();
+                puller.seed_near(chunks, &held);
+            }
+        });
+    }
+
+    let puller = Arc::clone(puller);
+    let state = Arc::clone(state);
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(FRONTIER_EVERY);
+            let Ok(world) = state.world.read() else { continue };
+            let held: std::collections::HashSet<(i32, i32)> = world.chunks.keys().copied().collect();
+            puller.seed_edge(held.iter().copied(), &held);
+        }
+    });
+}
+
+/// Starts the clock that writes this service's own snapshot of the world.
+///
+/// Its own thread rather than folded into [`watch::start`]'s clocks: those read
+/// what changed on disk, and this writes what is held in memory, on a gap an
+/// operator sets rather than one this decides for them.
+fn start_autosave(state: &Arc<State>, data: &Path, every: std::time::Duration) {
+    let state = Arc::clone(state);
+    let data = data.to_path_buf();
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(every);
+            autosave(&state, &data);
+        }
+    });
+}
+
+/// Writes the snapshot once. A world nobody has loaded anything into yet writes
+/// nothing — see [`crate::snapshot::write`] — so an idle server between mod
+/// exports does not spend this thread's beat on an empty file.
+fn autosave(state: &State, data: &Path) {
+    let Ok(world) = state.world.read() else {
+        return;
+    };
+
+    match crate::snapshot::write(data, &world) {
+        Ok(()) => {}
+        Err(error) => warn!("could not write the service snapshot: {error}"),
+    }
 }
 
 /// Reconciles the stored zoom levels with the world and the palette in hand, and

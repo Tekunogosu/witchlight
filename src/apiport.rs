@@ -18,16 +18,18 @@ use crate::http::{self, Reply};
 use crate::live::Live;
 use crate::pending::Pending;
 use crate::preferences::{Person, Preferences, Preset};
+use crate::pull::Puller;
 use crate::urls;
 use crate::log::{say, warn};
 
 /// Everything the mod may reach, gathered so the listener carries one value
-/// rather than four.
+/// rather than five.
 struct Channel {
     live: Arc<Live>,
     sessions: Arc<Sessions>,
     pending: Arc<Pending>,
     preferences: Arc<Preferences>,
+    puller: Arc<Puller>,
     api: Api,
 }
 
@@ -38,6 +40,7 @@ pub fn serve(
     sessions: Arc<Sessions>,
     pending: Arc<Pending>,
     preferences: Arc<Preferences>,
+    puller: Arc<Puller>,
     exports: &Path,
 ) -> Result<()> {
     // Before the bind rather than after the failure: a file naming a listener
@@ -65,7 +68,7 @@ pub fn serve(
     api.publish(exports, address.port());
     say!("taking live data on {address}");
 
-    let channel = Channel { live, sessions, pending, preferences, api };
+    let channel = Channel { live, sessions, pending, preferences, puller, api };
     std::thread::spawn(move || {
         for mut request in server.incoming_requests() {
             let response = posted(&mut request, &channel);
@@ -149,6 +152,18 @@ fn posted(request: &mut Request, channel: &Channel) -> Reply {
         "/live/world" => taken(channel.live.set_world(body)),
         "/live/markers" => taken(channel.live.set_markers(body)),
 
+        // Chunks the mod says changed, ahead of the export that will eventually
+        // write them to disk — fed straight to the puller, which asks the mod
+        // for each one over its own channel and marks the tile it lands in
+        // stale. See `pull.rs::notify_changed`.
+        "/live/dirty" => match dirty_asked(&body) {
+            Some(columns) => {
+                channel.puller.notify_changed(columns);
+                http::text(204, "")
+            }
+            None => http::text(400, "expected [[x, z], ...]"),
+        },
+
         _ => http::text(404, "not found"),
     }
 }
@@ -168,6 +183,12 @@ fn taken(ok: bool) -> Reply {
 /// What one person has set, as the mod reads it.
 fn said(person: &Person) -> String {
     serde_json::to_string(person).unwrap_or_else(|_| "{}".to_owned())
+}
+
+/// The columns the mod says changed: `[[x, z], ...]`.
+fn dirty_asked(body: &str) -> Option<Vec<(i32, i32)>> {
+    let pairs: Vec<[i32; 2]> = serde_json::from_str(body).ok()?;
+    Some(pairs.into_iter().map(|pair| (pair[0], pair[1])).collect())
 }
 
 /// Whose settings the mod is asking about.

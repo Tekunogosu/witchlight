@@ -23,11 +23,13 @@ mod net;
 mod palette;
 mod pending;
 mod preferences;
+mod pull;
 mod pyramid;
 mod random;
 mod render;
 mod routes;
 mod server;
+mod snapshot;
 mod state;
 mod stored;
 mod urls;
@@ -219,6 +221,8 @@ fn run() -> Result<()> {
             config.threads,
             config.tile_cache_mb,
             config.rules(),
+            config.autosave_interval(),
+            config.backfill_radius_chunks,
         ),
     }
 }

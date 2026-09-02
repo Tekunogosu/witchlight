@@ -9,9 +9,14 @@
 //! one thing worth seeing when the game server is off, so they are written when
 //! they arrive and read back at start.
 //!
-//! Nothing here parses either payload. The mod knows what a waypoint is; this
-//! knows that it is a JSON array to hand to a browser, which is the whole of the
-//! contract between them.
+//! Nothing here parses either payload for what it means to a browser: the mod
+//! knows what a waypoint is; this knows that it is a JSON array to hand on,
+//! which is the whole of the contract between them for markers and claims.
+//! Players are the one exception — [`Live::positions`] reads a position out of
+//! the same arrays, because [`crate::pull`] needs to know where people are and
+//! the game server already knows that regardless of who a browser may show it
+//! to. Nothing downstream of that reads a name, a health bar, or anything else
+//! a player's own entry carries — only where they are.
 //!
 //! Markers arrive already sorted into what anyone may see and what only one
 //! person may, because deciding that needs to know what a waypoint is and this
@@ -97,7 +102,10 @@ struct Sorted {
 /// The same shape the markers arrive in and for the same reason: whether where
 /// somebody is standing may be shown to somebody else depends on a setting and on
 /// what groups the game has them in, and the half that knows both is the mod.
-/// This holds two lists it hands out and never looks inside.
+/// This holds two lists it hands out to a browser without looking inside them —
+/// `positions` is the one place anything here reads what is in them, and it is
+/// read once, for every player regardless of `owned`, since a browser's view of
+/// who may see whom has no bearing on what the game server already knows.
 struct Seen {
     /// How many are on, whoever is asking. A server that hides positions still
     /// says how busy it is — that is a fact about the server, not about anybody.
@@ -111,12 +119,21 @@ struct Seen {
     /// uids. Not about who may be seen — it is what lets the page offer "my
     /// group" as a way of reading a list it already has.
     grouped: HashMap<String, String>,
+    /// Where everyone the mod posted this beat is standing, in blocks — every
+    /// player the mod knows about, independent of `open`/`owned`.
+    positions: Vec<(i32, i32)>,
 }
 
 impl Default for Seen {
     /// Empty arrays rather than empty strings, for the reason `Markers` gives.
     fn default() -> Self {
-        Self { online: 0, open: "[]".to_owned(), owned: HashMap::new(), grouped: HashMap::new() }
+        Self {
+            online: 0,
+            open: "[]".to_owned(),
+            owned: HashMap::new(),
+            grouped: HashMap::new(),
+            positions: Vec::new(),
+        }
     }
 }
 
@@ -132,6 +149,30 @@ struct Watching {
     private: HashMap<String, Box<RawValue>>,
     #[serde(default)]
     grouped: HashMap<String, Box<RawValue>>,
+}
+
+/// One player, read only far enough to say where they are.
+///
+/// The mod already decided who may be shown this before it arrived — `open` and
+/// `owned` above exist for that — so reading a position out of either array here
+/// is not a second look at a decision already made. It is this service seeing
+/// what it is already being told, for a reason the mod's own visibility rules
+/// were never about: keeping the terrain this service asks for anchored to where
+/// people actually are, which the game server already knows regardless of who
+/// may see whom on a page.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct Positioned {
+    x: i32,
+    z: i32,
+}
+
+/// Every position named in one of the mod's player arrays, as raw text.
+fn positions_in(raw: Option<&RawValue>) -> Vec<(i32, i32)> {
+    let Some(raw) = raw else { return Vec::new() };
+    serde_json::from_str::<Vec<Positioned>>(raw.get())
+        .map(|players| players.into_iter().map(|p| (p.x, p.z)).collect())
+        .unwrap_or_default()
 }
 
 /// Every land claim, and who the mod says may be shown them.
@@ -235,6 +276,22 @@ impl Live {
             *players = Some((taken, Instant::now()));
         }
         true
+    }
+
+    /// Where every player the mod last posted is standing, in blocks — stale
+    /// data answered the same way `body` answers it, with nothing rather than a
+    /// position that may no longer be true.
+    #[must_use]
+    pub fn positions(&self) -> Vec<(i32, i32)> {
+        self.players
+            .lock()
+            .ok()
+            .and_then(|held| {
+                held.as_ref()
+                    .filter(|(_, at)| at.elapsed() < PLAYERS_GOOD_FOR)
+                    .map(|(seen, _)| seen.positions.clone())
+            })
+            .unwrap_or_default()
     }
 
     /// Takes what the world's clock says.
@@ -441,11 +498,21 @@ fn watching(body: &str) -> Option<Seen> {
     }
 
     let read: Watching = serde_json::from_str(body).ok()?;
+
+    // Every position the mod posted this beat, whichever list it sorted a
+    // player into — `positions_in` reads the same text `open`/`owned` below
+    // hold as strings, before either of those takes ownership of it.
+    let mut positions = positions_in(read.public.as_deref());
+    for list in read.private.values() {
+        positions.extend(positions_in(Some(list)));
+    }
+
     Some(Seen {
         online: read.online,
         open: array(read.public.as_deref()),
         owned: arrays(read.private),
         grouped: arrays(read.grouped),
+        positions,
     })
 }
 

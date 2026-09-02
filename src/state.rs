@@ -96,11 +96,28 @@ impl State {
     /// Loads what is on disk, without drawing any of it.
     pub fn load(data: &Path, palette: Palette, cache_bytes: usize, rules: Rules) -> Result<Self> {
         let columns = columns_dir(data);
+
+        // A snapshot is this service's own picture of memory, not a claim about
+        // what the region files currently hold — the two can disagree the moment
+        // a region changes between the snapshot being written and this start. So
+        // using one means starting `seen`/`regions` as though nothing has been
+        // read yet, which sends the very next watch tick over every region file
+        // that exists to reconcile `world` against them — `World::apply` merges a
+        // region in rather than duplicating it, so replaying every region here
+        // costs a tick's worth of reads and corrects any drift, never doubles
+        // anything up. Loading straight from the region files already leaves
+        // `seen`/`regions` at their current mtimes, because that walk just
+        // finished being exactly that reconciliation.
+        let (world, seen, regions) = match crate::snapshot::read(data) {
+            Some(world) => (world, None, HashMap::new()),
+            None => (World::load(data)?, files::modified(&columns), region_times(&columns)),
+        };
+
         Ok(Self {
-            world: RwLock::new(World::load(data)?),
+            world: RwLock::new(world),
             palette: RwLock::new(palette),
-            seen: Mutex::new(files::modified(&columns)),
-            regions: Mutex::new(region_times(&columns)),
+            seen: Mutex::new(seen),
+            regions: Mutex::new(regions),
             painted: Mutex::new(files::modified(&crate::palette::path_in(data))),
             live: Arc::new(Live::load(data)),
             sessions: Arc::new(Sessions::new()),

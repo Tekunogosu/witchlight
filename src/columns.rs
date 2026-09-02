@@ -319,6 +319,32 @@ impl World {
         Self { edge: 0, chunks: HashMap::new(), regions: HashMap::new() }
     }
 
+    /// A world built straight from chunks already in hand, for
+    /// [`crate::snapshot`] reading its own file back rather than a region at a
+    /// time. `regions` is rebuilt by grouping the chunks given into the same
+    /// squares [`apply`](Self::apply) would have grouped them into one region at
+    /// a time — a snapshot holds no record of which region file a chunk came
+    /// from, only that it exists, so the grouping here runs over the whole world
+    /// at once instead of one square of it.
+    #[must_use]
+    pub fn from_chunks(edge: usize, chunks: HashMap<(i32, i32), Chunk>) -> Self {
+        let mut by_region: HashMap<(i32, i32), Vec<(i32, i32)>> = HashMap::new();
+        for &at in chunks.keys() {
+            let region = (at.0.div_euclid(REGION_CHUNKS), at.1.div_euclid(REGION_CHUNKS));
+            by_region.entry(region).or_default().push(at);
+        }
+
+        let regions = by_region
+            .into_iter()
+            .map(|(region, held)| {
+                let extent = Extent::covering(held.into_iter().map(Extent::around));
+                (region, extent)
+            })
+            .collect();
+
+        Self { edge, chunks, regions }
+    }
+
     /// Whether anything has been exported yet.
     #[must_use]
     pub fn is_empty(&self) -> bool {
@@ -356,6 +382,27 @@ impl World {
 
         self.regions.insert(region.at, Extent::of(&region.chunks));
         self.chunks.extend(region.chunks);
+    }
+
+    /// Takes one chunk pulled straight from the game, widening the region it
+    /// belongs to rather than replacing it — a region asked for its own file has
+    /// every chunk the mod has written for that square in hand at once, but a
+    /// pull answers one chunk at a time and must not tell the rest of that
+    /// square's chunks they no longer exist merely for not having been asked
+    /// about yet.
+    pub fn apply_one(&mut self, chunk_x: i32, chunk_z: i32, edge: usize, chunk: Chunk) {
+        if self.edge == 0 {
+            self.edge = edge;
+        }
+
+        let region = (chunk_x.div_euclid(REGION_CHUNKS), chunk_z.div_euclid(REGION_CHUNKS));
+        self.chunks.insert((chunk_x, chunk_z), chunk);
+
+        let widened = Extent::around((chunk_x, chunk_z));
+        self.regions
+            .entry(region)
+            .and_modify(|held| *held = Some(held.map_or(widened, |extent| extent.with(widened))))
+            .or_insert(Some(widened));
     }
 
     /// Drops a region's chunks, for a region file that has gone away.

@@ -177,6 +177,19 @@ pub const REFRESH_FLOOR_MS: u64 = 250;
 /// and past a minute the form has given up waiting before the answer arrives.
 pub const REFRESH_CEILING_MS: u64 = 60_000;
 
+/// The shortest gap allowed between two of this service's own snapshots.
+///
+/// Half a minute: a snapshot is a pass over everything held in memory, and
+/// anything more frequent than this is a settings file asking to spend more time
+/// saving than serving.
+pub const AUTOSAVE_FLOOR_MS: u64 = 30_000;
+
+/// The longest.
+///
+/// An hour, past which a crash risks losing more than a server left running
+/// that long between saves should ever accept losing.
+pub const AUTOSAVE_CEILING_MS: u64 = 3_600_000;
+
 /// What `admin` is short for.
 pub const ADMIN: &str = "admin";
 
@@ -326,6 +339,34 @@ pub struct Config {
     /// and past ten minutes a map is not a picture of a world people are in.
     pub export_interval_ms: u64,
 
+    /// How often this writes its own in-memory map to disk, in milliseconds.
+    ///
+    /// Fifteen minutes. This is not the mod's export — that is `export_interval_ms`,
+    /// on the other side of the map, writing what the game has seen. This is the
+    /// service's own snapshot of what it holds in memory, so a crash between two
+    /// of these loses at most this much rather than everything since the process
+    /// started. Written again on a clean stop regardless of when the last one
+    /// landed, so an orderly shutdown never loses anything this could have saved.
+    ///
+    /// Held between thirty seconds and one hour: a snapshot is a pass over
+    /// everything held in memory, and past an hour a crash costs more than a
+    /// server left running that long should ever risk.
+    pub autosave_interval_ms: u64,
+
+    /// How far past a player's own reach the terrain puller may fill in, in
+    /// chunks.
+    ///
+    /// Zero means the game server's own `MaxChunkRadius` — the same distance the
+    /// game already loads chunks to, which is what an in-game map could ever
+    /// have shown a player standing there. Backfilling any further than that
+    /// draws ground the generator laid down and nobody could have walked to,
+    /// which is not the shape a map of what has been explored should have.
+    ///
+    /// Set past zero only to draw wider than the game itself ever showed anyone —
+    /// worth doing on a server whose operator wants the web map more generous
+    /// than the client, never worth doing by accident.
+    pub backfill_radius_chunks: i32,
+
     /// How many threads render tiles. Zero decides from the machine, capped so
     /// that the game server this usually shares a box with keeps its cores.
     pub threads: usize,
@@ -408,6 +449,8 @@ impl Default for Config {
             players_public: true,
             live_refresh_ms: 2000,
             export_interval_ms: 10_000,
+            autosave_interval_ms: 15 * 60_000,
+            backfill_radius_chunks: 0,
             threads: 0,
             tile_cache_mb: 256,
             autostart: true,
@@ -510,6 +553,18 @@ impl Config {
             // page is handed and the number a test asks about are the same one.
             live_refresh_ms: self.live_refresh_ms.clamp(REFRESH_FLOOR_MS, REFRESH_CEILING_MS),
         }
+    }
+
+    /// How long to leave between the service's own snapshots, clamped.
+    ///
+    /// Clamped here rather than where it is read, for the same reason
+    /// `live_refresh_ms` is: the number a test asks about and the number the
+    /// clock actually runs on must be the same one.
+    #[must_use]
+    pub fn autosave_interval(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(
+            self.autosave_interval_ms.clamp(AUTOSAVE_FLOOR_MS, AUTOSAVE_CEILING_MS),
+        )
     }
 
     /// Loads `path`. A missing file is not an error — the defaults are a working
@@ -740,6 +795,23 @@ const NOTES: &[(&str, &str)] = &[
          Anything below 1000 is used as 1000 and anything above 600000 as\n\
          600000, and a world save exports whatever the gap was holding. Read by\n\
          the mod, which is the half that does the writing.",
+    ),
+    (
+        "autosave_interval_ms",
+        "How often this writes its own in-memory map to disk, in milliseconds.\n\
+         Not the mod's export — this is the service's own snapshot of what it\n\
+         holds in memory, so a crash between two of these loses at most this\n\
+         much rather than everything since the process started. A clean stop\n\
+         writes one regardless of when the last landed. Anything below 30000 is\n\
+         used as 30000 and anything above 3600000 as 3600000.",
+    ),
+    (
+        "backfill_radius_chunks",
+        "How far past a player's own reach the terrain puller may fill in, in\n\
+         chunks. 0 uses the game server's own MaxChunkRadius — the same distance\n\
+         the game already loads chunks to, so the map never draws ground no\n\
+         in-game map could have shown anyone. Set past 0 to draw wider than the\n\
+         game itself ever showed anyone.",
     ),
     (
         "threads",
