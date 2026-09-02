@@ -9,6 +9,136 @@ which is where that rule is kept rather than in anybody's memory.
 A version that moved for the other half says so and lists nothing, which is not an
 omission: it is what "one release" looks like from the side that did not change.
 
+## 0.41.0
+
+**Deploy note:** both halves, upgraded together. **The map is cleared and
+rebuilds**, because the region format has changed — it fills back in over the
+following minutes without anyone walking anywhere, since this release also draws
+the ground the savegame already holds. The new `export_interval_ms` setting is
+written into the settings file the next time the service writes one; a file
+without it keeps the ten seconds the map has always used.
+
+**A chunk is stored and written on its own.** Version 4 was one gzip stream over
+a whole region, so a single column moving meant repacking the other two hundred
+and fifty-five: a quarter of a megabyte to record six kilobytes of change, and on
+a server with people on it half a gigabyte an hour to keep a map that had barely
+moved. Version 5 puts a directory of fixed size at the head of each region and
+compresses every chunk behind it, so a chunk that changes costs its own kilobyte
+and the entry naming it. Measured on a running server: **110 KiB per change
+became 678 bytes.** The files are about five per cent larger for it.
+
+The export line says what that cost — `wrote 3 chunks (2716 bytes) of 4 regions`
+— because "wrote 5 regions" was the number that hid this for as long as it did.
+
+**A payload is appended and never overwritten**, so a run that dies mid-write
+leaves a directory still pointing at the bytes it always pointed at. Each chunk
+carries a CRC-32, and a chunk whose bytes do not answer to it is read as one the
+map does not hold — which the repair then fetches and writes again. A map damaged
+by a power cut heals rather than having to be thrown away. Regions are packed
+down when the bytes nothing points at outweigh the bytes something does.
+
+**A season now lives in the directory**, so a year turning from summer to autumn
+is sixteen bytes per chunk rather than a repacking of every region on the map.
+The start-up survey reads seasons and holes out of directories too, so a map of
+ten thousand regions starts without decompressing a byte of it.
+
+**`export_interval_ms` is how often the terrain is written**, in milliseconds,
+starting at the 10000 that was built in. It is the map's coalescing knob:
+everything a chunk does inside one beat is written once, so raising it trades how
+current the terrain is against how often the disk is touched, and a world save
+exports whatever the gap was holding either way. Held between 1000 and 600000 —
+an export runs on the server's own tick. Read and enforced by the mod.
+
+**The map draws the ground the game already has.** A map only ever knew what it
+had been told, so terrain explored before witchlight was installed was invisible
+to it: on one world the savegame held 7957 columns and the map had drawn 6011.
+The mod now walks outward from the edges of what the map holds and asks the game
+whether the savegame has the column beside it — and hands the ones it does to the
+repair, which already knows how to fetch a column and write it. It cannot make
+the server generate world: a column is only considered because a mapped one sits
+beside it, and only asked for when the save already holds it. `/witchlight status`
+says how much is left.
+
+## 0.40.3
+
+Moved for the server mod, which now says what moved in a column rather than only
+that something did. Nothing here changed.
+
+## 0.40.2
+
+Moved for the server mod, which found what has actually been putting
+chunk-shaped holes in the map since 0.38.1. Nothing here changed: this side drew
+the holes correctly, because there was nothing in those chunks to draw.
+
+## 0.40.1
+
+**Deploy note:** both halves, upgraded together. Nothing is cleared. An existing
+settings file is not rewritten — nothing here rewrites a file an operator owns —
+so `witchlight -c <file> -S` is what moves one over to the new layout, at the cost
+of anything you have written in it.
+
+**Each setting in the settings file says what it is for, over the line it is
+about.** The file opened with sixty lines of prose about settings none of which
+were on the screen by the time you reached them — a note a screen away from the
+line it is about is a note nobody reads and a line nobody dares change. Every
+setting now carries its own, and the head of the file is two lines. The values are
+still serde's and the notes are held apart from them, so a setting added without
+one, or a note left behind by a setting that has gone, fails a test rather than
+reaching an operator.
+
+**Moved for the server mod as well**, which now holds the ground it asks for while
+it reads it. Nothing on this side reads a chunk.
+
+## 0.40.0
+
+**Deploy note:** both halves, upgraded together. Nothing is cleared. The new
+`[claims] worldgen` setting is written into the settings file the next time the
+service writes one; a file without it behaves as `false`, which is the setting
+hidden — so a server upgrading loses its trader perimeters off the map without
+touching anything, and gets them back by adding the line.
+
+**The claims round trader camps are off the map.** Vintage Story protects a
+trader camp, a story structure and a tiled dungeon with a land claim of its own —
+an owner's name written on it and no owner behind it — and those exist from the
+moment the ground generated rather than from the moment anybody found one. A web
+map is the one place every boundary on a server can be read at once, from a
+chair, so drawing them handed every reader the location of every trader. They are
+now left out of what the game server sends, which is where a thing like that has
+to be decided: a claim that reaches a browser is a claim anybody may read out of
+it. `[claims] worldgen = true` puts them back for a map that should show the lot.
+
+**Each owner's land is its own colour.** A hue taken from the owner's own
+identity, so the same person's ground is the same colour on every screen, in
+every session, whoever else is online — a palette handed out as people arrive
+would agree with nobody. Saturation and lightness are fixed, so no owner is dealt
+a boundary too dark to find, and the rectangle you drag out while drawing is
+already the colour the claim will be. The list of claims wears the same colours
+as the map. Two owners can still land on neighbouring hues, which is why whose a
+claim is stays written in the popup and in the list.
+
+**A claim is drawn on ground the map has.** Claims are the game's facts and the
+map is a picture of what has been explored, and the two do not cover the same
+ground — so a boundary used to be ruled across the black outside the map, which
+reads as the map knowing something it was never told. A claim reaching past the
+edge is now drawn as far as the map goes, and one entirely outside it is not
+drawn at all. The popup still says the corners the game gave: that is the claim,
+and this is only how much of it there is a map for.
+
+**The zoom buttons have their marks in the middle.** They wear the same class
+every other button in that column wears now, which is the one place that says
+what a button in the column looks like. Leaflet centres its own contents with a
+line height and a pixel of text indent, and neither of those moves a mark — so
+the plus and the minus sat in the top left corner of their squares while the
+same marks two buttons above them sat in the middle. It is the fault 0.38.1 fixed
+for the claim button, in the buttons 0.39.1 gave marks to.
+
+## 0.39.2
+
+Moved for the server mod, which no longer forgets a chunk it could not read and
+asks the server to load it instead. Nothing here changed: the holes it leaves
+behind are chunks that never reached a region file, so this side had nothing to
+draw and no way to know it was missing anything.
+
 ## 0.39.1
 
 **Deploy note:** both halves, upgraded together. Nothing is cleared and nothing

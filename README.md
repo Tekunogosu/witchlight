@@ -60,7 +60,8 @@ bind = "0.0.0.0:8080"                 # every interface; 127.0.0.1 for this mach
 api_bind = ""                         # where the mod posts; empty means loopback on a free port
 api_token = ""                        # what it must present; empty means a fresh one each start
 markers_public = false                # whether a marker nobody has chosen for is everyone's
-live_refresh_ms = 2000                # Map refresh frequency
+live_refresh_ms = 2000                # how often the page asks where everybody is
+export_interval_ms = 10000            # how often the mod writes what the terrain did
 autostart = true                      # whether the server mod starts this itself
 announce = true                       # whether it tells joining players where the map is
 announce_url = ""                     # and what to tell them; empty means work it out
@@ -78,7 +79,12 @@ service = "admin"                     # start and stop the map service
 [claims]                              # who may do what with the land claims
 view = "player"                       # see where the claims are, on the map
 create = "claimland"                  # draw a new one from the map
+worldgen = false                      # draw the world's own trader perimeters
 ```
+
+That sample is the settings trimmed to one line each. The file this writes carries
+a note above every setting saying what it is for, so editing it needs nothing else
+open beside it; the sample is here to show the shape at a glance.
 
 `autostart`, `announce`, `announce_url`, `[commands]`, `[claims]` and `[bars]` are the settings
 here that this program never reads. They say who starts the map, who is told about it and who
@@ -163,6 +169,16 @@ map alone, and the mod checks the game's own privilege as well as this one, alon
 with the world's `allowLandClaiming`, the role's allowance and smallest size, how
 many claims that person already holds, and whether the rectangle lands on
 anybody's. A claim the map takes is one `/land claim` would have taken.
+
+`worldgen` is the third question in that table and is not a permission: the game
+protects a trader camp, a story structure and a tiled dungeon with a land claim of
+its own, and those carry an owner's name with no owner behind it. They exist from
+the moment that ground generated rather than from the moment anybody found one, so
+drawing them hands every reader the location of every trader on the server — which
+is why this starts `false`. The mod leaves them out of what it sends rather than
+the page declining to draw them, because a claim that reached a browser is a claim
+anybody may read out of it. `wl status` says how many claims the map draws beside
+how many the server has, so the difference is visible from in game.
 
 Set `announce_url` on any server a player cannot reach directly. Left empty, the
 address given out is the one this machine can see for itself, which is right on a
@@ -265,10 +281,16 @@ chunk that changes therefore belongs to one region file and one tile, so the mod
 rewrites what moved rather than the whole map, and this side reloads one region
 and drops one tile rather than starting over.
 
-Each region is a gzip stream of fixed-size records after a 20-byte header,
-documented in `src/columns.rs`; the compression runs between five and eight times
-on real exports. Chunks accumulate across exports, so the map keeps everything the
-server has ever had loaded.
+**Each chunk inside a region is compressed on its own, behind a directory of
+fixed size** — the layout is documented at the head of `src/columns.rs`. That is
+what lets the mod write a chunk without touching the two hundred and fifty-five
+beside it: a change costs its own kilobyte rather than the quarter-megabyte square
+it sits in, which on a busy server is the difference between half a gigabyte an
+hour and a few megabytes. A chunk carries a CRC-32, and one whose bytes do not
+answer to it is read as a chunk the map does not hold — which is what a run that
+died mid-write leaves behind, and what the mod's repair then fills in. Chunks
+accumulate across exports, so the map keeps everything the server has ever had
+loaded.
 
 The format still moves while Witchlight is alpha. A region this build cannot read
 is skipped and said so on stderr, and the mod clears a map it cannot read on start
@@ -437,7 +459,13 @@ column or from the settings panel — the two are one switch and each follows th
 other. Every claim is drawn one shaded rectangle per area, so a claim built out of
 several adjacent boxes keeps the shape of its boundary rather than being wrapped
 in a box around the lot; opening one says who holds it, what they called it, and
-how far up and down it reaches. Which claims a reader is sent is decided by the
+how far up and down it reaches. Each owner's land is its own colour, taken from
+their own identity so that the same person's ground is the same colour on every
+screen and in every session — near hues can collide, which is why whose a claim is
+stays written in the popup and in the list. A claim is drawn on ground the map
+holds and nowhere else: one reaching past the explored edge is drawn as far as the
+map goes, and one entirely outside it is not drawn, since a boundary ruled across
+the black would be the map showing what it has never been told. Which claims a reader is sent is decided by the
 service against a list the mod supplies, so a reader who may not see them is sent
 an empty array rather than a full one to hide — a browser cannot be asked to
 forget what it has been handed.

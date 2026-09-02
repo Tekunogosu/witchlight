@@ -857,5 +857,70 @@ console.log("\na player's card carries whatever else the server shows for them")
   check('and switching it back on draws it again', cards.names().join() === 'Mana');
 }
 
+console.log('\nwhose land it is, is what colour it is drawn in');
+// A hue off the owner's uid, which is the only way the same person's ground can
+// be the same colour on two screens that have never spoken to each other. The
+// map has no roster to hand colours out of and no moment to hand them out at:
+// claims arrive every two seconds from a server that has never heard of this
+// browser.
+const claims = new Function(`
+  let bounds = { minX: 0, minZ: 0, maxX: 0, maxZ: 0 };
+  const at = (x, z) => [z, x];
+  ${liftConst('CLAIM_UNOWNED')}
+  ${lift('claimColour')}
+  ${lift('claimOnTheMap')}
+  return {
+    CLAIM_UNOWNED, claimColour, claimOnTheMap,
+    mapped: box => { bounds = box; },
+  };
+`)();
+
+check('one owner is one colour, every time it is asked',
+  claims.claimColour('abc') === claims.claimColour('abc'));
+check('and two owners are not the same colour',
+  claims.claimColour('abc') !== claims.claimColour('abd'),
+  `${claims.claimColour('abc')} and ${claims.claimColour('abd')}`);
+// Land nobody owns is the world's own: a trader camp is not a player and must
+// not be dealt a player's colour, or the map would say somebody lives there.
+check('land nobody owns wears the colour of land nobody owns',
+  claims.claimColour('') === claims.CLAIM_UNOWNED
+  && claims.claimColour(null) === claims.CLAIM_UNOWNED
+  && claims.claimColour(undefined) === claims.CLAIM_UNOWNED);
+// A palette with a dark end would deal some owner a boundary they cannot find.
+// Fixed saturation and lightness are what stop that, so they are checked rather
+// than trusted to stay written down.
+check('every owner gets a colour at the same weight',
+  ['a', 'bb', 'ccc', 'dddd', 'player-uid-1', 'player-uid-2']
+    .every(uid => /^hsl\(\d{1,3}, 72%, 55%\)$/.test(claims.claimColour(uid))),
+  claims.claimColour('player-uid-1'));
+
+console.log('\na claim is drawn on ground the map has, and nowhere else');
+// The world protects a trader camp the moment it generates one, hundreds of
+// blocks past anywhere anybody has walked. Drawn whole, that boundary is a
+// rectangle ruled across the black outside the map — which hands whoever is
+// looking the location of somewhere they have not found.
+claims.mapped({ minX: 0, minZ: 0, maxX: 100, maxZ: 100 });
+// `at` is stubbed to [z, x], which is the order Leaflet takes a point in.
+const drawn = area => claims.claimOnTheMap(area);
+check('a claim inside the map is drawn whole',
+  JSON.stringify(drawn({ X1: 10, Z1: 20, X2: 29, Z2: 39 })) === '[[20,10],[40,30]]',
+  JSON.stringify(drawn({ X1: 10, Z1: 20, X2: 29, Z2: 39 })));
+check('a claim outside it is not drawn at all',
+  drawn({ X1: 200, Z1: 200, X2: 210, Z2: 210 }) === null
+  && drawn({ X1: -50, Z1: -50, X2: -40, Z2: -40 }) === null);
+// Touching is not overlapping: a claim whose far corner is the first block past
+// the map covers no ground the map has.
+check('and neither is one that only touches its edge',
+  drawn({ X1: 100, Z1: 10, X2: 110, Z2: 20 }) === null,
+  JSON.stringify(drawn({ X1: 100, Z1: 10, X2: 110, Z2: 20 })));
+check('a claim reaching past the edge is drawn as far as the map goes',
+  JSON.stringify(drawn({ X1: 90, Z1: 90, X2: 130, Z2: 130 })) === '[[90,90],[100,100]]',
+  JSON.stringify(drawn({ X1: 90, Z1: 90, X2: 130, Z2: 130 })));
+// A map with nothing exported has no ground at all, and the claims a server
+// sends on the first beat must not be drawn over the waiting screen.
+claims.mapped({ minX: 0, minZ: 0, maxX: 0, maxZ: 0 });
+check('and a map with nothing on it draws no claims',
+  drawn({ X1: 0, Z1: 0, X2: 10, Z2: 10 }) === null);
+
 console.log(failed === 0 ? '\nall checks passed' : `\n${failed} FAILED`);
 process.exit(failed === 0 ? 0 : 1);

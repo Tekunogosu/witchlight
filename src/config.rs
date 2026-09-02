@@ -105,6 +105,25 @@ pub struct Claims {
     pub view: String,
     /// Who may draw a new one from the map.
     pub create: String,
+    /// Whether the map draws the claims the world made for itself.
+    ///
+    /// Not a permission but a third question about the same subject, which is
+    /// why it sits in this table rather than beside the other switches: a claim
+    /// round a trader camp or a story structure has an owner's name on it and no
+    /// owner behind it, and it exists from the moment the world generated that
+    /// ground rather than from the moment anybody found it.
+    ///
+    /// Off. A web map is the one place those boundaries can all be read at once,
+    /// from a chair, without going anywhere — so drawing them is handing every
+    /// reader the location of every trader on the server, which is a thing the
+    /// game does not otherwise give anybody. An operator who wants them turns
+    /// this on.
+    ///
+    /// Enforced by the mod, and by leaving them out of what it sends rather than
+    /// by the page declining to draw them. A claim that reached a browser is a
+    /// claim anybody may read out of it, so this can only mean anything on the
+    /// side that decides what to send.
+    pub worldgen: bool,
 }
 
 impl Default for Claims {
@@ -122,6 +141,11 @@ impl Default for Claims {
             // narrowing it here narrows the map alone, which is the point of its
             // being a setting.
             create: Privilege::CLAIM_LAND.to_owned(),
+            // Where a trader camp is, is not already everybody's, which is what
+            // makes this the one of the three that starts closed. The game tells
+            // a client about a claim it is standing near; the map would tell a
+            // reader about every one at once.
+            worldgen: false,
         }
     }
 }
@@ -282,6 +306,26 @@ pub struct Config {
     /// service has restarted and the page has been reloaded.
     pub live_refresh_ms: u64,
 
+    /// How long the server mod leaves between writing what the terrain has done,
+    /// in milliseconds.
+    ///
+    /// Ten seconds, which is what it always was. This is the map's own coalescing
+    /// knob: a chunk changed six times inside one beat is written once, so raising
+    /// it trades how current the terrain is against how often the disk is touched.
+    /// A server whose map is watched while people build wants it low; one on a
+    /// drive somebody is trying not to wear out wants it high.
+    ///
+    /// The number matters far less than it did. A chunk that moves now costs its
+    /// own kilobyte or so rather than the quarter-megabyte square it sits in — see
+    /// the mod's `Regions` — so ten seconds is affordable where it used not to be.
+    ///
+    /// Read and enforced by the mod, which is the half that does the writing —
+    /// nothing here acts on it, as with `autostart` and `announce`. It holds the
+    /// number between one second and ten minutes: an export runs on the server's
+    /// own tick, so a gap of nothing is the game doing this instead of the world,
+    /// and past ten minutes a map is not a picture of a world people are in.
+    pub export_interval_ms: u64,
+
     /// How many threads render tiles. Zero decides from the machine, capped so
     /// that the game server this usually shares a box with keeps its cores.
     pub threads: usize,
@@ -363,6 +407,7 @@ impl Default for Config {
             markers_public_editable: false,
             players_public: true,
             live_refresh_ms: 2000,
+            export_interval_ms: 10_000,
             threads: 0,
             tile_cache_mb: 256,
             autostart: true,
@@ -548,76 +593,259 @@ impl Config {
         }
     }
 
+    /// The settings file this writes: every value serde knows how to write, with
+    /// what it is for standing over it.
+    ///
+    /// The values come from serde and the notes from <see>NOTES</see>, laid over
+    /// each other by walking what was written. Neither half can invent a setting
+    /// the other has not heard of: a value with no note is caught by
+    /// `every_setting_written_says_what_it_is_for`, and a note for a setting that
+    /// no longer exists is never reached and is caught by the same test.
     #[must_use]
     pub fn to_template(&self) -> String {
         let body = toml::to_string_pretty(self).unwrap_or_else(|error| format!("# {error}\n"));
-        format!(
-            "# witchlight configuration\n\
-             # vs_data is the server's --dataPath; exports are read from the\n\
-             # `witchlight` folder inside it.\n\
-             # map_data overrides that folder. Empty is the one above.\n\
-             # per_world files each world's map in a directory of its own inside\n\
-             # it. Off for a dedicated server, which runs one world. On for\n\
-             # singleplayer, where every save shares one data path and would\n\
-             # otherwise write its terrain into the last world's map. Turning it\n\
-             # on moves the map already there down into its own directory rather\n\
-             # than leaving it to be written over.\n\
-             # api_bind is where the mod posts live data. Empty means loopback\n\
-             # on a port the machine picks, written to api.json beside the map\n\
-             # where the mod reads it. Set a host:port, and api_token to match\n\
-             # on both sides, only for a mod on another machine.\n\
-             # markers_public decides a marker nobody has chosen for: off keeps\n\
-             # one to its owner, on shares it with everybody. Read by the mod as\n\
-             # well as here, so the in-game map and the web map agree.\n\
-             # markers_public_editable lets anybody change a marker anybody can\n\
-             # see. Off, so a public marker is readable by all and writable by\n\
-             # its owner; on, the server corrects its own map together.\n\
-             # players_public decides whether where somebody is standing is\n\
-             # everybody's to see. On; turn it off and a player shows on the map\n\
-             # to their own group and to nobody else. How many are online is\n\
-             # still said either way. Read and enforced by the mod, which is the\n\
-             # half that knows the groups.\n\
-             # live_refresh_ms is the map refresh frequency: how long the page\n\
-             # leaves between asking where everybody is, in milliseconds. Players, markers and claims all\n\
-             # arrive on this one beat, so it is the whole of how fresh the live\n\
-             # half of the map is. Anything below 250 is served as 250 and\n\
-             # anything above 60000 as 60000.\n\
-             # threads is how many requests are answered at once; 0 decides.\n\
-             # tile_cache_mb is how much memory rendered tiles may hold.\n\
-             # autostart is whether the server mod runs this service itself.\n\
-             # Turn it off to run `witchlight serve` by hand, which is what a map\n\
-             # that should outlive the game server wants.\n\
-             # announce is whether the mod tells a player where the map is when\n\
-             # they join. announce_url is what to tell them: empty means the\n\
-             # address this works out for itself, which is right on a machine\n\
-             # they can reach directly and wrong behind a proxy or a domain.\n\
-             # [commands] is who may run each `wl` command in game. `admin` and\n\
-             # `player` are the two that answer most servers; any privilege the\n\
-             # game knows — controlserver, chat, commandplayer — works too, and\n\
-             # a name the game does not know is refused to everyone but an\n\
-             # admin, so a typo locks a command rather than opening it. Read by\n\
-             # the mod, which is the half that knows who is an admin.\n\
-             # [claims] is who may see the land claims on the map and who may\n\
-             # draw a new one from it. Same spelling as [commands]: `admin`,\n\
-             # `player`, or any privilege the game knows. Seeing where a claim\n\
-             # is starts open, because the game already tells every client;\n\
-             # drawing one starts at `claimland`, which is what the game asks\n\
-             # of `/land claim`, so the map is never a way round a rule the\n\
-             # server already has. Read and enforced by the mod.\n\
-             # [bars] adds a bar to each player's card beside their health and\n\
-             # their food, read off that player's own entity — which is where a\n\
-             # mod giving players mana or stamina already keeps it, and which\n\
-             # the server can read without knowing anything about the mod.\n\
-             # Each entry is `name | value attribute | maximum attribute |\n\
-             # colour`, and the key is only a name for the entry. A bar is drawn\n\
-             # only for a player who has that attribute with a maximum above\n\
-             # zero, so one nothing on this server uses simply never appears.\n\
-             # A fifth part groups the bar where a reader switches them on and\n\
-             # off; left out, the mod looks for an installed mod whose id is in\n\
-             # the attribute's own name. The two below are what a stock\n\
-             # Rustbound Magic uses.\n\n{body}"
-        )
+        let mut file = String::from(HEADER);
+
+        // Which table the settings being written belong to, so that a name inside
+        // one is looked up as `commands.export` rather than as a top-level
+        // `export` that would mean something else.
+        let mut table = String::new();
+
+        for line in body.lines() {
+            let text = line.trim();
+            if text.is_empty() {
+                continue;
+            }
+
+            if let Some(name) = text.strip_prefix('[').and_then(|rest| rest.strip_suffix(']')) {
+                table = format!("{name}.");
+                file.push_str(&noted(text));
+            } else {
+                let key = text.split('=').next().unwrap_or_default().trim();
+                file.push_str(&noted(&format!("{table}{key}")));
+            }
+
+            file.push_str(text);
+            file.push('\n');
+        }
+
+        file
     }
+}
+
+/// What the file says about itself before it says anything about a setting.
+///
+/// Two lines, because everything else a reader needs is beside the line it is
+/// about. This says only what cannot be: which half of witchlight acts on what
+/// they are reading.
+const HEADER: &str = "\
+# witchlight configuration
+#
+# Written by the map service, and read by both halves of witchlight: a note
+# saying the mod reads a setting means the game server is what acts on it.
+";
+
+/// What one setting is for, as it is written above that setting.
+///
+/// Keyed by the name serde writes — a setting inside a table by `table.key`, and
+/// a table itself by its own bracketed name — so a setting that moves into a
+/// table takes its note with it rather than losing it.
+///
+/// Written beside the settings rather than in a block at the head of the file.
+/// A note a screen away from the line it is about is a note nobody reads and a
+/// line nobody dares change, and the block had grown to sixty lines of prose
+/// standing between an operator and the first thing they came to edit.
+///
+/// A table rather than prose, because a table can be checked: see
+/// `every_setting_written_says_what_it_is_for`, which is what stops a setting
+/// being added and reaching an operator unexplained. The keys under `[bars]` are
+/// the operator's own names and are the one thing in the file with nothing to
+/// say about them; the note on the table says what they all are.
+const NOTES: &[(&str, &str)] = &[
+    (
+        "vs_data",
+        "The game server's `--dataPath`. Exports are read from the `witchlight`\n\
+         folder inside it.",
+    ),
+    (
+        "map_data",
+        "Where the map is kept instead. Worth setting where it should live\n\
+         somewhere other than beside the world — a larger disk, a directory a web\n\
+         server already serves. Empty is the folder above.",
+    ),
+    (
+        "per_world",
+        "Files each world's map in a directory of its own inside that folder. Off\n\
+         for a dedicated server, which runs one world and wants its map where it\n\
+         has always been. On for singleplayer, where every save shares one data\n\
+         path and the second world would otherwise write its terrain into the\n\
+         first world's map. Turning it on moves the map already there down into\n\
+         its own directory rather than leaving it to be written over. Read by the\n\
+         mod, which is the only half that knows which world is running.",
+    ),
+    (
+        "bind",
+        "Where the map is served. Every address this machine has, so it is\n\
+         reachable from the rest of the network without further configuration;\n\
+         `127.0.0.1:8080` keeps it to this machine alone.",
+    ),
+    (
+        "api_bind",
+        "Where the mod posts who is online and where the markers and claims are.\n\
+         Empty means loopback on a port the machine picks, published in api.json\n\
+         beside the map so the mod finds it without being told and two game\n\
+         servers on one box collide with nothing. Set a host:port only for a mod\n\
+         running on another machine.",
+    ),
+    (
+        "api_token",
+        "What the mod must present to post. Empty means a fresh one each start,\n\
+         written into api.json where the mod reads it — so this is only worth\n\
+         setting where that file cannot reach the mod, and then the same value\n\
+         goes on both sides.",
+    ),
+    (
+        "markers_public",
+        "What a marker nobody has chosen for is: off keeps one to its owner, on\n\
+         shares it with everybody. Read by the mod as well as here, so the\n\
+         in-game map and the web map agree.",
+    ),
+    (
+        "markers_public_editable",
+        "Whether anybody may change a marker anybody can see. Off, so a public\n\
+         marker is readable by all and writable by its owner; on, the server\n\
+         corrects its own map together. A private marker is never anybody's but\n\
+         its owner's either way.",
+    ),
+    (
+        "players_public",
+        "Whether where somebody is standing is everybody's to see. On; turn it off\n\
+         and a player shows on the map to their own group and to nobody else. How\n\
+         many are online is still said either way. Read and enforced by the mod,\n\
+         which is the half that knows the groups.",
+    ),
+    (
+        "live_refresh_ms",
+        "How long the page leaves between asking where everybody is, in\n\
+         milliseconds. Players, markers and claims all arrive on this one beat, so\n\
+         it is the whole of how fresh the live half of the map is. Anything below\n\
+         250 is served as 250 and anything above 60000 as 60000.",
+    ),
+    (
+        "export_interval_ms",
+        "How long the server mod leaves between writing what the terrain has\n\
+         done, in milliseconds. This is the map's coalescing knob: a chunk\n\
+         changed six times inside one beat is written once, so raising it trades\n\
+         how current the terrain is against how often the disk is touched.\n\
+         Anything below 1000 is used as 1000 and anything above 600000 as\n\
+         600000, and a world save exports whatever the gap was holding. Read by\n\
+         the mod, which is the half that does the writing.",
+    ),
+    (
+        "threads",
+        "How many requests are answered at once. 0 decides from the machine, held\n\
+         back so that the game server this usually shares a box with keeps cores\n\
+         of its own.",
+    ),
+    (
+        "tile_cache_mb",
+        "How much memory rendered tiles may hold before the least used are\n\
+         dropped. They are rebuilt on demand, so this costs time and not the map.",
+    ),
+    (
+        "autostart",
+        "Whether the server mod runs this service itself. Turn it off to run\n\
+         `witchlight serve` by hand, which is what a map that should outlive the\n\
+         game server wants.",
+    ),
+    (
+        "announce",
+        "Whether the mod tells a player where the map is when they join.",
+    ),
+    (
+        "announce_url",
+        "What to tell them. Empty means the address this works out for itself,\n\
+         which is right on a machine they can reach directly and wrong behind a\n\
+         proxy, a domain or NAT.",
+    ),
+    (
+        "[commands]",
+        "Who may run each `wl` command in game. `admin` and `player` are the two\n\
+         that answer most servers; any privilege the game knows — controlserver,\n\
+         chat, commandplayer — works too, and a name the game does not know is\n\
+         refused to everyone but an admin, so a typo locks a command rather than\n\
+         opening it. Read by the mod, which is the half that knows who is an\n\
+         admin.",
+    ),
+    ("commands.login", "A link that signs your own browser in as you."),
+    ("commands.mark", "A marker where you are looking."),
+    ("commands.portrait", "Asking a client for a picture of its player."),
+    ("commands.palette", "Asking a client for a block colour palette."),
+    ("commands.icons", "Asking a client for the pictures markers are drawn with."),
+    ("commands.export", "Writing the surface of every loaded chunk."),
+    ("commands.status", "The whole of what state the map is in."),
+    ("commands.service", "Starting and stopping the map service."),
+    (
+        "[claims]",
+        "What the map does with the land claims. The first two are spelled the way\n\
+         [commands] are and answer two different questions, because they are two:\n\
+         seeing where a claim is tells somebody whether they may build there, and\n\
+         drawing one takes land. Read and enforced by the mod.",
+    ),
+    (
+        "claims.view",
+        "Who may see where the claims are. Open, because the game already sends\n\
+         every claim to every client — a map that hid them would tell players less\n\
+         than the game does.",
+    ),
+    (
+        "claims.create",
+        "Who may draw a new one from the map. What the game asks of `/land claim`,\n\
+         so the map is never a way round a rule the server already has; narrowing\n\
+         it narrows the map alone.",
+    ),
+    (
+        "claims.worldgen",
+        "Whether the map draws the claims the world made for itself — the\n\
+         perimeters round trader camps and story structures, which carry an\n\
+         owner's name and no owner. Off, because those exist from the moment the\n\
+         ground generated, and drawing them hands every reader the location of\n\
+         every trader on the server. Turn it on for a map that shows the lot.",
+    ),
+    (
+        "[bars]",
+        "A bar on each player's card beside their health and their food, read off\n\
+         that player's own entity — which is where a mod giving players mana or\n\
+         stamina already keeps it, and which the server can read without knowing\n\
+         anything about the mod. Each entry is `name | value attribute | maximum\n\
+         attribute | colour | group`, and the key is only a name for the entry. A\n\
+         bar is drawn only for a player who has that attribute with a maximum\n\
+         above zero, so one nothing on this server uses simply never appears.\n\
+         Left out, the group is taken from an installed mod whose id is in the\n\
+         attribute's own name. The two below are what a stock Rustbound Magic\n\
+         uses.",
+    ),
+];
+
+/// One setting's note, as the lines that stand over it, or nothing where it has
+/// none.
+///
+/// A blank line before every note, without exception: a rule with an exception is
+/// a file that reads as though it were formatted by hand and got tired. What has
+/// no note — the operator's own names under `[bars]` — is a list, and a list
+/// reads better closed up anyway.
+fn noted(key: &str) -> String {
+    let Some((_, note)) = NOTES.iter().find(|(name, _)| *name == key) else {
+        return String::new();
+    };
+
+    let mut said = String::from("\n");
+    for line in note.lines() {
+        said.push_str("# ");
+        said.push_str(line);
+        said.push('\n');
+    }
+    said
 }
 #[cfg(test)]
 mod tests {
@@ -661,6 +889,10 @@ mod tests {
             Privilege::CLAIM_LAND,
             "taking land through the map asks what `/land claim` asks"
         );
+        // The one of the three that starts closed, because it is the one the
+        // game does not already give: a client is told about the claim it is
+        // standing near, never about every trader camp at once.
+        assert!(!held.worldgen, "the world's own perimeters are not drawn unless asked for");
     }
 
     /// The one setting here that lands in a browser's timer.
@@ -677,6 +909,63 @@ mod tests {
         // Past a minute the form has given up on a marker before the beat that
         // would have confirmed it.
         assert_eq!(told(600_000), REFRESH_CEILING_MS);
+    }
+
+    /// Every setting an operator is handed says what it is for, and nothing says
+    /// what it is for about a setting they are not handed.
+    ///
+    /// The two halves of the file — the values serde writes and the notes written
+    /// beside them — are held apart, which is what lets each be edited without the
+    /// other. This is what stops them drifting: a field added to `Config` reaches
+    /// an operator unexplained, and a note left behind by a setting that has gone
+    /// is a note that will never again be read by anyone but its author.
+    ///
+    /// The names under `[bars]` are the exception, and the only one. They are the
+    /// operator's own words rather than settings this program has ever heard of,
+    /// so there is nothing here that could have a note about them; the note on the
+    /// table itself says what all of them are.
+    #[test]
+    fn every_setting_written_says_what_it_is_for() {
+        let template = Config::default().to_template();
+        let mut table = String::new();
+        let mut unexplained = Vec::new();
+        let mut explained = Vec::new();
+        let mut previous = "";
+
+        for line in template.lines() {
+            let text = line.trim();
+            if text.is_empty() || text.starts_with('#') {
+                previous = text;
+                continue;
+            }
+
+            let name = match text.strip_prefix('[').and_then(|rest| rest.strip_suffix(']')) {
+                Some(named) => {
+                    table = format!("{named}.");
+                    text.to_owned()
+                }
+                None => format!("{table}{}", text.split('=').next().unwrap_or_default().trim()),
+            };
+
+            if previous.starts_with('#') {
+                explained.push(name);
+            } else if table != "bars." {
+                unexplained.push(name);
+            }
+            previous = text;
+        }
+
+        assert!(
+            unexplained.is_empty(),
+            "these reach an operator with nothing said about them: {unexplained:?}"
+        );
+
+        let stale: Vec<_> = NOTES
+            .iter()
+            .map(|(name, _)| *name)
+            .filter(|name| !explained.iter().any(|written| written == name))
+            .collect();
+        assert!(stale.is_empty(), "these notes are about nothing the file holds: {stale:?}");
     }
 
     #[test]

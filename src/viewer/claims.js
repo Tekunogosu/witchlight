@@ -44,23 +44,84 @@ const claimed = L.layerGroup();
 let drawnClaims = null;
 
 /**
- * How a claim is drawn: its own ground tinted, its boundary ruled.
+ * The colour of land nobody owns.
  *
- * One colour for every claim rather than one per owner. Whose it is, is written
- * in the label and said in the popup; colouring by owner would need a palette
- * that stayed stable as people came and went, and would say something the map
- * cannot promise — that two patches of the same colour are the same person's.
+ * The perimeters the world draws round its own trader camps and story
+ * structures, which have an owner's name on them and no owner behind it. One
+ * colour for all of them, because they are one thing — the game protecting
+ * itself — rather than a cast of owners to tell apart.
  */
-const CLAIM_COLOUR = '#f0b429';
+const CLAIM_UNOWNED = '#f0b429';
+
+/**
+ * The colour one owner's land is drawn in.
+ *
+ * A hue taken from the owner's uid, which is the whole of why it is stable: the
+ * same person's ground is the same colour on every reader's screen, in every
+ * session, whoever else happens to be online. A palette handed out in the order
+ * people arrive would repaint half the map every time somebody logged in, and
+ * would agree with nobody else's screen.
+ *
+ * The uid rather than the name, so a rename does not move somebody's land to a
+ * new colour. Saturation and lightness are fixed, so every claim reads at the
+ * same weight against the terrain and no owner is dealt a boundary too dark to
+ * find.
+ *
+ * A hue circle is not a promise of uniqueness, and this does not make one: two
+ * owners can land close enough to look alike. Whose a claim is, is written in
+ * the popup and in the list, which is where that question is answered — the
+ * colour is for telling one neighbour's land from the next at a glance.
+ */
+function claimColour(uid) {
+  if (!uid) return CLAIM_UNOWNED;
+
+  // FNV-1a, which is the hash the mod names a claim with and is here for the
+  // same reason: four lines, and it spreads a run of uids that differ in one
+  // letter clear across the circle.
+  let hash = 0x811c9dc5;
+  for (const letter of String(uid)) {
+    hash = Math.imul(hash ^ letter.charCodeAt(0), 0x01000193) >>> 0;
+  }
+  return `hsl(${hash % 360}, 72%, 55%)`;
+}
 
 /** Faint enough to read the terrain through, strong enough to see the edge of. */
-const CLAIM_STYLE = {
-  pane: 'claims',
-  color: CLAIM_COLOUR,
-  weight: 1,
-  fillColor: CLAIM_COLOUR,
-  fillOpacity: 0.12,
-};
+function claimStyle(colour) {
+  return {
+    pane: 'claims',
+    color: colour,
+    weight: 1,
+    fillColor: colour,
+    fillOpacity: 0.12,
+  };
+}
+
+/**
+ * The part of one area the map has ground to draw it on, or null where it has
+ * none.
+ *
+ * A claim is the game's fact and the map is a picture of what has been explored,
+ * and the two do not cover the same ground. The world protects a trader camp the
+ * moment it generates one, which is hundreds of blocks past anywhere anybody has
+ * walked — so drawn whole, that boundary is a rectangle ruled across the black
+ * outside the map. It reads as the map knowing something it was never told, and
+ * it hands whoever is looking the location of somewhere they have not found.
+ *
+ * So a claim is drawn on the ground the map holds and nowhere else. Where the
+ * claim reaches past that, what is drawn is the overlap; the popup still says the
+ * corners the game gave, because those are the claim and this is only how much of
+ * it there is a map for.
+ *
+ * The far corners are one past the last block, which is what a rectangle covering
+ * both of its corners means, and is the same convention the mapped bounds use.
+ */
+function claimOnTheMap(area) {
+  const west = Math.max(area.X1, bounds.minX);
+  const north = Math.max(area.Z1, bounds.minZ);
+  const east = Math.min(area.X2 + 1, bounds.maxX);
+  const south = Math.min(area.Z2 + 1, bounds.maxZ);
+  return east > west && south > north ? [at(west, north), at(east, south)] : null;
+}
 
 /**
  * Draws the claims, and only when they are not the ones already drawn.
@@ -68,16 +129,23 @@ const CLAIM_STYLE = {
  * Compared as a set, like the markers and for the same reason: they arrive every
  * two seconds and change a few times a week, and rebuilding them on arrival would
  * tear down every rectangle on the map to discover that none of them had moved.
+ *
+ * The mapped bounds are part of what is compared, because they are part of what
+ * is drawn: a claim at the frontier is drawn as much of itself as the map has
+ * reached, so the world growing under it is a redraw exactly as a claim moving is.
  */
 function drawClaims(sent) {
-  const shape = JSON.stringify(sent);
+  const shape = JSON.stringify([sent, bounds]);
   if (shape === drawnClaims) return;
   drawnClaims = shape;
 
   claimed.clearLayers();
   for (const claim of sent) {
+    const style = claimStyle(claimColour(claim.OwnerUid));
     for (const area of claim.Areas || []) {
-      L.rectangle([at(area.X1, area.Z1), at(area.X2 + 1, area.Z2 + 1)], CLAIM_STYLE)
+      const ground = claimOnTheMap(area);
+      if (!ground) continue;
+      L.rectangle(ground, style)
         .bindPopup(claimSays(claim, area))
         .addTo(claimed);
     }
@@ -168,10 +236,10 @@ let firstCorner = null;
  */
 const drawnRectangle = L.rectangle([at(0, 0), at(1, 1)], {
   pane: 'claims',
-  color: CLAIM_COLOUR,
+  color: CLAIM_UNOWNED,
   weight: 2,
   dashArray: '4 3',
-  fillColor: CLAIM_COLOUR,
+  fillColor: CLAIM_UNOWNED,
   fillOpacity: 0.18,
   interactive: false,
 });
@@ -190,6 +258,12 @@ function setDrawing(on) {
     if (picking) setPicking(false);
   }
   firstCorner = null;
+  // In the colour this reader's own land is drawn in, so the rectangle being
+  // dragged out is already the colour of the claim it would become. Read here
+  // rather than when the layer is made, because who is looking is not known
+  // until the service has answered.
+  const ours = claimColour(viewer && viewer.Uid);
+  drawnRectangle.setStyle({ color: ours, fillColor: ours });
   layer(drawnRectangle, false);
   claimDraw.classList.toggle('armed', on);
   claimDraw.setAttribute('aria-pressed', String(on));
@@ -504,14 +578,6 @@ let changingClaim = null;
 let droppingClaim = null;
 let claimAskedAt = 0;
 
-/**
- * Asks for the claim the form is holding.
- *
- * Nothing is done here and the page does not pretend otherwise. Whether this
- * person may take this land is the game's to answer against its own rules — the
- * privilege, the allowance, how small a claim may be, and whether it lands on
- * anybody else's — so the page says what it asked for and watches the ground.
- */
 /** Who the form says may build here, as the mod reads it. */
 function guestsAsked() {
   return {
@@ -597,6 +663,14 @@ async function dropClaim() {
   sayClaim('Waiting for the game server…');
 }
 
+/**
+ * Asks for whatever the form is holding: a change to a claim, or new ground.
+ *
+ * Nothing is done here and the page does not pretend otherwise. Whether this
+ * person may take this land is the game's to answer against its own rules — the
+ * privilege, the allowance, how small a claim may be, and whether it lands on
+ * anybody else's — so the page says what it asked for and watches the ground.
+ */
 async function askForClaim() {
   if (editingClaim) {
     await saveClaim();
@@ -835,8 +909,11 @@ function claimRow(claim, shaded) {
   }
   const owner = claim.Owner ? ` · ${claim.Owner}` : '';
 
+  // The same colour the ground is drawn in, so a row and the boundary it names
+  // are recognisably the same claim.
   const { line, open } = listedRow(
-    'polygon', CLAIM_COLOUR, claim.Description || 'unnamed claim', where + owner, shaded);
+    'polygon', claimColour(claim.OwnerUid), claim.Description || 'unnamed claim',
+    where + owner, shaded);
 
   // Opening a row is going to look at it, so it moves the map and makes sure the
   // claims are being drawn. Changing one is a different act with its own button:

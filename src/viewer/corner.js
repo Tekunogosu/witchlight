@@ -208,12 +208,21 @@ function gatherCorner() {
  * of Leaflet's buttons and nothing about the control they belong to: the names
  * a screen reader says are the titles Leaflet set, which is why clearing the
  * text costs no label.
+ *
+ * They are given the class every other button in this column wears, because that
+ * class is what centres a mark. Leaflet centres its own contents with a line
+ * height and a pixel of text indent, and neither of those moves a block element
+ * — so a mark in one of these sat in the top left corner of the square while the
+ * same mark two buttons above it sat in the middle. `tool` is the one place that
+ * says what a button in this column looks like, and a button that is one now
+ * says so rather than being drawn to match.
  */
 function markZoom() {
   const marks = { '.leaflet-control-zoom-in': 'plus', '.leaflet-control-zoom-out': 'minus' };
   for (const [which, mark] of Object.entries(marks)) {
     const button = corner.querySelector(which);
     if (!button) continue;
+    button.classList.add('tool');
     button.textContent = '';
     button.append(chromeMark(mark));
   }

@@ -7,24 +7,51 @@
 //! mod rewrites what moved instead of the whole map, and this side reloads one
 //! region and redraws one tile instead of starting over.
 //!
-//! Each region file is a gzip stream. Inside it, little endian, version 4:
+//! Each chunk in a region is compressed on its own, behind a directory of fixed
+//! size. Version 4 was one gzip stream over the whole region, which meant the mod
+//! could not write one chunk without rewriting the other two hundred and
+//! fifty-five — and meant this side had to inflate a quarter of a megabyte to
+//! look at one of them.
+//!
+//! Little endian, version 5. Nothing outside a payload is compressed:
 //!
 //! ```text
-//! header   "MSQR", u16 version, u16 columns per chunk edge,
-//!          i32 regionX, i32 regionZ, i32 chunks
-//! record   i32 chunkX, i32 chunkZ, u8 season, u8 reserved, then edge*edge
-//!          entries of u16 blockId, i16 surfaceY, u8 temperature, u8 rainfall
+//!   0  magic     "MSQR"
+//!   4  version   u16 = 5
+//!   6  edge      u16   columns along a chunk's edge
+//!   8  regionX   i32
+//!  12  regionZ   i32
+//!  16  slots     u16   chunks in a region, which is REGION_CHUNKS squared
+//!  18  reserved  u16
+//!  20  directory slots entries of 16 bytes, in slot order:
+//!                  0  offset   u32  from the start of the file; 0 is empty
+//!                  4  length   u32  bytes of the deflate stream
+//!                  8  checksum u32  CRC-32 of those bytes
+//!                 12  season   u8
+//!                 13  flags    u8   bit 0: a column here is stored as air
+//!                 14  reserved u16
+//!      payloads, each a raw deflate stream of edge*edge entries of
+//!      u16 blockId, i16 surfaceY, u8 temperature, u8 rainfall
 //! ```
 //!
+//! A chunk's slot is its position in the region — `dz * REGION_CHUNKS + dx` — so a
+//! record carries no coordinates and cannot disagree with where it is filed.
+//!
+//! Payloads are appended and never overwritten, so a file carries bytes nothing
+//! points at until the mod packs it down; a reader walks the directory and never
+//! the file. A slot whose bytes do not answer to the checksum beside them is read
+//! as a chunk the map does not hold, which is what a run that died mid-append
+//! leaves behind — and which the mod's own repair then fills in.
+//!
 //! Season is where the chunk sits in the year. It is per chunk rather than per
-//! column because seasons vary by latitude and not across thirty-two blocks.
+//! column because seasons vary by latitude and not across thirty-two blocks, and
+//! it lives in the directory so that a year turning costs sixteen bytes a chunk
+//! rather than a repacking of the map.
 //!
 //! Temperature and rainfall are the game's own packing of a column's climate, so
 //! the colour maps can be sampled with them unchanged. [`Column::celsius`] and
 //! [`Column::wetness`] read them back out for anyone who wants the numbers rather
 //! than the colour.
-//!
-//! Records are fixed size, so a region is one length check and a stride.
 
 use std::collections::HashMap;
 use std::io::Read;
@@ -34,13 +61,19 @@ use crate::error::{Error, Result};
 use crate::log::warn;
 
 const MAGIC: &[u8; 4] = b"MSQR";
-pub const VERSION: u16 = 4;
+pub const VERSION: u16 = 5;
 const ENTRY_BYTES: usize = 6;
 const HEADER_BYTES: usize = 20;
-const RECORD_HEADER_BYTES: usize = 10;
+const SLOT_BYTES: usize = 16;
 
 /// Chunks along a region's edge. One rendered tile at the finest level.
 pub const REGION_CHUNKS: i32 = 16;
+
+/// How many chunks a region holds, and so how many slots its directory has.
+const SLOTS: usize = (REGION_CHUNKS * REGION_CHUNKS) as usize;
+
+/// Where the first payload can start, which is past the directory.
+const PAYLOADS_FROM: usize = HEADER_BYTES + SLOTS * SLOT_BYTES;
 
 /// Which chunks a region holds.
 ///
@@ -101,21 +134,22 @@ pub struct Region {
 }
 
 impl Region {
-    /// Reads and decompresses one region.
+    /// Reads one region: its directory, and every chunk the directory still
+    /// points at.
+    ///
+    /// The whole file is read once and then walked by the directory, rather than
+    /// seeking per chunk. A region is a few hundred kilobytes and this happens
+    /// when one changes, so one read and a walk beats two hundred and fifty-six
+    /// seeks; what matters is that only the payloads something points at are
+    /// inflated, and the bytes left behind by an append are never touched.
     pub fn read(path: &Path) -> Result<Self> {
-        let file = std::fs::File::open(path)
+        let data = std::fs::read(path)
             .map_err(|source| Error::io(format!("reading {}", path.display()), source))?;
-
-        let mut data = Vec::new();
-        flate2::read::GzDecoder::new(file)
-            .read_to_end(&mut data)
-            .map_err(|source| Error::io(format!("decompressing {}", path.display()), source))?;
-
         Self::parse(&data, path)
     }
 
     fn parse(data: &[u8], path: &Path) -> Result<Self> {
-        if data.len() < HEADER_BYTES || &data[..4] != MAGIC {
+        if data.len() < PAYLOADS_FROM || &data[..4] != MAGIC {
             return Err(Error::parse(path, "not a Witchlight region"));
         }
 
@@ -137,34 +171,92 @@ impl Region {
 
         let region_x = i32::from_le_bytes([data[8], data[9], data[10], data[11]]);
         let region_z = i32::from_le_bytes([data[12], data[13], data[14], data[15]]);
+        let slots = u16::from_le_bytes([data[16], data[17]]) as usize;
+        if slots != SLOTS {
+            return Err(Error::parse(path, format!("a region of {slots} chunks, not {SLOTS}")));
+        }
 
-        let stride = RECORD_HEADER_BYTES + edge * edge * ENTRY_BYTES;
         let mut chunks = HashMap::new();
-        let mut at = HEADER_BYTES;
-
-        while at + stride <= data.len() {
-            let record = &data[at..at + stride];
-            let cx = i32::from_le_bytes([record[0], record[1], record[2], record[3]]);
-            let cz = i32::from_le_bytes([record[4], record[5], record[6], record[7]]);
-            let season = record[8];
-
-            let mut columns = Vec::with_capacity(edge * edge);
-            for index in 0..edge * edge {
-                let entry = &record[RECORD_HEADER_BYTES + index * ENTRY_BYTES..];
-                columns.push(Column {
-                    block: u16::from_le_bytes([entry[0], entry[1]]),
-                    height: i16::from_le_bytes([entry[2], entry[3]]),
-                    temperature: entry[4],
-                    rainfall: entry[5],
-                    season,
-                });
-            }
-
-            chunks.insert((cx, cz), Chunk { columns });
-            at += stride;
+        for slot in 0..SLOTS {
+            let Some(chunk) = Slot::at(data, slot).and_then(|held| held.columns(data, edge)) else {
+                continue;
+            };
+            chunks.insert(chunk_at(region_x, region_z, slot), chunk);
         }
 
         Ok(Self { at: (region_x, region_z), edge, chunks })
+    }
+}
+
+/// Which chunk one slot of a region belongs to. The mod files a chunk by its
+/// position in the square, so this and `Regions.ChunkAt` are one arithmetic.
+fn chunk_at(region_x: i32, region_z: i32, slot: usize) -> (i32, i32) {
+    let slot = slot as i32;
+    (region_x * REGION_CHUNKS + slot % REGION_CHUNKS, region_z * REGION_CHUNKS + slot / REGION_CHUNKS)
+}
+
+/// One entry of a region's directory: where a chunk's bytes are and what they
+/// should come to.
+#[derive(Debug, Clone, Copy)]
+struct Slot {
+    offset: usize,
+    length: usize,
+    checksum: u32,
+    season: u8,
+}
+
+impl Slot {
+    /// The entry for one slot, or nothing where the slot holds no chunk.
+    fn at(data: &[u8], slot: usize) -> Option<Self> {
+        let entry = &data[HEADER_BYTES + slot * SLOT_BYTES..];
+        let offset = u32::from_le_bytes([entry[0], entry[1], entry[2], entry[3]]) as usize;
+        let length = u32::from_le_bytes([entry[4], entry[5], entry[6], entry[7]]) as usize;
+        if offset < PAYLOADS_FROM || length == 0 || offset.checked_add(length)? > data.len() {
+            return None;
+        }
+
+        Some(Self {
+            offset,
+            length,
+            checksum: u32::from_le_bytes([entry[8], entry[9], entry[10], entry[11]]),
+            season: entry[12],
+        })
+    }
+
+    /// This slot's columns, or nothing where its bytes are not the ones the
+    /// directory was written about.
+    ///
+    /// A slot that fails its checksum is read as a chunk the map does not hold.
+    /// That is the honest answer — those bytes are a half-written payload from a
+    /// run that died before it could point at them — and it is the useful one,
+    /// because a chunk the map does not hold is one the mod's repair already
+    /// knows how to fetch again.
+    fn columns(self, data: &[u8], edge: usize) -> Option<Chunk> {
+        let packed = &data[self.offset..self.offset + self.length];
+        let mut crc = flate2::Crc::new();
+        crc.update(packed);
+        if crc.sum() != self.checksum {
+            return None;
+        }
+
+        let mut record = Vec::with_capacity(edge * edge * ENTRY_BYTES);
+        flate2::read::DeflateDecoder::new(packed).read_to_end(&mut record).ok()?;
+        if record.len() < edge * edge * ENTRY_BYTES {
+            return None;
+        }
+
+        let mut columns = Vec::with_capacity(edge * edge);
+        for index in 0..edge * edge {
+            let entry = &record[index * ENTRY_BYTES..];
+            columns.push(Column {
+                block: u16::from_le_bytes([entry[0], entry[1]]),
+                height: i16::from_le_bytes([entry[2], entry[3]]),
+                temperature: entry[4],
+                rainfall: entry[5],
+                season: self.season,
+            });
+        }
+        Some(Chunk { columns })
     }
 }
 
@@ -340,6 +432,111 @@ pub fn region_coords(path: &Path) -> Option<(i32, i32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write as _;
+
+    /// One region built the way the mod builds one, so that the two halves are
+    /// held to the same bytes by something other than two prose descriptions of
+    /// them agreeing.
+    ///
+    /// Takes the chunks to file and, for one of them, whether to spoil its
+    /// payload after the checksum was taken over the good bytes — which is what a
+    /// run that died part way through an append leaves behind.
+    fn filed(at: (i32, i32), edge: usize, chunks: &[(usize, u8, u16)], spoil: Option<usize>)
+    -> Vec<u8> {
+        let mut file = vec![0u8; PAYLOADS_FROM];
+        file[..4].copy_from_slice(MAGIC);
+        file[4..6].copy_from_slice(&VERSION.to_le_bytes());
+        file[6..8].copy_from_slice(&(edge as u16).to_le_bytes());
+        file[8..12].copy_from_slice(&at.0.to_le_bytes());
+        file[12..16].copy_from_slice(&at.1.to_le_bytes());
+        file[16..18].copy_from_slice(&(SLOTS as u16).to_le_bytes());
+
+        for &(slot, season, block) in chunks {
+            let mut record = Vec::with_capacity(edge * edge * ENTRY_BYTES);
+            for index in 0..edge * edge {
+                record.extend_from_slice(&block.to_le_bytes());
+                record.extend_from_slice(&(index as i16).to_le_bytes());
+                record.push(80);
+                record.push(90);
+            }
+
+            let mut packing =
+                flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::best());
+            packing.write_all(&record).expect("a deflate stream");
+            let mut packed = packing.finish().expect("a deflate stream");
+
+            let mut crc = flate2::Crc::new();
+            crc.update(&packed);
+            let checksum = crc.sum();
+            if spoil == Some(slot) {
+                packed[0] ^= 0xff;
+            }
+
+            let offset = file.len();
+            file.extend_from_slice(&packed);
+
+            let entry = HEADER_BYTES + slot * SLOT_BYTES;
+            file[entry..entry + 4].copy_from_slice(&(offset as u32).to_le_bytes());
+            file[entry + 4..entry + 8].copy_from_slice(&(packed.len() as u32).to_le_bytes());
+            file[entry + 8..entry + 12].copy_from_slice(&checksum.to_le_bytes());
+            file[entry + 12] = season;
+        }
+        file
+    }
+
+    /// The format, held to the shape both halves write and read it in.
+    #[test]
+    fn a_region_reads_back_as_the_chunks_that_were_filed_in_it() {
+        let path = Path::new("r.2.-3.msqr");
+        let held = filed((2, -3), 4, &[(0, 7, 11), (17, 9, 22), (255, 3, 33)], None);
+        let read = Region::parse(&held, path).expect("a region this build wrote");
+
+        assert_eq!(read.at, (2, -3));
+        assert_eq!(read.edge, 4);
+        assert_eq!(read.chunks.len(), 3, "one chunk per filled slot and no more");
+
+        // A slot is a position in the square, so where a chunk lands is arithmetic
+        // rather than something the record carries and could get wrong.
+        assert!(read.chunks.contains_key(&(32, -48)), "slot 0 is the region's corner");
+        assert!(read.chunks.contains_key(&(33, -47)), "slot 17 is one along and one down");
+        assert!(read.chunks.contains_key(&(47, -33)), "slot 255 is the far corner");
+
+        let corner = &read.chunks[&(32, -48)];
+        assert_eq!(corner.columns.len(), 16);
+        assert_eq!(corner.columns[0].block, 11);
+        assert_eq!(corner.columns[5].height, 5, "a column is where the record put it");
+        assert_eq!(corner.columns[0].season, 7, "the season comes off the directory");
+        assert_eq!(read.chunks[&(33, -47)].columns[0].season, 9);
+    }
+
+    /// A half-written payload is a chunk the map does not hold, not a chunk of
+    /// nonsense. The mod's repair fills one in; a panic here would lose the map.
+    #[test]
+    fn a_chunk_that_does_not_answer_to_its_checksum_is_read_as_one_that_is_not_there() {
+        let path = Path::new("r.0.0.msqr");
+        let held = filed((0, 0), 4, &[(0, 1, 11), (1, 1, 22)], Some(1));
+        let read = Region::parse(&held, path).expect("a region with one bad slot in it");
+
+        assert_eq!(read.chunks.len(), 1, "the good chunk is still read");
+        assert!(read.chunks.contains_key(&(0, 0)));
+        assert!(!read.chunks.contains_key(&(1, 0)), "and the spoiled one is simply absent");
+    }
+
+    /// The map on disk outlives builds of this program, and a format it cannot
+    /// read has to say so rather than be read as whatever it happens to parse as.
+    #[test]
+    fn a_region_from_another_format_is_refused_rather_than_guessed_at() {
+        let path = Path::new("r.0.0.msqr");
+        let mut older = filed((0, 0), 4, &[(0, 1, 11)], None);
+        older[4..6].copy_from_slice(&4u16.to_le_bytes());
+        assert!(Region::parse(&older, path).is_err(), "version 4 is not this format");
+
+        let mut nonsense = filed((0, 0), 4, &[(0, 1, 11)], None);
+        nonsense[..4].copy_from_slice(b"XXXX");
+        assert!(Region::parse(&nonsense, path).is_err(), "and neither is anything else");
+
+        assert!(Region::parse(&[0u8; 8], path).is_err(), "nor a file shorter than a directory");
+    }
 
     fn column(temperature: u8, rainfall: u8) -> Column {
         Column { block: 0, height: 0, temperature, rainfall, season: 0 }
