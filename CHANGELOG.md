@@ -9,6 +9,22 @@ which is where that rule is kept rather than in anybody's memory.
 A version that moved for the other half says so and lists nothing, which is not an
 omission: it is what "one release" looks like from the side that did not change.
 
+## 0.44.0
+
+**Deploy note:** both halves, upgraded together; nothing is cleared. A level
+tile that was in memory when the service stopped is built again on the next
+start, which the start already did for a region that changed after its tiles.
+
+**Level tiles are written later, not on every beat.** The zoom levels above
+the finest are pictures derived from the ground, rebuilt every two seconds
+while chunks arrive under them — and until now written to disk every time,
+which over a five-minute walk was 350 megabytes for six files. The builder now
+hands a tile to `levels.rs`, which serves it and builds the next level from it
+at once and writes it only once it has been quiet for thirty seconds or
+waiting five minutes, whichever comes first. What a browser sees is unchanged;
+what the disk sees is one write per quiet spell. The palette stamp beside the
+tiles is written only when the palette changed, rather than every beat.
+
 ## 0.43.0
 
 **Deploy note:** both halves, upgraded together; nothing is cleared. The map

@@ -236,11 +236,21 @@ pub fn reset_unless_built_from(exports: &Path, version: u16) -> bool {
 /// more than one. Nearest neighbour on the way back down, because the pixels this
 /// enlarges are already averages and smoothing them again only invents detail
 /// that was never there.
+///
+/// `read` answers for a tile at a level, wherever it is held — see
+/// [`crate::levels`], which is where that is decided.
 #[must_use]
-pub fn from_above(exports: &Path, level: u32, x: i32, z: i32, size: u32, ceiling: u32) -> Option<RgbImage> {
+pub fn from_above(
+    read: impl Fn(u32, i32, i32) -> Option<RgbImage>,
+    level: u32,
+    x: i32,
+    z: i32,
+    size: u32,
+    ceiling: u32,
+) -> Option<RgbImage> {
     for up in 1..=ceiling.saturating_sub(level) {
         let (ax, az) = ancestor(up, x, z);
-        let Some(above) = read(exports, level + up, ax, az) else {
+        let Some(above) = read(level + up, ax, az) else {
             continue;
         };
 
@@ -283,9 +293,11 @@ pub fn palette_built_from(exports: &Path) -> Option<String> {
         .filter(|found| !found.is_empty())
 }
 
-/// Records which palette the levels have now been drawn with.
+/// Records which palette the levels have now been drawn with — when that is
+/// not already what the file says, since it is asked on every build beat and
+/// the answer changes once per palette.
 pub fn record_palette(exports: &Path, fingerprint: &str) {
-    if fingerprint.is_empty() {
+    if fingerprint.is_empty() || palette_built_from(exports).as_deref() == Some(fingerprint) {
         return;
     }
     let _ = files::replace(&painted_by(exports), fingerprint.as_bytes());
@@ -361,7 +373,7 @@ mod tests {
     #[test]
     fn a_tile_with_no_level_above_it_cannot_be_grown() {
         let at = Scratch::new("pyramid-nothing-above");
-        assert!(from_above(at.at(), 0, 5, 5, 8, 3).is_none());
+        assert!(from_above(|l, x, z| read(at.at(), l, x, z), 0, 5, 5, 8, 3).is_none());
     }
 
     #[test]
@@ -371,7 +383,7 @@ mod tests {
 
         // Level 1 tile (3, 3) covers level 0 tiles (6, 7) in both axes.
         for (x, z, want) in [(6, 6, 0u8), (7, 6, 1), (6, 7, 2), (7, 7, 3)] {
-            let grown = from_above(at.at(), 0, x, z, 8, 3).expect("the parent serves");
+            let grown = from_above(|l, x, z| read(at.at(), l, x, z), 0, x, z, 8, 3).expect("the parent serves");
             assert_eq!(grown.dimensions(), (8, 8));
             assert!(
                 grown.pixels().all(|pixel| pixel.0[0] == want),
@@ -391,7 +403,7 @@ mod tests {
         // Level 2 tile (1, 1) covers level 0 tiles (4..=7); (5, 6) is one across
         // and two down inside it, so the 2x2 patch at (2, 4), each pixel grown
         // fourfold.
-        let grown = from_above(at.at(), 0, 5, 6, 8, 3).expect("the grandparent serves");
+        let grown = from_above(|l, x, z| read(at.at(), l, x, z), 0, 5, 6, 8, 3).expect("the grandparent serves");
         assert_eq!(grown.get_pixel(0, 0).0[0], grandparent.get_pixel(2, 4).0[0]);
         assert_eq!(grown.get_pixel(7, 7).0[0], grandparent.get_pixel(3, 5).0[0]);
     }
@@ -405,7 +417,7 @@ mod tests {
 
         // Level 1 tile (-1, -1) covers level 0 tiles (-2, -1) in both axes.
         for (x, z, want) in [(-2, -2, 0u8), (-1, -2, 1), (-2, -1, 2), (-1, -1, 3)] {
-            let grown = from_above(at.at(), 0, x, z, 8, 3).expect("the parent serves");
+            let grown = from_above(|l, x, z| read(at.at(), l, x, z), 0, x, z, 8, 3).expect("the parent serves");
             assert_eq!(grown.get_pixel(0, 0).0[0], want, "level 0 ({x}, {z})");
         }
     }

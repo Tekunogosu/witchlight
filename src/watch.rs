@@ -40,12 +40,17 @@ const BUILD_EVERY: Duration = Duration::from_secs(2);
 /// something anybody watching a map fill in can see.
 const ANNOUNCE_EVERY: Duration = Duration::from_secs(1);
 
+/// How often the level tiles waiting in memory are offered to the disk. Which
+/// of them go is decided in `levels.rs`; this only asks.
+const FLUSH_EVERY: Duration = Duration::from_secs(5);
+
 /// Starts the background clocks: one that reads what changed, one that tells
-/// browsers, one that redraws the levels above.
+/// browsers, one that redraws the levels above, one that writes them down.
 pub fn start(state: &Arc<State>) {
     every(WATCH_EVERY, Arc::clone(state), State::refresh);
     every(ANNOUNCE_EVERY, Arc::clone(state), State::announce);
     every(BUILD_EVERY, Arc::clone(state), State::build_levels);
+    every(FLUSH_EVERY, Arc::clone(state), State::flush_levels);
 }
 
 fn every(period: Duration, state: Arc<State>, work: fn(&State)) {

@@ -19,6 +19,7 @@ mod feeds;
 mod files;
 mod http;
 mod live;
+mod levels;
 mod log;
 mod memory;
 mod net;

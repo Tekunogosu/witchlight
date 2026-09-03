@@ -25,6 +25,7 @@ use crate::events::Events;
 use crate::config::Rules;
 use crate::error::{Error, Result};
 use crate::files;
+use crate::levels::Levels;
 use crate::live::Live;
 use crate::memory::Memory;
 use crate::palette::Palette;
@@ -46,6 +47,8 @@ const HISTORY: usize = 128;
 
 pub struct State {
     pub data: PathBuf,
+    /// The zoom levels above the finest, in memory and on disk.
+    pub levels: Levels,
     /// The map on disk: every chunk, every remembered version, and what each
     /// person has seen. What `world` holds is this, read at start.
     pub store: Arc<Store>,
@@ -173,6 +176,7 @@ impl State {
             events: Events::default(),
             sea_level: std::sync::atomic::AtomicI32::new(crate::facts::read(data).sea_level),
             data: data.to_path_buf(),
+            levels: Levels::new(data),
         })
     }
 
@@ -440,7 +444,7 @@ impl State {
             }
         }
 
-        let grown = pyramid::from_above(&self.data, 0, tx, tz, TILE, self.levels()).ok_or_else(
+        let grown = self.levels.from_above(0, tx, tz, TILE, self.levels()).ok_or_else(
             || Error::Empty("the palette has no colours and no level above has this ground".to_owned()),
         )?;
         pyramid::encode(&grown)
@@ -450,17 +454,10 @@ impl State {
     ///
     /// Never made on demand: a coarse tile is four of the level below, so making
     /// one here would make every tile beneath it — a thousand renders for a level
-    /// five, while somebody waits.
-    ///
-    /// Served as the bytes on disk. The builder encoded the tile when it wrote
-    /// it, and decoding a picture only to encode the same picture again was,
-    /// for a while, most of what a request cost.
-    fn stored(&self, (level, tx, tz): At) -> Result<Vec<u8>> {
-        let path = pyramid::path(&self.data, level, tx, tz);
-        std::fs::read(&path).map_err(|error| match error.kind() {
-            std::io::ErrorKind::NotFound => Error::Empty(format!("level {level} tile ({tx}, {tz}) is not built yet")),
-            _ => Error::io(format!("reading {}", path.display()), error),
-        })
+    /// five, while somebody waits. Wherever the builder's picture is held right
+    /// now is [`Levels`]' business.
+    fn stored(&self, at: At) -> Result<Vec<u8>> {
+        self.levels.bytes(at)
     }
 
     /// One level 0 tile as an image, or nothing where the world has no chunks.
@@ -494,7 +491,7 @@ impl State {
         // else marks every region stale. The whole pyramid is measured against the
         // world whenever it is shorter than the world needs, which is once per
         // doubling and never in the steady state.
-        if pyramid::levels_built(&self.data) < levels
+        if self.levels.built() < levels
             && let Ok(regions) = self.regions.lock()
         {
             let behind = pyramid::behind(&self.data, &regions, levels);
@@ -510,6 +507,7 @@ impl State {
         // The level 0 tiles were announced when the ground arrived; what is
         // announced here is only the levels this built.
         let mut repainted: Vec<At> = Vec::new();
+        let now = SystemTime::now();
 
         for level in 1..=levels {
             let parents: HashSet<(i32, i32)> =
@@ -520,7 +518,7 @@ impl State {
                     if level == 1 {
                         self.level_zero(cx, cz, &mapped)
                     } else {
-                        pyramid::read(&self.data, level - 1, cx, cz)
+                        self.levels.image((level - 1, cx, cz))
                     }
                 });
 
@@ -529,9 +527,7 @@ impl State {
                 }
 
                 let parent = pyramid::downsample(&below, TILE, UNMAPPED);
-                if let Err(error) = pyramid::write(&self.data, level, px, pz, &parent) {
-                    warn!("{error}");
-                }
+                self.levels.put((level, px, pz), parent, now);
                 repainted.push((level, px, pz));
             }
 
@@ -546,6 +542,15 @@ impl State {
 
         let generation = self.bump(Some(repainted.clone()));
         say!("{} tiles rebuilt across {levels} levels (generation {generation})", repainted.len());
+    }
+
+    /// Writes the level tiles that have waited long enough — see
+    /// [`Levels::flush`] for what long enough is.
+    pub fn flush_levels(&self) {
+        let written = self.levels.flush(SystemTime::now());
+        if written > 0 {
+            say!("{written} level tiles written, {} still waiting", self.levels.waiting());
+        }
     }
 
     /// The level 0 tiles waiting to have their levels rebuilt, and none left
