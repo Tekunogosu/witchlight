@@ -147,29 +147,47 @@ pub fn read(exports: &Path, level: u32, x: i32, z: i32) -> Option<RgbImage> {
 /// Writes a tile, beside itself and then into place so a reader never sees half.
 pub fn write(exports: &Path, level: u32, x: i32, z: i32, image: &RgbImage) -> Result<()> {
     let target = path(exports, level, x, z);
-    files::replace(&target, &encode(image)?)
+    files::replace(&target, &encode_for_disk(image)?)
         .map_err(|error| Error::io(format!("writing {}", target.display()), error))
 }
 
-/// Encodes one tile, losslessly, without filtering and at the fastest level.
+/// Encodes one tile for the wire: losslessly, and above all quickly.
 ///
-/// PNG normally predicts each pixel from its neighbours and stores the
-/// difference, which is a large win on smooth images and none on this one: a
-/// tile is one block per pixel, each block its own shade under its own slope,
-/// so the differences are as noisy as the values. Measured on shaded terrain,
-/// a tile is about seventy percent of its raw size whatever is chosen: the
-/// best filter recovers six percent, and the slowest deflate level recovers
-/// under three percent over the fastest for twice the time. Level 0 is drawn
-/// and encoded on demand, so the time is the whole cost and the bytes are not
-/// worth it.
+/// A tile is encoded far more often than it is made. Under a private map every
+/// reader is served their own composition of it, and a tile over ground that
+/// is filling in is composed again for each of them on every beat — so what an
+/// encode costs is paid a dozen times a second on a busy server, and the
+/// encoder's default level, at twenty-odd milliseconds a tile, was most of
+/// what the service did. The fastest level is twenty times quicker and a third
+/// larger, and needs the filter on: without one it stores shaded terrain as
+/// good as raw, since this crate's fast path only finds what a filter leaves.
+/// Measured on a mapped tile: 371 KB in 24 ms at the default level unfiltered,
+/// 487 KB in 1.6 ms fast and adaptively filtered, 768 KB fast and unfiltered.
 ///
 /// Nothing here can discard colour. A tile is continuous tone — slope shading
 /// over climate tinting gives thousands of shades to a square of terrain — so an
 /// indexed format would have to throw some away, and the ones it would throw away
-/// are the rare ones: ore, water edges, anything small.
+/// are the rare ones: ore, water edges, anything small. A reader who would
+/// rather have the bytes than the ore asks for [`TileFormat::Jpeg`].
 pub fn encode(image: &RgbImage) -> Result<Vec<u8>> {
+    encode_png(image, CompressionType::Fast, FilterType::Adaptive)
+}
+
+/// Encodes one tile for the disk: as small as the lossless encoder makes it.
+///
+/// A file is written once per quiet spell and read many times, so the time is
+/// worth spending here and nowhere else — and the exact picture of a stored
+/// level is served as the file's own bytes, so the bytes saved here are bytes
+/// saved on the wire for every reader of the whole map. Unfiltered, which on
+/// this data is what the deflate levels do best with. The encoder stamp names
+/// this, so a change here rebuilds the levels.
+pub fn encode_for_disk(image: &RgbImage) -> Result<Vec<u8>> {
+    encode_png(image, CompressionType::Default, FilterType::NoFilter)
+}
+
+fn encode_png(image: &RgbImage, level: CompressionType, filter: FilterType) -> Result<Vec<u8>> {
     let mut encoded = Vec::new();
-    PngEncoder::new_with_quality(&mut encoded, CompressionType::Fast, FilterType::NoFilter)
+    PngEncoder::new_with_quality(&mut encoded, level, filter)
         .write_image(
             image.as_raw(),
             image.width(),
@@ -178,6 +196,63 @@ pub fn encode(image: &RgbImage) -> Result<Vec<u8>> {
         )
         .map_err(|error| Error::io("encoding a tile", std::io::Error::other(error.to_string())))?;
     Ok(encoded)
+}
+
+/// How a tile is encoded for one reader.
+///
+/// PNG is exact: every block keeps its own colour, which is what a map for
+/// finding a single ore pixel needs. Shaded terrain is noise to a lossless
+/// encoder, though — a tile is tens to hundreds of kilobytes however hard it
+/// is squeezed — and a lossy encoder makes the same picture in a fifth of the
+/// bytes at the cost of blurring lone blocks. Which of the two is worth it is
+/// the reader's own call, made in their settings, since it is their
+/// connection and their eyes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TileFormat {
+    #[default]
+    Png,
+    Jpeg,
+}
+
+/// What a lossy tile is encoded at. High enough that terrain reads as it
+/// does in PNG at a glance; the blur is in single blocks and hard edges.
+const JPEG_QUALITY: u8 = 85;
+
+impl TileFormat {
+    /// What the bytes say they are, for the response.
+    #[must_use]
+    pub fn mime(self) -> &'static str {
+        match self {
+            Self::Png => "image/png",
+            Self::Jpeg => "image/jpeg",
+        }
+    }
+
+    /// The word a page writes into a tile's address so a change of format is
+    /// a change of address.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Png => "png",
+            Self::Jpeg => "jpeg",
+        }
+    }
+}
+
+/// Encodes one tile the way a reader asked for it — [`encode`] for PNG, and
+/// lossy for the rest.
+pub fn encode_as(image: &RgbImage, format: TileFormat) -> Result<Vec<u8>> {
+    match format {
+        TileFormat::Png => encode(image),
+        TileFormat::Jpeg => {
+            let mut encoded = Vec::new();
+            image::codecs::jpeg::JpegEncoder::new_with_quality(&mut encoded, JPEG_QUALITY)
+                .write_image(image.as_raw(), image.width(), image.height(), ExtendedColorType::Rgb8)
+                .map_err(|error| Error::io("encoding a tile", std::io::Error::other(error.to_string())))?;
+            Ok(encoded)
+        }
+    }
 }
 
 /// What the levels on disk were built from.
@@ -213,7 +288,7 @@ pub fn reset_unless_built_from(exports: &Path, version: u16) -> bool {
     // The tile encoding is in here too: levels written by a different encoder are
     // still readable, but they are not the size this build would have made them,
     // and nothing else would notice the difference.
-    let want = format!("{version}/png-nofilter/paint{PAINT}");
+    let want = format!("{version}/png-nofilter-deflate/paint{PAINT}");
     if std::fs::read_to_string(stamp(exports)).is_ok_and(|found| found.trim() == want) {
         return false;
     }

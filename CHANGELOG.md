@@ -9,6 +9,75 @@ which is where that rule is kept rather than in anybody's memory.
 A version that moved for the other half says so and lists nothing, which is not an
 omission: it is what "one release" looks like from the side that did not change.
 
+## 0.45.2
+
+**Deploy note:** both halves, upgraded together; nothing is cleared or rebuilt.
+
+**A reader's tile costs a tenth of what it did.** The service's own log on
+0.45.1 showed seven hundred tiles a minute going out with two players on, nine
+in ten of them drawn rather than served from cache — and a coarse tile drawn
+for one person cost up to fifty milliseconds. Two things made it so, both
+fixed: the memory was asked about every chunk in the tile one at a time,
+under a lock each, and is now asked once per region; and every chunk the
+reader remembers differently was read from the database and rendered again on
+every request, through a thread pool that costs more to hand thirty rows to
+than the rows are worth. Patches are now rendered once and kept, by chunk,
+version and season, and a picture smaller than a tile is drawn on the thread
+that asked. Measured on a real map: a level 5 tile for a reader with a hundred
+remembered chunks went from 45 ms to 3 ms.
+
+## 0.45.1
+
+**Deploy note:** both halves, upgraded together; nothing is cleared or rebuilt.
+
+**Tiles are encoded for the wire twenty times faster.** 0.45.0 encoded every
+tile at the PNG encoder's default level, twenty-odd milliseconds each, and
+under a private map a tile over ground filling in is encoded once shared and
+once more per reader on every beat — which with two people exploring was a
+whole core. On-demand encodes now use the fastest level with adaptive
+filtering, 1.6 ms and a third larger; the files on disk keep the smallest
+form, written once per quiet spell, and the exact whole-map tile is still
+served as the file's own bytes. **The log says once a minute** how many tiles
+went out and how many of them had to be drawn or encoded.
+
+## 0.45.0
+
+**Deploy note:** both halves, upgraded together; nothing is cleared. **The
+stored zoom levels are rebuilt once** on the first start, because 0.43.0's
+encoder wrote them as good as uncompressed; the map is served from memory
+meanwhile and the rebuild is the same one a palette change already costs.
+
+**A tile's address changes only when that tile does.** The page versioned every
+tile by the map's one generation, so on a busy server a tile panned back to a
+moment later was fetched again unchanged. Each tile is now versioned by the
+generation it last changed at, which the service already reports, and a tile
+that has not changed is answered by the browser's own cache with no request.
+
+**Changes are remembered for ten minutes, not 128 generations.** A tab in the
+background for a minute on a server with forty people exploring came back to a
+full repaint; it now comes back to the tiles that moved.
+
+**Each person's discoveries are announced on the one-second beat** with
+everything else, one generation for the lot, rather than one generation per
+person every two seconds.
+
+**Compact tiles, per person.** The account window has a new choice under *Map
+pictures*: exact, which is PNG and every block its own colour, or compact,
+which is JPEG at about a fifth of the bytes and may blur a lone block such as
+an ore. Kept with the rest of that person's settings as `TileFormat`, read by
+the service from the session, and served under its own cache key. Pulls in
+`zune-jpeg` and `zune-core`, the `image` crate's own JPEG decoder, through a
+feature of a dependency already in the tree.
+
+**The sharing boxes are always shown** under a private map to somebody signed
+in. A player in no group is told so, and how to make one in the game chat, and
+a group joined while the page is open shows its box within fifteen seconds.
+
+**Correction to 0.43.0:** the "fastest deflate level" was not within three
+percent of the slowest in this encoder — it stored tiles at three quarters of a
+megabyte each. The encoder's default level makes the same tile a sixteenth of
+that in three milliseconds more, and is what is used now.
+
 ## 0.44.0
 
 **Deploy note:** both halves, upgraded together; nothing is cleared. A level

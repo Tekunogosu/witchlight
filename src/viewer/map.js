@@ -14,7 +14,7 @@
 const Terrain = L.TileLayer.extend({
   getTileUrl(coords) {
     const level = levelFor(coords.z, this.options.maxNativeZoom);
-    return `/tiles/${level}/${coords.x}/${coords.y}.png?v=${generation}`;
+    return tileUrl(level, coords.x, coords.y);
   },
 
   /**
@@ -49,7 +49,7 @@ const Terrain = L.TileLayer.extend({
       }, { once: true });
       tile.src = next.src;
     };
-    next.src = `/tiles/${level}/${x}/${z}.png?v=${generation}`;
+    next.src = tileUrl(level, x, z);
   },
 
   /**
@@ -88,6 +88,57 @@ const Terrain = L.TileLayer.extend({
     }
   },
 });
+
+/**
+ * The address of one tile, versioned by that tile's own last change.
+ *
+ * A tile's bytes are cached by the browser for as long as its address stands,
+ * so the address must change exactly when the picture does. Versioning every
+ * address by the map's one generation changed all of them whenever anything
+ * anywhere moved — and on a server with forty people exploring that is several
+ * times a second, so a tile panned back to a moment later was fetched again
+ * unchanged. A tile is versioned instead by the generation it last changed at,
+ * as the service reported it, or by `epoch` — the generation this page last
+ * drew everything at — where it has not changed since.
+ *
+ * `changedAt` holds one entry per tile the service has named since the epoch;
+ * an entry is a few bytes, and past a ceiling the epoch moves on and the map
+ * empties, which costs one refetch of the screen rather than a page that grows.
+ */
+function tileUrl(level, x, z) {
+  const version = Math.max(epoch, changedAt.get(tileName(level, x, z)) || 0);
+  // The encoding rides the address only so that a change of it is a change of
+  // address; the service reads it from the session, never from here.
+  return `/tiles/${level}/${x}/${z}.png?v=${version}&f=${tileFormat()}`;
+}
+
+/** The name a tile's last change is filed under. */
+function tileName(level, x, z) {
+  return `${level}/${x}/${z}`;
+}
+
+/** The generation the page last drew everything at; see `tileUrl`. */
+let epoch = 0;
+
+/** Which tiles changed since the epoch, and at which generation. */
+const changedAt = new Map();
+
+/** Past this many remembered changes the epoch moves on instead. */
+const MOST_CHANGES_KEPT = 20000;
+
+/**
+ * Takes what the service said moved at generation `reached`: which tiles, or that
+ * everything did. Called before the tiles are refetched, since it decides
+ * which address they are refetched at.
+ */
+function noteChanges(reached, tiles) {
+  if (!tiles || changedAt.size + tiles.length > MOST_CHANGES_KEPT) {
+    epoch = reached;
+    changedAt.clear();
+    return;
+  }
+  for (const [level, x, z] of tiles) changedAt.set(tileName(level, x, z), reached);
+}
 
 /**
  * How long Leaflet takes to fade a tile in, in milliseconds.

@@ -359,10 +359,15 @@
        standing wants that wherever they open it. -->
   <label class="line"><input id="want-follow" type="checkbox">Follow my player when I sign in</label>
   <p id="want-said" class="note"></p>
+  <!-- How the tiles reach this person. Exact is what a map for finding one
+       block wants; compact is a fifth of the bytes for everybody else. -->
+  <h3>Map pictures</h3>
+  <label class="line"><input type="radio" name="want-format" value="png">Exact: every block keeps its own colour</label>
+  <label class="line"><input type="radio" name="want-format" value="jpeg">Compact: about a fifth of the data, and a lone block such as an ore may blur</label>
   <!-- Whose map yours is. Under a private map what you have explored is yours
        alone until you hand it to a group, one box per group the game has you
-       in. Drawn from what the service says about who is looking, so a player
-       in no group sees no boxes rather than an empty heading. -->
+       in. Drawn from what the service says about who is looking; a player in
+       no group is told how to be in one. -->
   <div id="share-map" hidden>
     <h3>Share my map with</h3>
     <div id="share-groups"></div>

@@ -25,19 +25,17 @@
 //! Everything here is keyed by uid and changes on two beats: the position report
 //! every couple of seconds, which discovers; and terrain arriving, which
 //! diverges. A change to one person's memory is announced under the map's own
-//! generation clock — see [`crate::state::State::bump`] — so a browser polling
-//! with `since` learns which tiles its own view changed in, and nobody else's.
+//! generation clock, on the same beat as everything else — see
+//! [`crate::state::State::announce`], which files it here with [`Memory::record`]
+//! — so a browser polling with `since` learns which tiles its own view changed
+//! in, and nobody else's.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
+use crate::history::History;
 use crate::log::warn;
 use crate::store::{self, BITSET_BYTES, Divergence, Store, Stored, Version};
-
-/// How many generations of one person's changes to remember, for the same
-/// reason [`crate::state`] keeps its own: a viewer further behind than this is
-/// told to repaint everything rather than lied to.
-const HISTORY: usize = 128;
 
 /// One player group, as the mod says it: what it is called and who is in it,
 /// online or not.
@@ -45,6 +43,16 @@ const HISTORY: usize = 128;
 pub struct Group {
     pub name: String,
     pub members: HashSet<String>,
+}
+
+/// One region as a view remembers it — see [`Memory::shown_in`].
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RegionMemory {
+    /// Which chunks are discovered, or nothing where no source has been near.
+    pub discovered: Option<[u8; BITSET_BYTES]>,
+    /// The discovered chunks shown as a remembered version rather than as they
+    /// are; every other discovered chunk is current.
+    pub remembered: HashMap<(i32, i32), Version>,
 }
 
 /// Whose memory a reader is shown: their own, plus everyone who shares with a
@@ -76,7 +84,7 @@ struct Inner {
     /// Which groups each person shares their memory with.
     shares: HashMap<String, HashSet<i32>>,
     /// Which regions each person's memory changed in, by generation.
-    history: HashMap<String, VecDeque<(u64, Vec<(i32, i32)>)>>,
+    history: HashMap<String, History<Vec<(i32, i32)>>>,
 }
 
 pub struct Memory {
@@ -118,10 +126,9 @@ impl Memory {
     /// discovered, and any divergence for one is cleared: they are looking at
     /// it, so what they remember is what is there.
     ///
-    /// `next` moves the map's clock and says where it landed; it is asked only
-    /// where something changed, so the clock never moves for nothing. Answers
-    /// which regions this person's memory changed in, or nothing.
-    pub fn saw(&self, uid: &str, sight: &[(i32, i32)], next: impl FnOnce() -> u64) -> Option<Vec<(i32, i32)>> {
+    /// Answers which regions this person's memory changed in, or nothing. The
+    /// caller announces it — see [`record`](Self::record).
+    pub fn saw(&self, uid: &str, sight: &[(i32, i32)]) -> Option<Vec<(i32, i32)>> {
         if uid.is_empty() {
             return None;
         }
@@ -169,17 +176,15 @@ impl Memory {
 
         let mut regions: Vec<(i32, i32)> = regions_changed.into_iter().collect();
         regions.sort_unstable();
-        Self::record(&mut inner, uid, next(), regions.clone());
         Some(regions)
     }
 
     /// Takes chunks that just changed. Everybody who has discovered one and is
     /// not looking at it keeps the version they last saw.
     ///
-    /// `next` moves the map's clock, once, where anybody's memory changed.
-    /// Answers whose did and in which regions, so the caller can say so to
-    /// each of them.
-    pub fn changed(&self, stored: &[Stored], next: impl FnOnce() -> u64) -> Vec<(String, Vec<(i32, i32)>)> {
+    /// Answers whose memory changed and in which regions, so the caller can
+    /// say so to each of them.
+    pub fn changed(&self, stored: &[Stored]) -> Vec<(String, Vec<(i32, i32)>)> {
         let mut inner = self.lock();
         let mut diverged: Vec<Divergence> = Vec::new();
         let mut by_uid: HashMap<String, HashSet<(i32, i32)>> = HashMap::new();
@@ -214,23 +219,21 @@ impl Memory {
             warn!("could not record {} divergences: {error}", diverged.len());
         }
 
-        let generation = next();
         let mut whose = Vec::with_capacity(by_uid.len());
         for (uid, regions) in by_uid {
             let mut regions: Vec<(i32, i32)> = regions.into_iter().collect();
             regions.sort_unstable();
-            Self::record(&mut inner, &uid, generation, regions.clone());
             whose.push((uid, regions));
         }
         whose
     }
 
-    fn record(inner: &mut Inner, uid: &str, generation: u64, regions: Vec<(i32, i32)>) {
-        let history = inner.history.entry(uid.to_owned()).or_default();
-        history.push_back((generation, regions));
-        while history.len() > HISTORY {
-            history.pop_front();
-        }
+    /// Files that one person's memory changed in these regions at
+    /// `generation`, which is what [`changes_since`](Self::changes_since)
+    /// answers from. Called by whoever turned the clock.
+    pub fn record(&self, uid: &str, generation: u64, regions: Vec<(i32, i32)>) {
+        let mut inner = self.lock();
+        inner.history.entry(uid.to_owned()).or_default().record(generation, regions, std::time::Instant::now());
     }
 
     /// Takes the groups as the mod says them.
@@ -312,35 +315,68 @@ impl Memory {
     }
 
     /// Which version of a chunk a view is shown, or nothing where it is shown
-    /// the chunk as it is: any source that has discovered it and remembers no
-    /// other version has seen it as it is now, and that is the newest memory
-    /// there is. Among remembered versions the newest wins — a version is a
-    /// row, and rows are numbered in the order they were made.
+    /// the chunk as it is — one chunk of what [`shown_in`](Self::shown_in)
+    /// answers for a region, and read from that so there is one reading of it.
     ///
     /// A chunk no source has discovered is also nothing here: it is not drawn
     /// at all, which [`discovered_in`](Self::discovered_in) decides.
-    #[must_use]
+    #[cfg(test)]
     pub fn remembered(&self, view: &View, chunk: (i32, i32)) -> Option<Version> {
-        let inner = self.lock();
-        let region = store::region_of(chunk.0, chunk.1);
-        let slot = store::slot_of(chunk.0, chunk.1);
+        self.shown_in(view, store::region_of(chunk.0, chunk.1)).remembered.get(&chunk).copied()
+    }
 
-        let mut newest: Option<Version> = None;
+    /// What one whole region is to a view, in one reading: which of its chunks
+    /// are discovered, and for each of those which version is shown, as
+    /// [`remembered`](Self::remembered) would answer chunk by chunk. One lock
+    /// for the region rather than one per chunk — a tile at the coarsest level
+    /// holds tens of thousands of chunks, and asking about each in turn was
+    /// most of what drawing one cost.
+    #[must_use]
+    pub fn shown_in(&self, view: &View, region: (i32, i32)) -> RegionMemory {
+        let inner = self.lock();
+        let mut discovered: Option<[u8; BITSET_BYTES]> = None;
         for source in &view.sources {
-            let discovered = inner
-                .discovered
-                .get(source)
-                .and_then(|held| held.get(&region))
-                .is_some_and(|bits| store::bit(bits, slot));
-            if !discovered {
-                continue;
-            }
-            match inner.divergences.get(source).and_then(|held| held.get(&chunk)) {
-                None => return None,
-                Some(&version) => newest = Some(newest.map_or(version, |held| held.max(version))),
+            if let Some(bits) = inner.discovered.get(source).and_then(|held| held.get(&region)) {
+                let into = discovered.get_or_insert([0u8; BITSET_BYTES]);
+                for (byte, other) in into.iter_mut().zip(bits) {
+                    *byte |= other;
+                }
             }
         }
-        newest
+        let Some(discovered) = discovered else {
+            return RegionMemory::default();
+        };
+
+        let mut remembered = HashMap::new();
+        for chunk in crate::columns::chunks_of(region) {
+            let slot = store::slot_of(chunk.0, chunk.1);
+            if !store::bit(&discovered, slot) {
+                continue;
+            }
+            let mut newest: Option<Version> = None;
+            let mut current = false;
+            for source in &view.sources {
+                let seen = inner
+                    .discovered
+                    .get(source)
+                    .and_then(|held| held.get(&region))
+                    .is_some_and(|bits| store::bit(bits, slot));
+                if !seen {
+                    continue;
+                }
+                match inner.divergences.get(source).and_then(|held| held.get(&chunk)) {
+                    None => {
+                        current = true;
+                        break;
+                    }
+                    Some(&version) => newest = Some(newest.map_or(version, |held| held.max(version))),
+                }
+            }
+            if !current && let Some(version) = newest {
+                remembered.insert(chunk, version);
+            }
+        }
+        RegionMemory { discovered: Some(discovered), remembered }
     }
 
     /// Which regions a view's memory changed in since generation `since`, or
@@ -351,13 +387,7 @@ impl Memory {
         let mut regions = Vec::new();
         for source in &view.sources {
             let Some(history) = inner.history.get(source) else { continue };
-            if let Some((oldest, _)) = history.front()
-                && *oldest > since + 1
-                && history.len() >= HISTORY
-            {
-                return None;
-            }
-            for (_, changed) in history.iter().filter(|(at, _)| *at > since) {
+            for changed in history.since(since)? {
                 regions.extend(changed.iter().copied());
             }
         }
@@ -431,23 +461,23 @@ mod tests {
         let mut clock = 1;
 
         // Both at spawn: both discover it, and neither remembers anything else.
-        assert_eq!(memory.saw("ada", &[(0, 0)], || clock), Some(vec![(0, 0)]));
-        assert!(memory.saw("bob", &[(0, 0)], || clock).is_some());
-        assert!(memory.saw("ada", &[(0, 0)], || clock).is_none(), "seeing it again changes nothing");
+        assert_eq!(memory.saw("ada", &[(0, 0)]), Some(vec![(0, 0)]));
+        assert!(memory.saw("bob", &[(0, 0)]).is_some());
+        assert!(memory.saw("ada", &[(0, 0)]).is_none(), "seeing it again changes nothing");
         assert_eq!(memory.remembered(&only("ada"), (0, 0)), None, "Ada sees spawn as it is");
 
         // Ada goes west, Bob goes east.
         clock += 1;
-        memory.saw("ada", &[(-9, 0)], || clock);
-        memory.saw("bob", &[(9, 0)], || clock);
+        memory.saw("ada", &[(-9, 0)]);
+        memory.saw("bob", &[(9, 0)]);
 
         // Cass logs in at spawn and builds a house.
         clock += 1;
-        memory.saw("cass", &[(0, 0)], || clock);
+        memory.saw("cass", &[(0, 0)]);
         let built = build(&store, 22);
         assert_eq!(built.was, Some(first.now));
         clock += 1;
-        let mut whose: Vec<String> = memory.changed(&[built], || clock).into_iter().map(|(uid, _)| uid).collect();
+        let mut whose: Vec<String> = memory.changed(&[built]).into_iter().map(|(uid, _)| uid).collect();
         whose.sort();
         assert_eq!(whose, vec!["ada", "bob"], "the two who left keep what they saw; Cass is looking at it");
 
@@ -461,12 +491,13 @@ mod tests {
         // still remember the first spawn, not the second.
         let again = build(&store, 33);
         clock += 1;
-        assert!(memory.changed(&[again], || clock).is_empty(), "nobody's memory moves twice");
+        assert!(memory.changed(&[again]).is_empty(), "nobody's memory moves twice");
         assert_eq!(memory.remembered(&only("ada"), (0, 0)), Some(first.now));
 
         // Ada walks back. Her memory is reconciled; Bob's is not.
         clock += 1;
-        assert!(memory.saw("ada", &[(0, 0)], || clock).is_some());
+        let told = memory.saw("ada", &[(0, 0)]).expect("her memory moved");
+        memory.record("ada", clock, told);
         assert_eq!(memory.remembered(&only("ada"), (0, 0)), None, "Ada sees the house");
         assert_eq!(memory.remembered(&only("bob"), (0, 0)), Some(first.now), "Bob still does not");
         assert_eq!(memory.counts(), (3, 1));
@@ -480,8 +511,7 @@ mod tests {
         // Bob returns.
         memory.collect();
         assert_eq!(store.counts().unwrap().versions, 2);
-        clock += 1;
-        memory.saw("bob", &[(0, 0)], || clock);
+        memory.saw("bob", &[(0, 0)]);
         memory.collect();
         assert_eq!(store.counts().unwrap().versions, 1, "only the current spawn is left");
     }
@@ -489,10 +519,10 @@ mod tests {
     #[test]
     fn what_is_remembered_survives_a_restart() {
         let (store, memory, first) = spawn();
-        memory.saw("ada", &[(0, 0), (1, 0)], || 1);
-        memory.saw("ada", &[(40, 40)], || 2);
+        memory.saw("ada", &[(0, 0), (1, 0)]);
+        memory.saw("ada", &[(40, 40)]);
         let built = build(&store, 22);
-        memory.changed(&[built], || 3);
+        memory.changed(&[built]);
 
         let again = Memory::load(Arc::clone(&store));
         let view = only("ada");
@@ -508,9 +538,9 @@ mod tests {
     #[test]
     fn a_chunk_never_discovered_is_never_remembered() {
         let (store, memory, _) = spawn();
-        memory.saw("ada", &[(5, 5)], || 1);
+        memory.saw("ada", &[(5, 5)]);
         let built = build(&store, 22);
-        assert!(memory.changed(&[built], || 2).is_empty());
+        assert!(memory.changed(&[built]).is_empty());
         assert_eq!(memory.remembered(&only("ada"), (0, 0)), None);
         assert!(memory.discovered_in(&only("ada"), (0, 0)).is_none_or(|bits| !store::bit(&bits, 0)));
     }
@@ -525,7 +555,7 @@ mod tests {
         memory.set_groups(groups);
 
         // Bob has seen spawn and chunk (3, 3); Ada has seen nothing.
-        memory.saw("bob", &[(0, 0), (3, 3)], || 1);
+        memory.saw("bob", &[(0, 0), (3, 3)]);
         assert_eq!(memory.view(Some("ada")).sources, vec!["ada"], "nobody shares with Ada yet");
 
         memory.set_shares("bob", [7]);
@@ -540,21 +570,21 @@ mod tests {
 
         // Bob leaves, spawn changes: Bob remembers the old spawn, and so does
         // Ada through him.
-        memory.saw("bob", &[(30, 30)], || 2);
+        memory.saw("bob", &[(30, 30)]);
         let built = build(&store, 22);
-        memory.changed(&[built], || 3);
+        memory.changed(&[built]);
         assert_eq!(memory.remembered(&ada, (0, 0)), Some(first.now));
 
         // Ada walks to spawn herself: she has seen it as it is, and that beats
         // Bob's memory in her own view — and in nobody else's.
-        memory.saw("ada", &[(0, 0)], || 4);
+        memory.saw("ada", &[(0, 0)]);
         assert_eq!(memory.remembered(&ada, (0, 0)), None);
         assert_eq!(memory.remembered(&only("bob"), (0, 0)), Some(first.now));
 
         // Two remembered versions: the newer row wins.
         let second = build(&store, 33);
-        memory.saw("ada", &[(30, 30)], || 5);
-        memory.changed(&[second], || 6);
+        memory.saw("ada", &[(30, 30)]);
+        memory.changed(&[second]);
         assert_eq!(memory.remembered(&only("ada"), (0, 0)), Some(second.was.unwrap()));
         assert_eq!(memory.remembered(&ada, (0, 0)), Some(second.was.unwrap()), "Ada's own is the newer");
         assert!(second.was.unwrap() > first.now);

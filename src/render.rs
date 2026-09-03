@@ -221,19 +221,26 @@ impl<'a> Renderer<'a> {
     /// anyone has explored — stops being one core's problem.
     #[must_use]
     pub fn render(&self, origin_x: i32, origin_z: i32, size: u32) -> RgbImage {
+        /// The smallest square worth rendering across the thread pool.
+        const PARALLEL_FROM: u32 = 128;
+
         let width = size as usize * 3;
         let mut pixels = vec![0u8; width * size as usize];
 
-        pixels
-            .par_chunks_mut(width)
-            .enumerate()
-            .for_each(|(row, line)| {
-                let z = origin_z + row as i32;
-                for px in 0..size as usize {
-                    let color = self.pixel(origin_x + px as i32, z);
-                    line[px * 3..px * 3 + 3].copy_from_slice(&[color.r, color.g, color.b]);
-                }
-            });
+        let row = |(row, line): (usize, &mut [u8])| {
+            let z = origin_z + row as i32;
+            for px in 0..size as usize {
+                let color = self.pixel(origin_x + px as i32, z);
+                line[px * 3..px * 3 + 3].copy_from_slice(&[color.r, color.g, color.b]);
+            }
+        };
+        // A whole tile is worth spreading over the cores; a chunk-sized patch
+        // is not, since handing thirty rows to a pool costs more than the rows.
+        if size >= PARALLEL_FROM {
+            pixels.par_chunks_mut(width).enumerate().for_each(row);
+        } else {
+            pixels.chunks_mut(width).enumerate().for_each(row);
+        }
 
         RgbImage::from_raw(size, size, pixels)
             .expect("the buffer is three bytes for every pixel of a size by size image")

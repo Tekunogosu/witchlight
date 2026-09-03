@@ -27,11 +27,15 @@ use image::RgbImage;
 use crate::cache::At;
 use crate::columns::{Chunk, REGION_CHUNKS, World, chunks_of};
 use crate::error::{Error, Result};
-use crate::memory::View;
-use crate::pyramid::{self, TILE};
+use crate::memory::{RegionMemory, View};
+use crate::pyramid::{self, TILE, TileFormat};
 use crate::render::{Renderer, UNMAPPED};
 use crate::state::{Changed, State};
 use crate::store::{self, Version};
+
+/// How many rendered patches are kept — see `State::patches`. A patch is a
+/// chunk's worth of pixels, three kilobytes at the usual edge.
+const MOST_PATCHES: usize = 8192;
 
 /// The ground around spawn, in chunks each way, that is shown as it is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -89,6 +93,35 @@ impl Scope {
     }
 }
 
+/// What one region is to one reader, chunk by chunk — see [`State::shown_in`].
+enum RegionShown {
+    Whole,
+    Remembered { memory: RegionMemory, spawn: Option<Disc> },
+}
+
+impl RegionShown {
+    fn of(&self, chunk: (i32, i32)) -> Shown {
+        match self {
+            Self::Whole => Shown::Current,
+            Self::Remembered { memory, spawn } => {
+                if spawn.is_some_and(|disc| disc.holds(chunk)) {
+                    return Shown::Current;
+                }
+                let discovered = memory
+                    .discovered
+                    .is_some_and(|bits| store::bit(&bits, store::slot_of(chunk.0, chunk.1)));
+                if !discovered {
+                    return Shown::Hidden;
+                }
+                match memory.remembered.get(&chunk) {
+                    Some(&version) => Shown::Remembered(version),
+                    None => Shown::Current,
+                }
+            }
+        }
+    }
+}
+
 /// What one chunk is to one reader.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Shown {
@@ -123,24 +156,17 @@ impl State {
 
     /// What one chunk is to a scope.
     fn shown(&self, scope: &Scope, chunk: (i32, i32)) -> Shown {
+        self.shown_in(scope, store::region_of(chunk.0, chunk.1)).of(chunk)
+    }
+
+    /// What every chunk of one region is to a scope, answered in one reading
+    /// of the memory. A tile is drawn from these, one per region it holds,
+    /// rather than from a question per chunk.
+    fn shown_in(&self, scope: &Scope, region: (i32, i32)) -> RegionShown {
         match scope {
-            Scope::Whole => Shown::Current,
+            Scope::Whole => RegionShown::Whole,
             Scope::Remembered { view, spawn } => {
-                if spawn.is_some_and(|disc| disc.holds(chunk)) {
-                    return Shown::Current;
-                }
-                let region = store::region_of(chunk.0, chunk.1);
-                let discovered = self
-                    .memory
-                    .discovered_in(view, region)
-                    .is_some_and(|bits| store::bit(&bits, store::slot_of(chunk.0, chunk.1)));
-                if !discovered {
-                    return Shown::Hidden;
-                }
-                match self.memory.remembered(view, chunk) {
-                    Some(version) => Shown::Remembered(version),
-                    None => Shown::Current,
-                }
+                RegionShown::Remembered { memory: self.memory.shown_in(view, region), spawn: *spawn }
             }
         }
     }
@@ -224,21 +250,23 @@ impl State {
         Some(tiles)
     }
 
-    /// One tile as a scope sees it, as PNG bytes.
-    pub fn tile_for(&self, scope: &Scope, at: At) -> Result<Arc<[u8]>> {
+    /// One tile as a scope sees it, encoded as the reader asked for.
+    pub fn tile_for(&self, scope: &Scope, at: At, format: TileFormat) -> Result<Arc<[u8]>> {
         if scope.is_whole() {
-            return self.tile(at);
+            return self.tile_as(at, format);
         }
 
-        let key = scope.key();
+        let key = Self::cache_key(&scope.key(), format);
         if let Ok(mut cache) = self.cache.lock()
             && let Some(bytes) = cache.get(&key, &at)
         {
+            self.counted(false);
             return Ok(bytes);
         }
+        self.counted(true);
 
         let image = self.compose(scope, at)?;
-        let bytes: Arc<[u8]> = pyramid::encode(&image)?.into();
+        let bytes: Arc<[u8]> = pyramid::encode_as(&image, format)?.into();
 
         if let Ok(mut cache) = self.cache.lock() {
             cache.insert(key, at, Arc::clone(&bytes));
@@ -263,10 +291,15 @@ impl State {
         let mut remembered: HashMap<(i32, i32), Version> = HashMap::new();
         let mut shown_any = false;
         let mut hidden_any = false;
-        let held: HashSet<(i32, i32)> = self.regions_shown(scope).into_iter().filter(|region| regions.contains(region)).collect();
-        for &region in &held {
+        let held: HashMap<(i32, i32), RegionShown> = self
+            .regions_shown(scope)
+            .into_iter()
+            .filter(|region| regions.contains(region))
+            .map(|region| (region, self.shown_in(scope, region)))
+            .collect();
+        for (&region, shown_here) in &held {
             for chunk in chunks_of(region) {
-                match self.shown(scope, chunk) {
+                match shown_here.of(chunk) {
                     Shown::Hidden => hidden_any = true,
                     Shown::Current => shown_any = true,
                     Shown::Remembered(version) => {
@@ -314,9 +347,9 @@ impl State {
         let to_px = |c: i32, o: i32| -> u32 {
             if chunks_per_px > 1 { ((c - o) / chunks_per_px) as u32 } else { ((c - o) as u32) * px_per_chunk }
         };
-        for &region in &held {
+        for (&region, shown_here) in &held {
             for chunk in chunks_of(region) {
-                if self.shown(scope, chunk) == Shown::Hidden {
+                if shown_here.of(chunk) == Shown::Hidden {
                     continue;
                 }
                 let (px, pz) = (to_px(chunk.0, origin.0), to_px(chunk.1, origin.1));
@@ -377,14 +410,30 @@ impl State {
     }
 
     /// One remembered chunk drawn alone, at one pixel per block.
-    fn patch(&self, chunk: (i32, i32), version: Version, edge: usize) -> Option<RgbImage> {
-        let record = self.store.version(version).ok()??;
+    fn patch(&self, chunk: (i32, i32), version: Version, edge: usize) -> Option<Arc<RgbImage>> {
         let season = self.world.read().ok().and_then(|world| world.chunks.get(&chunk).map(Chunk::season)).unwrap_or(0);
+        let key = (chunk, version, season);
+        if let Some(held) = self.patches.lock().ok().and_then(|patches| patches.get(&key).cloned()) {
+            return Some(held);
+        }
+
+        let record = self.store.version(version).ok()??;
         let one = Chunk::from_record(&record, edge, season)?;
         let world = World::from_chunks(edge, HashMap::from([(chunk, one)]));
         let palette = self.palette.read().ok()?;
         let e = edge as i32;
-        Some(Renderer::new(&world, &palette, self.sea_level()).render(chunk.0 * e, chunk.1 * e, edge as u32))
+        let drawn = Arc::new(Renderer::new(&world, &palette, self.sea_level()).render(chunk.0 * e, chunk.1 * e, edge as u32));
+
+        if let Ok(mut patches) = self.patches.lock() {
+            // A bound rather than an eviction order: what is here is small and
+            // reused across every level and beat, and a map with this many
+            // divergences in play is one nobody has designed for yet.
+            if patches.len() >= MOST_PATCHES {
+                patches.clear();
+            }
+            patches.insert(key, Arc::clone(&drawn));
+        }
+        Some(drawn)
     }
 
     /// What is at one block, as a scope sees it: nothing where it is hidden,
@@ -506,18 +555,29 @@ mod tests {
         state.seen_from("ada", 0, 0, 0);
 
         let ada = state.scope_for(Some("ada"));
-        let tile = state.tile_for(&ada, (0, 0, 0)).expect("a tile");
+        let tile = state.tile_for(&ada, (0, 0, 0), TileFormat::Png).expect("a tile");
         assert_ne!(pixel(&tile, 5, 5), DARK, "chunk (0, 0) is hers to see");
         assert_eq!(pixel(&tile, 40, 5), DARK, "chunk (1, 0) is not");
         assert_eq!(pixel(&tile, 300, 300), DARK, "and nor is ground nobody exported");
 
-        let whole = state.tile_for(&Scope::Whole, (0, 0, 0)).expect("a tile");
+        let whole = state.tile_for(&Scope::Whole, (0, 0, 0), TileFormat::Png).expect("a tile");
         assert_ne!(pixel(&whole, 40, 5), DARK, "everybody's map has the second chunk");
 
         let stranger = state.scope_for(None);
-        let nothing = state.tile_for(&stranger, (0, 0, 0)).expect("a tile");
+        let nothing = state.tile_for(&stranger, (0, 0, 0), TileFormat::Png).expect("a tile");
         assert_eq!(pixel(&nothing, 5, 5), DARK, "a stranger is shown nothing without a spawn disc");
         assert_eq!(state.bounds_for(&stranger), (0, 0, 0, 0));
+
+        // The same picture, compact: a JPEG, with the same ground shown and
+        // hidden. Nothing here about size — a tile this flat is smaller as a
+        // PNG; the fifth is measured on terrain.
+        let compact = state.tile_for(&ada, (0, 0, 0), TileFormat::Jpeg).expect("a tile");
+        assert_eq!(&compact[..2], &[0xFF, 0xD8], "a JPEG starts with its own marker");
+        let seen = pixel(&compact, 5, 5);
+        assert!(seen.iter().zip(DARK).any(|(a, b)| a.abs_diff(b) > 40), "chunk (0, 0) is still hers to see");
+        let shown_whole = state.tile_for(&Scope::Whole, (0, 0, 0), TileFormat::Jpeg).expect("a tile");
+        assert_eq!(&shown_whole[..2], &[0xFF, 0xD8]);
+        assert_ne!(compact.len(), 0);
         assert_eq!(state.bounds_for(&ada), (0, 0, 512, 512));
         assert_eq!(state.chunks_for(&ada), 1);
     }
@@ -530,15 +590,15 @@ mod tests {
         let state = state_in(held.at(), true);
         ground(&state, (0, 0), 11);
         state.seen_from("ada", 0, 0, 0);
-        let rock = pixel(&state.tile_for(&Scope::Whole, (0, 0, 0)).unwrap(), 5, 5);
+        let rock = pixel(&state.tile_for(&Scope::Whole, (0, 0, 0), TileFormat::Png).unwrap(), 5, 5);
 
         state.seen_from("ada", 320, 320, 0);
         ground(&state, (0, 0), 22);
-        let brick = pixel(&state.tile_for(&Scope::Whole, (0, 0, 0)).unwrap(), 5, 5);
+        let brick = pixel(&state.tile_for(&Scope::Whole, (0, 0, 0), TileFormat::Png).unwrap(), 5, 5);
         assert_ne!(rock, brick);
 
         let ada = state.scope_for(Some("ada"));
-        assert_eq!(pixel(&state.tile_for(&ada, (0, 0, 0)).unwrap(), 5, 5), rock, "Ada remembers rock");
+        assert_eq!(pixel(&state.tile_for(&ada, (0, 0, 0), TileFormat::Png).unwrap(), 5, 5), rock, "Ada remembers rock");
 
         // The inspector agrees with the picture.
         let named = state.block(&ada, 5, 5).expect("a block");
@@ -546,7 +606,7 @@ mod tests {
         assert!(state.block(&ada, 40, 5).expect("a block").contains("unmapped"));
 
         state.seen_from("ada", 0, 0, 0);
-        assert_eq!(pixel(&state.tile_for(&ada, (0, 0, 0)).unwrap(), 5, 5), brick, "and sees brick once back");
+        assert_eq!(pixel(&state.tile_for(&ada, (0, 0, 0), TileFormat::Png).unwrap(), 5, 5), brick, "and sees brick once back");
     }
 
     /// The same at a coarser level: the stored tile is masked at chunk
@@ -565,7 +625,7 @@ mod tests {
         assert!(state.levels() >= 1);
 
         let ada = state.scope_for(Some("ada"));
-        let coarse = state.tile_for(&ada, (1, 0, 0)).expect("a level 1 tile");
+        let coarse = state.tile_for(&ada, (1, 0, 0), TileFormat::Png).expect("a level 1 tile");
         assert_ne!(pixel(&coarse, 3, 3), DARK, "chunk (0, 0) is 16 pixels wide here");
         assert_eq!(pixel(&coarse, 20, 3), DARK, "chunk (1, 0) is painted out");
 
@@ -573,8 +633,8 @@ mod tests {
         state.seen_from("ada", 900, 900, 0);
         ground(&state, (0, 0), 22);
         state.build_levels();
-        let whole = pixel(&state.tile_for(&Scope::Whole, (1, 0, 0)).unwrap(), 3, 3);
-        let remembered = pixel(&state.tile_for(&ada, (1, 0, 0)).unwrap(), 3, 3);
+        let whole = pixel(&state.tile_for(&Scope::Whole, (1, 0, 0), TileFormat::Png).unwrap(), 3, 3);
+        let remembered = pixel(&state.tile_for(&ada, (1, 0, 0), TileFormat::Png).unwrap(), 3, 3);
         assert_ne!(whole, remembered, "the whole map shows brick where Ada is shown rock");
     }
 
@@ -589,7 +649,7 @@ mod tests {
         ground(&state, (3, 0), 11);
 
         let stranger = state.scope_for(None);
-        let tile = state.tile_for(&stranger, (0, 0, 0)).expect("a tile");
+        let tile = state.tile_for(&stranger, (0, 0, 0), TileFormat::Png).expect("a tile");
         assert_ne!(pixel(&tile, 5, 5), DARK, "spawn is at the origin without a world.json");
         assert_eq!(pixel(&tile, 100, 5), DARK, "chunk (3, 0) is outside the disc");
         assert!(state.chunks_for(&stranger) >= 9);

@@ -17,6 +17,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+pub use crate::pyramid::TileFormat;
+
 /// The most presets one person may keep. Far past a working set, and there so
 /// that a page in a loop cannot grow this file without end.
 const MOST_PRESETS: usize = 200;
@@ -80,6 +82,10 @@ pub struct Person {
     /// them be put in.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub share_map_with: Vec<i32>,
+    /// How this person's tiles are encoded — exact or compact. See
+    /// [`TileFormat`].
+    #[serde(default)]
+    pub tile_format: TileFormat,
 }
 
 impl Person {
@@ -152,6 +158,13 @@ impl Preferences {
         self.held.lock().ok().and_then(|held| held.get(uid).cloned()).unwrap_or_default()
     }
 
+    /// How one person's tiles are encoded. Asked on every tile, so it is read
+    /// in place rather than by copying everything they have set.
+    #[must_use]
+    pub fn tile_format_of(&self, uid: &str) -> TileFormat {
+        self.held.lock().ok().and_then(|held| held.get(uid).map(|person| person.tile_format)).unwrap_or_default()
+    }
+
     /// Takes one person's choices, and writes them where they are not what is
     /// already held. Answers whether they were taken at all.
     pub fn set(&self, uid: &str, person: Person) -> bool {
@@ -221,6 +234,7 @@ mod tests {
             presets_by_default: true,
             follow_self: true,
             share_map_with: Vec::new(),
+            tile_format: TileFormat::Png,
         }
     }
 

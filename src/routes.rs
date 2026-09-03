@@ -135,11 +135,15 @@ fn stored(request: &mut Request, state: &State, path: &str) -> Reply {
         // Whose tile this is depends on who is asking, and a tile drawn for one
         // person is marked private so that nothing between here and their
         // browser hands it to anybody else.
+        // How it is encoded is the reader's own setting, read from the
+        // session and never from the address: the `f=` a page writes there is
+        // only what makes a change of setting a change of address.
         let who = state.sessions.who(&http::cookies(request));
         let scope = state.scope_for(who.as_ref().map(|who| who.uid.as_str()));
-        return match state.tile_for(&scope, at) {
-            Ok(bytes) if scope.is_whole() => http::tile(&bytes),
-            Ok(bytes) => http::private_tile(&bytes),
+        let format = who.as_ref().map_or_else(Default::default, |who| state.preferences.tile_format_of(&who.uid));
+        return match state.tile_for(&scope, at, format) {
+            Ok(bytes) if scope.is_whole() => http::tile(&bytes, format.mime()),
+            Ok(bytes) => http::private_tile(&bytes, format.mime()),
             // A tile nobody has built is missing, not broken. Saying so lets a
             // viewer draw around it rather than treat the map as failing, and
             // keeps a real failure worth noticing.

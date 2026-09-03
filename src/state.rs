@@ -10,7 +10,7 @@
 //! names on disk have moved is in [`crate::watch`], and what the page is told is
 //! in [`crate::feeds`].
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
@@ -25,25 +25,21 @@ use crate::events::Events;
 use crate::config::Rules;
 use crate::error::{Error, Result};
 use crate::files;
+use crate::history::History;
 use crate::levels::Levels;
 use crate::live::Live;
 use crate::memory::Memory;
 use crate::palette::Palette;
 use crate::pending::Pending;
 use crate::preferences::Preferences;
-use crate::pyramid::{self, TILE};
+use crate::pyramid::{self, TILE, TileFormat};
 use crate::render::{Renderer, UNMAPPED};
-use crate::store::{self, Arrived, Store, Stored};
+use crate::store::{self, Arrived, Store, Stored, Version};
 use crate::log::{say, warn};
 
 /// Which tiles one generation changed, as level and coordinates. `None` means
 /// every tile: a new palette recolours the lot, and so does a gap in the history.
 pub type Changed = Option<Vec<At>>;
-
-/// How many generations of tile changes to remember. A viewer polls every few
-/// seconds and the mod exports every thirty, so this is minutes of slack; past it
-/// a viewer is told to repaint everything rather than lied to.
-const HISTORY: usize = 128;
 
 pub struct State {
     pub data: PathBuf,
@@ -94,13 +90,27 @@ pub struct State {
     generation: AtomicU64,
     /// Which tiles each generation changed, so a viewer that has fallen a few
     /// generations behind can repaint those and leave the rest of the map alone.
-    history: Mutex<VecDeque<(u64, Changed)>>,
+    history: Mutex<History<Changed>>,
     /// Level 0 tiles whose levels above are out of date. Drained by the builder,
     /// so many changes in one window cost one rebuild rather than many.
     pub stale: Mutex<HashSet<(i32, i32)>>,
+    /// Tiles served since the last report, and how many of them had to be
+    /// drawn or encoded rather than handed out of the cache — see
+    /// [`report_serving`](Self::report_serving).
+    served: AtomicU64,
+    drawn: AtomicU64,
     /// Level 0 tiles that changed and no browser has been told of yet.
     unannounced: Mutex<HashSet<At>>,
+    /// Regions in which each person's own memory changed and they have not
+    /// been told of yet — announced on the same beat as the tiles.
+    unannounced_of: Mutex<HashMap<String, HashSet<(i32, i32)>>>,
     pub cache: Mutex<Cache>,
+    /// Remembered chunks as pictures, by chunk, version and season: a reader
+    /// away from ground that changed is shown the version they last saw, and a
+    /// coarse tile over a long absence holds a hundred of those. Rendering each
+    /// from the database on every request was most of what such a tile cost;
+    /// a patch is a few kilobytes and the version it shows never changes.
+    pub patches: Mutex<HashMap<((i32, i32), Version, u8), Arc<RgbImage>>>,
     /// Every browser waiting to be told of a change. See [`crate::events`].
     pub events: Events,
 }
@@ -169,10 +179,14 @@ impl State {
             named: Mutex::new(files::modified(&crate::watch::names_path(data))),
             rules,
             generation: AtomicU64::new(1),
-            history: Mutex::new(VecDeque::new()),
+            history: Mutex::new(History::default()),
             stale: Mutex::new(HashSet::new()),
+            served: AtomicU64::new(0),
+            drawn: AtomicU64::new(0),
             unannounced: Mutex::new(HashSet::new()),
+            unannounced_of: Mutex::new(HashMap::new()),
             cache: Mutex::new(Cache::new(cache_bytes)),
+            patches: Mutex::new(HashMap::new()),
             events: Events::default(),
             sea_level: std::sync::atomic::AtomicI32::new(crate::facts::read(data).sea_level),
             data: data.to_path_buf(),
@@ -189,6 +203,14 @@ impl State {
     /// Takes the sea level again, for a world that has said it since start-up.
     pub fn resettle_sea_level(&self) {
         self.sea_level.store(crate::facts::read(&self.data).sea_level, Ordering::Relaxed);
+        self.forget_patches();
+    }
+
+    /// Forgets every rendered patch: the colours changed under them.
+    pub fn forget_patches(&self) {
+        if let Ok(mut patches) = self.patches.lock() {
+            patches.clear();
+        }
     }
 
     /// Takes chunks that arrived, wherever from: into the database first and
@@ -276,32 +298,57 @@ impl State {
         }
     }
 
-    /// Tells every browser which level 0 tiles have changed since it last
-    /// said so — once per beat, however many arrivals the beat held. Nothing
-    /// is said on a beat where nothing moved, so the map's clock never turns
-    /// for nothing.
+    /// Tells every browser what has changed since it last said so — which
+    /// level 0 tiles for everybody, and which regions for each person alone —
+    /// once per beat, however many arrivals and discoveries the beat held.
+    /// Nothing is said on a beat where nothing moved, so the map's clock never
+    /// turns for nothing. One generation for the lot: forty people exploring
+    /// used to turn the clock forty times as often, and every turn was one more
+    /// address a browser could not find in its cache.
     pub fn announce(&self) {
         let changed: Vec<At> = {
             let Ok(mut unannounced) = self.unannounced.lock() else { return };
-            if unannounced.is_empty() {
-                return;
-            }
             let mut changed: Vec<At> = unannounced.drain().collect();
             changed.sort_unstable();
             changed
         };
-        self.bump(Some(changed));
+        let personal: Vec<(String, Vec<(i32, i32)>)> = {
+            let Ok(mut unannounced) = self.unannounced_of.lock() else { return };
+            unannounced
+                .drain()
+                .map(|(uid, regions)| {
+                    let mut regions: Vec<(i32, i32)> = regions.into_iter().collect();
+                    regions.sort_unstable();
+                    (uid, regions)
+                })
+                .collect()
+        };
+        if changed.is_empty() && personal.is_empty() {
+            return;
+        }
+        let generation = self.bump(Some(changed));
+        for (uid, regions) in personal {
+            self.memory.record(&uid, generation, regions);
+        }
     }
 
     /// The same, for chunks that were just stored — and everybody who was not
     /// there keeps the version they last saw.
     pub fn terrain_changed(&self, stored: &[Stored]) {
         self.tiles_changed(stored.iter().map(|one| store::region_of(one.cx, one.cz)));
-        // Filed under a beat of its own, with nothing in the map's own history
-        // for it: the tiles that moved for everybody were announced above, and
-        // this is what moved for each person alone.
-        for (uid, regions) in self.memory.changed(stored, || self.bump(Some(Vec::new()))) {
-            self.drop_remembered(&uid, &regions);
+        // What moved for each person alone, beside what moved for everybody.
+        for (uid, regions) in self.memory.changed(stored) {
+            self.memory_changed(&uid, regions);
+        }
+    }
+
+    /// Notes that one person's own memory changed in these regions: their
+    /// composed tiles there are forgotten now, and they are told on the next
+    /// beat — see [`announce`](Self::announce).
+    fn memory_changed(&self, uid: &str, regions: Vec<(i32, i32)>) {
+        self.drop_remembered(uid, &regions);
+        if let Ok(mut unannounced) = self.unannounced_of.lock() {
+            unannounced.entry(uid.to_owned()).or_default().extend(regions);
         }
     }
 
@@ -323,8 +370,8 @@ impl State {
         let edge = self.chunk_edge().max(1) as i32;
         let (cx, cz) = (x.div_euclid(edge), z.div_euclid(edge));
         let sight: Vec<(i32, i32)> = crate::columns::disc_of((cx, cz), radius).collect();
-        if let Some(regions) = self.memory.saw(uid, &sight, || self.bump(Some(Vec::new()))) {
-            self.drop_remembered(uid, &regions);
+        if let Some(regions) = self.memory.saw(uid, &sight) {
+            self.memory_changed(uid, regions);
         }
     }
 
@@ -336,10 +383,7 @@ impl State {
     pub fn bump(&self, tiles: Changed) -> u64 {
         let generation = self.generation.fetch_add(1, Ordering::Relaxed) + 1;
         if let Ok(mut history) = self.history.lock() {
-            history.push_back((generation, tiles));
-            while history.len() > HISTORY {
-                history.pop_front();
-            }
+            history.record(generation, tiles, std::time::Instant::now());
         }
         self.events.map_changed();
         generation
@@ -356,15 +400,8 @@ impl State {
         }
 
         let history = self.history.lock().ok()?;
-
-        // A gap between what the viewer saw and what is still remembered.
-        match history.front() {
-            Some((oldest, _)) if *oldest <= since + 1 => {}
-            _ => return None,
-        }
-
         let mut tiles = Vec::new();
-        for (_, changed) in history.iter().filter(|(at, _)| *at > since) {
+        for changed in history.since(since)? {
             tiles.extend(changed.as_ref()?.iter().copied());
         }
         tiles.sort_unstable();
@@ -405,18 +442,48 @@ impl State {
 
     /// One tile as PNG bytes, drawn or read as its level requires.
     pub fn tile(&self, at: At) -> Result<Arc<[u8]>> {
+        self.tile_as(at, TileFormat::Png)
+    }
+
+    /// One tile as everybody sees it, encoded as one reader asked for.
+    pub fn tile_as(&self, at: At, format: TileFormat) -> Result<Arc<[u8]>> {
+        let key = Self::cache_key("", format);
         if let Ok(mut cache) = self.cache.lock()
-            && let Some(bytes) = cache.get("", &at)
+            && let Some(bytes) = cache.get(&key, &at)
         {
+            self.counted(false);
             return Ok(bytes);
         }
+        self.counted(true);
 
-        let bytes: Arc<[u8]> = if at.0 == 0 { self.finest(at.1, at.2)? } else { self.stored(at)? }.into();
+        let bytes: Arc<[u8]> = match (at.0, format) {
+            (0, _) => pyramid::encode_as(&self.finest(at.1, at.2)?, format)?,
+            // The stored levels are PNG already, so the exact picture is the
+            // bytes as they lie; any other picture of them is made from them.
+            (_, TileFormat::Png) => self.stored(at)?,
+            (level, _) => {
+                let image = self.levels.image(at).ok_or_else(|| {
+                    Error::Empty(format!("level {level} tile ({}, {}) is not built yet", at.1, at.2))
+                })?;
+                pyramid::encode_as(&image, format)?
+            }
+        }
+        .into();
 
         if let Ok(mut cache) = self.cache.lock() {
-            cache.insert(String::new(), at, Arc::clone(&bytes));
+            cache.insert(key, at, Arc::clone(&bytes));
         }
         Ok(bytes)
+    }
+
+    /// What a tile is cached under: whose it is, and how it is encoded. Two
+    /// encodings of one picture never answer for each other.
+    #[must_use]
+    pub fn cache_key(whose: &str, format: TileFormat) -> String {
+        match format {
+            TileFormat::Png => whose.to_owned(),
+            other => format!("{};{whose}", other.name()),
+        }
     }
 
     /// Level 0, which is drawn from the world rather than stored.
@@ -426,7 +493,7 @@ impl State {
     /// breaks when you zoom in — it was taken for that three times. Growing the
     /// level above instead is what makes the viewer fall back to a coarse map
     /// rather than an empty one.
-    fn finest(&self, tx: i32, tz: i32) -> Result<Vec<u8>> {
+    fn finest(&self, tx: i32, tz: i32) -> Result<RgbImage> {
         // Scoped, and the guards let go before anything else is asked of the
         // world. `levels()` reads it too, and a thread that takes a second read
         // lock while holding one may deadlock against a writer that arrived in
@@ -438,16 +505,17 @@ impl State {
             };
 
             if !palette.paints_nothing() {
-                let image =
-                    Renderer::new(&world, &palette, self.sea_level()).render(tx * TILE as i32, tz * TILE as i32, TILE);
-                return pyramid::encode(&image);
+                return Ok(Renderer::new(&world, &palette, self.sea_level()).render(
+                    tx * TILE as i32,
+                    tz * TILE as i32,
+                    TILE,
+                ));
             }
         }
 
-        let grown = self.levels.from_above(0, tx, tz, TILE, self.levels()).ok_or_else(
+        self.levels.from_above(0, tx, tz, TILE, self.levels()).ok_or_else(
             || Error::Empty("the palette has no colours and no level above has this ground".to_owned()),
-        )?;
-        pyramid::encode(&grown)
+        )
     }
 
     /// A level above zero, which the builder has already drawn.
@@ -542,6 +610,26 @@ impl State {
 
         let generation = self.bump(Some(repainted.clone()));
         say!("{} tiles rebuilt across {levels} levels (generation {generation})", repainted.len());
+    }
+
+    /// Counts one tile served, and whether it cost a render or an encode.
+    pub fn counted(&self, drawn: bool) {
+        self.served.fetch_add(1, Ordering::Relaxed);
+        if drawn {
+            self.drawn.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Says how many tiles went out since it last said, and how many of them
+    /// cost a render or an encode. Once a minute, and only where anything did:
+    /// the number that says whether a server is serving its cache or drawing
+    /// the same tiles over and over.
+    pub fn report_serving(&self) {
+        let served = self.served.swap(0, Ordering::Relaxed);
+        let drawn = self.drawn.swap(0, Ordering::Relaxed);
+        if served > 0 {
+            say!("{served} tiles served in the last minute, {drawn} of them drawn or encoded");
+        }
     }
 
     /// Writes the level tiles that have waited long enough — see

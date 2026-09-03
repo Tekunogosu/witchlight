@@ -170,6 +170,7 @@ function takeInfo(info) {
     // its edges moved, and the tiles that changed still need replacing — usually
     // both at once, since the export that added a region also drew it.
     if (grew) resize();
+    noteChanges(generation, info.tiles);
     if (info.tiles) terrain?.refresh(info.tiles);
     else if (!grew) terrain?.refreshAll();
 

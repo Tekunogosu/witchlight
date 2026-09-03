@@ -89,13 +89,13 @@ pub fn portrait(bytes: &[u8]) -> Reply {
 }
 
 /// A rendered tile. Safe to keep forever: a changed world is a changed `?v=`.
-pub fn tile(bytes: &[u8]) -> Reply {
-    cached(bytes, "image/png", keep::FOREVER)
+pub fn tile(bytes: &[u8], mime: &str) -> Reply {
+    cached(bytes, mime, keep::FOREVER)
 }
 
 /// A tile composed for one reader. See `keep::PRIVATELY`.
-pub fn private_tile(bytes: &[u8]) -> Reply {
-    cached(bytes, "image/png", keep::PRIVATELY)
+pub fn private_tile(bytes: &[u8], mime: &str) -> Reply {
+    cached(bytes, mime, keep::PRIVATELY)
 }
 
 pub fn text(status: u16, body: &str) -> Reply {

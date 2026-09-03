@@ -41,8 +41,9 @@ let mineShape = '';
  * against a marker list every two.
  */
 async function watchMine() {
+  await pollGroups();
   await pollMine();
-  const shape = JSON.stringify(mine);
+  const shape = JSON.stringify([mine, viewer && viewer.Groups]);
   if (shape === mineShape) return;
   mineShape = shape;
 
@@ -52,6 +53,22 @@ async function watchMine() {
   drawProfile();
   drawPresets();
   if (applyPanel.classList.contains('open')) drawApplyList();
+}
+
+/**
+ * Reads again which groups this person is in, which the game can change while
+ * the page is open: a group joined in the chat should show its box here
+ * without a reload. Only the groups are taken from the answer, so a service
+ * mid-restart cannot sign the page out by answering nothing.
+ */
+async function pollGroups() {
+  if (!(viewer && viewer.Name)) return;
+  try {
+    const held = await (await fetch('/me.json', { cache: 'no-store' })).json();
+    if (held && Array.isArray(held.Groups)) viewer.Groups = held.Groups;
+  } catch (error) {
+    /* what is held stands until the service answers */
+  }
 }
 
 /** Reads back what this person has set. Nobody signed in has set nothing. */
@@ -122,6 +139,10 @@ function drawProfile() {
   wantPresets.checked = Boolean(mine.PresetsByDefault);
   wantPrivate.checked = privateByDefault();
   wantFollow.checked = Boolean(mine.FollowSelf);
+  for (const box of document.querySelectorAll('input[name="want-format"]')) {
+    box.checked = box.value === tileFormat();
+    box.disabled = !named;
+  }
   drawShares(named);
   wantPresets.disabled = !named;
   wantPrivate.disabled = !named;
@@ -149,12 +170,19 @@ function drawProfile() {
  */
 let draft = null;
 
+/** How this person's tiles are encoded, as their settings say. */
+function tileFormat() {
+  return mine && mine.TileFormat === 'jpeg' ? 'jpeg' : 'png';
+}
+
 /** Reads the switches into a draft, so what is shown is what Save will keep. */
 function draftProfile() {
+  const format = document.querySelector('input[name="want-format"]:checked');
   draft = {
     presets: wantPresets.checked,
     private: wantPrivate.checked,
     follow: wantFollow.checked,
+    format: format ? format.value : tileFormat(),
     shares: [...document.querySelectorAll('#share-groups input:checked')]
       .map(box => Number(box.value))
       .filter(Number.isFinite),
@@ -165,15 +193,25 @@ function draftProfile() {
  * One box per group this person is in, ticked where they share their map with
  * it. Shown only under a private map, since there is nothing to share
  * otherwise, and only to somebody signed in, since a stranger is in no group.
+ * Somebody in no group is told so, and how to be in one, rather than shown
+ * nothing: an option that is absent reads as an option that does not exist.
  */
 function drawShares(named) {
   const section = document.getElementById('share-map');
   const list = document.getElementById('share-groups');
   const groups = (viewer && Array.isArray(viewer.Groups)) ? viewer.Groups : [];
-  const shown = Boolean(named) && Boolean(viewer && viewer.PrivateMap) && groups.length > 0;
+  const shown = Boolean(named) && Boolean(viewer && viewer.PrivateMap);
   section.hidden = !shown;
   list.textContent = '';
   if (!shown) return;
+
+  if (groups.length === 0) {
+    const none = document.createElement('p');
+    none.className = 'note';
+    none.textContent = 'You are not in a player group. In the game chat, /group create <name> makes one and /group invite <player> adds someone to it; the box for it appears here within a few seconds.';
+    list.append(none);
+    return;
+  }
 
   const sharing = new Set(Array.isArray(mine.ShareMapWith) ? mine.ShareMapWith : []);
   for (const group of groups) {
@@ -210,13 +248,18 @@ async function keepProfile() {
   }
 
   sayProfile('Keeping…');
+  const wasFormat = tileFormat();
   const kept = await keepMine({
     ...mine,
     PresetsByDefault: draft.presets,
     PrivateByDefault: draft.private,
     FollowSelf: draft.follow,
     ShareMapWith: draft.shares,
+    TileFormat: draft.format,
   });
+  // A new encoding is a new address for every tile — see `tileUrl` — so what
+  // is on screen is asked for again, once.
+  if (kept && tileFormat() !== wasFormat) terrain?.refreshAll();
   drawProfile();
   sayProfile(kept ? 'Kept.' : 'The map service is not answering.', !kept);
   if (kept) shutWindow(profile);
@@ -244,7 +287,8 @@ function buildProfile() {
     .addEventListener('click', () => started(keepProfile(), 'keeping your settings'));
   document.getElementById('profile-revert').addEventListener('click', revertProfile);
 
-  for (const box of [wantPresets, wantPrivate, wantFollow]) {
+  const switches = [wantPresets, wantPrivate, wantFollow, ...document.querySelectorAll('input[name="want-format"]')];
+  for (const box of switches) {
     box.addEventListener('change', () => {
       draftProfile();
       sayProfile('Not kept yet.');

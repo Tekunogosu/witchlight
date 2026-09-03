@@ -17,6 +17,7 @@ mod events;
 mod facts;
 mod feeds;
 mod files;
+mod history;
 mod http;
 mod live;
 mod levels;

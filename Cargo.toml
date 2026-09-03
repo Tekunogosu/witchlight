@@ -1,12 +1,12 @@
 [package]
 name = "witchlight"
-version = "0.44.0"
+version = "0.45.2"
 edition = "2024"
 description = "Renders and serves a browsable map from Vintage Story world exports"
 license = "MIT"
 
 [dependencies]
-image = { version = "0.25.9", default-features = false, features = ["png"] }
+image = { version = "0.25.9", default-features = false, features = ["png", "jpeg"] }
 serde = { version = "1.0.229", features = ["derive"] }
 # raw_value keeps the mod's marker arrays as the text they arrived as, so this
 # service never has to read a waypoint to decide who may see it.

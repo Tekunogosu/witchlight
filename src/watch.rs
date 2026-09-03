@@ -44,6 +44,9 @@ const ANNOUNCE_EVERY: Duration = Duration::from_secs(1);
 /// of them go is decided in `levels.rs`; this only asks.
 const FLUSH_EVERY: Duration = Duration::from_secs(5);
 
+/// How often the log is told how many tiles went out and how many were drawn.
+const REPORT_EVERY: Duration = Duration::from_secs(60);
+
 /// Starts the background clocks: one that reads what changed, one that tells
 /// browsers, one that redraws the levels above, one that writes them down.
 pub fn start(state: &Arc<State>) {
@@ -51,6 +54,7 @@ pub fn start(state: &Arc<State>) {
     every(ANNOUNCE_EVERY, Arc::clone(state), State::announce);
     every(BUILD_EVERY, Arc::clone(state), State::build_levels);
     every(FLUSH_EVERY, Arc::clone(state), State::flush_levels);
+    every(REPORT_EVERY, Arc::clone(state), State::report_serving);
 }
 
 fn every(period: Duration, state: Arc<State>, work: fn(&State)) {
@@ -151,6 +155,7 @@ impl State {
         if let Ok(mut cache) = self.cache.lock() {
             cache.clear();
         }
+        self.forget_patches();
 
         // Every stored level is drawn from level 0, so redrawing them against a
         // palette with no colours replaces a map that works with a blank one —
