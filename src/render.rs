@@ -283,18 +283,7 @@ mod tests {
         world.edge = 2;
         world.chunks.insert(
             (0, 0),
-            Chunk {
-                columns: vec![
-                    Column {
-                        block,
-                        height: 100,
-                        temperature: 128,
-                        rainfall: 128,
-                        season: 0
-                    };
-                    4
-                ],
-            },
+            Chunk::filled_with(Column { block, height: 100, temperature: 128, rainfall: 128, season: 0 }, 4),
         );
         world
     }

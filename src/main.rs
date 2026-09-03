@@ -13,12 +13,14 @@ mod color;
 mod columns;
 mod config;
 mod error;
+mod events;
 mod facts;
 mod feeds;
 mod files;
 mod http;
 mod live;
 mod log;
+mod memory;
 mod net;
 mod palette;
 mod pending;
@@ -28,24 +30,26 @@ mod pyramid;
 mod random;
 mod render;
 mod routes;
+mod scope;
 mod server;
-mod snapshot;
 mod state;
+mod store;
 mod stored;
 mod urls;
 mod viewer;
 mod watch;
+mod wire;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
-use crate::columns::World;
 use crate::config::Config;
 use crate::error::Result;
 use crate::palette::Palette;
 use crate::render::Renderer;
+use crate::state::State;
 
 #[derive(Debug, Parser)]
 #[command(name = "witchlight", version, about = "Serve a Vintage Story world map")]
@@ -149,13 +153,59 @@ fn run() -> Result<()> {
 
     let exports = config.exports(args.exports.as_deref())?;
     let palette = Palette::load(&exports)?;
-    let world = World::load(&exports)?;
-    let (min_x, min_z, max_x, max_z) = world.bounds();
+    // The map is opened once, here, for both the banner and whatever is done
+    // with it after. It used to be opened twice — once for the banner and once
+    // more inside `serve` — which was two reads of every region file, and is
+    // now two openings of one database.
+    let state = std::sync::Arc::new(State::load(
+        &exports,
+        palette,
+        config.tile_cache_mb.max(1) * 1024 * 1024,
+        config.rules(),
+    )?);
 
     // Printed first and on every run: the quickest way to tell a deployed binary
     // from the one you meant to deploy.
     println!("witchlight {}", env!("CARGO_PKG_VERSION"));
     say!("reading {}", exports.display());
+    banner(&state);
+
+    match args.command.unwrap_or(Command::Serve) {
+        Command::Render { out } => {
+            let (Ok(world), Ok(palette)) = (state.world.read(), state.palette.read()) else {
+                return Err(error::Error::Empty("the map could not be read".to_owned()));
+            };
+            if world.is_empty() {
+                return Err(error::Error::Empty(
+                    "there is nothing to draw yet — the server has exported no regions".to_owned(),
+                ));
+            }
+            let (min_x, min_z, max_x, max_z) = world.bounds();
+            let renderer = Renderer::new(&world, &palette, state.sea_level());
+            let width = (max_x - min_x).unsigned_abs();
+            let image = renderer.render(min_x, min_z, width.max((max_z - min_z).unsigned_abs()));
+            image.save(&out).map_err(|error| error::Error::parse(&out, error.to_string()))?;
+            println!("wrote {}", out.display());
+            Ok(())
+        }
+        Command::Serve => server::serve(
+            &config.bind,
+            state,
+            api::Api::resolve(&config.api_bind, &config.api_token),
+            config.threads,
+            config.backfill_radius_chunks,
+        ),
+    }
+}
+
+/// Says what was found, so somebody reading the log can tell an empty map from
+/// a broken one and a palette that paints from one that does not.
+fn banner(state: &State) {
+    let (Ok(world), Ok(palette)) = (state.world.read(), state.palette.read()) else {
+        return;
+    };
+    let (min_x, min_z, max_x, max_z) = world.bounds();
+
     if world.is_empty() {
         say!(
             "nothing exported yet — the map fills in as the server \
@@ -189,7 +239,7 @@ fn run() -> Result<()> {
         );
     }
 
-    let coverage = Renderer::new(&world, &palette, facts::read(&exports).sea_level).coverage();
+    let coverage = Renderer::new(&world, &palette, state.sea_level()).coverage();
     say!("surface {}", coverage.summary());
     if coverage.is_poor() {
         warn!(
@@ -197,33 +247,6 @@ fn run() -> Result<()> {
              the server's own. An admin joining the game supplies a better one; \
              see `/witchlight status` on the server."
         );
-    }
-
-    match args.command.unwrap_or(Command::Serve) {
-        Command::Render { out } => {
-            if world.is_empty() {
-                return Err(error::Error::Empty(
-                    "there is nothing to draw yet — the server has exported no regions".to_owned(),
-                ));
-            }
-            let renderer = Renderer::new(&world, &palette, facts::read(&exports).sea_level);
-            let width = (max_x - min_x).unsigned_abs();
-            let image = renderer.render(min_x, min_z, width.max((max_z - min_z).unsigned_abs()));
-            image.save(&out).map_err(|error| error::Error::parse(&out, error.to_string()))?;
-            println!("wrote {}", out.display());
-            Ok(())
-        }
-        Command::Serve => server::serve(
-            &config.bind,
-            &exports,
-            palette,
-            api::Api::resolve(&config.api_bind, &config.api_token),
-            config.threads,
-            config.tile_cache_mb,
-            config.rules(),
-            config.autosave_interval(),
-            config.backfill_radius_chunks,
-        ),
     }
 }
 

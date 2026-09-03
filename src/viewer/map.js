@@ -197,7 +197,15 @@ function resize() {
     // six elements now, and a world with nothing in it has no value for any of
     // them rather than a zero for each.
     hud.classList.add('waiting');
-    waiting.textContent = 'waiting for the server to export';
+    // Two reasons a map has nothing in it, and only one of them is the server's:
+    // under a private map a page with nobody signed in is shown nothing until
+    // somebody is, and saying "waiting for the server" would send them to the
+    // wrong fix.
+    waiting.textContent = viewer && viewer.PrivateMap && !(viewer && viewer.Name)
+      ? 'sign in to see your map — run /witchlight login in the game'
+      : (viewer && viewer.PrivateMap
+        ? 'your map fills in as you explore'
+        : 'waiting for the server to export');
     return;
   }
 

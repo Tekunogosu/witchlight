@@ -40,6 +40,8 @@ use std::time::{Duration, Instant};
 
 use serde_json::value::RawValue;
 
+use crate::memory::Group;
+
 /// How long a report of who is online stays believable.
 ///
 /// Without this a game server that stops — crashed, killed, shut down — leaves
@@ -121,7 +123,10 @@ struct Seen {
     grouped: HashMap<String, String>,
     /// Where everyone the mod posted this beat is standing, in blocks — every
     /// player the mod knows about, independent of `open`/`owned`.
-    positions: Vec<(i32, i32)>,
+    positions: Vec<Whereabouts>,
+    /// Every group the server has, by id: what it is called and who is in it,
+    /// online or not. What sharing a map with a group is decided against.
+    groups: HashMap<i32, Group>,
 }
 
 impl Default for Seen {
@@ -133,6 +138,7 @@ impl Default for Seen {
             owned: HashMap::new(),
             grouped: HashMap::new(),
             positions: Vec::new(),
+            groups: HashMap::new(),
         }
     }
 }
@@ -149,6 +155,19 @@ struct Watching {
     private: HashMap<String, Box<RawValue>>,
     #[serde(default)]
     grouped: HashMap<String, Box<RawValue>>,
+    /// Every group, by its id as a string — JSON has no other kind of key.
+    #[serde(default)]
+    groups: HashMap<String, GroupPosted>,
+}
+
+/// One group as the mod posts it.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct GroupPosted {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    members: Vec<String>,
 }
 
 /// One player, read only far enough to say where they are.
@@ -163,15 +182,32 @@ struct Watching {
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct Positioned {
+    #[serde(default)]
+    uid: String,
     x: i32,
     z: i32,
+    #[serde(default)]
+    view_chunks: i32,
+}
+
+/// Where one player is standing, and who: the uid is what their memory of the
+/// map is kept under.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Whereabouts {
+    pub uid: String,
+    pub x: i32,
+    pub z: i32,
+    /// How far the game loads ground around them, in chunks: their own view
+    /// distance as the server granted it. Zero where the mod did not say,
+    /// which is a mod older than this build.
+    pub reach: i32,
 }
 
 /// Every position named in one of the mod's player arrays, as raw text.
-fn positions_in(raw: Option<&RawValue>) -> Vec<(i32, i32)> {
+fn positions_in(raw: Option<&RawValue>) -> Vec<Whereabouts> {
     let Some(raw) = raw else { return Vec::new() };
     serde_json::from_str::<Vec<Positioned>>(raw.get())
-        .map(|players| players.into_iter().map(|p| (p.x, p.z)).collect())
+        .map(|players| players.into_iter().map(|p| Whereabouts { uid: p.uid, x: p.x, z: p.z, reach: p.view_chunks }).collect())
         .unwrap_or_default()
 }
 
@@ -278,12 +314,16 @@ impl Live {
         true
     }
 
-    /// Where every player the mod last posted is standing, in blocks — stale
-    /// data answered the same way `body` answers it, with nothing rather than a
-    /// position that may no longer be true.
+    /// Where every player the mod last posted is standing, in blocks, and who
+    /// each of them is — stale data answered the same way `body` answers it,
+    /// with nothing rather than a position that may no longer be true.
+    ///
+    /// A player posted twice — to the public and to their group — is here once:
+    /// where somebody stands is one fact however many lists carry it.
     #[must_use]
-    pub fn positions(&self) -> Vec<(i32, i32)> {
-        self.players
+    pub fn whereabouts(&self) -> Vec<Whereabouts> {
+        let mut all = self
+            .players
             .lock()
             .ok()
             .and_then(|held| {
@@ -291,6 +331,22 @@ impl Live {
                     .filter(|(_, at)| at.elapsed() < PLAYERS_GOOD_FOR)
                     .map(|(seen, _)| seen.positions.clone())
             })
+            .unwrap_or_default();
+        all.sort_by(|a, b| a.uid.cmp(&b.uid));
+        all.dedup_by(|a, b| !a.uid.is_empty() && a.uid == b.uid);
+        all
+    }
+
+
+
+    /// Every group the mod last posted, whether or not the post is still fresh:
+    /// who is in a group does not go stale the way where they stand does.
+    #[must_use]
+    pub fn groups(&self) -> HashMap<i32, Group> {
+        self.players
+            .lock()
+            .ok()
+            .and_then(|held| held.as_ref().map(|(seen, _)| seen.groups.clone()))
             .unwrap_or_default()
     }
 
@@ -507,12 +563,21 @@ fn watching(body: &str) -> Option<Seen> {
         positions.extend(positions_in(Some(list)));
     }
 
+    let groups = read
+        .groups
+        .into_iter()
+        .filter_map(|(id, group)| {
+            Some((id.parse::<i32>().ok()?, Group { name: group.name, members: group.members.into_iter().collect() }))
+        })
+        .collect();
+
     Some(Seen {
         online: read.online,
         open: array(read.public.as_deref()),
         owned: arrays(read.private),
         grouped: arrays(read.grouped),
         positions,
+        groups,
     })
 }
 
@@ -750,6 +815,20 @@ mod tests {
             assert!(theirs.contains("bob"), "{uid} shares a group with bob");
             assert!(theirs.contains("ada"), "and still sees what is public");
         }
+    }
+
+    #[test]
+    fn the_groups_the_mod_posts_are_read_whole() {
+        let live = Live::load(Path::new("/nonexistent"));
+        assert!(live.set_players(
+            r#"{"Online":0,"Public":[],"Private":{},"Grouped":{},
+                "Groups":{"7":{"Name":"the guild","Members":["a","b","c"]},"x":{"Name":"nonsense"}}}"#
+                .to_owned()
+        ));
+        let groups = live.groups();
+        assert_eq!(groups.len(), 1, "a group whose id is not a number is not a group");
+        assert_eq!(groups[&7].name, "the guild");
+        assert_eq!(groups[&7].members.len(), 3, "offline members included");
     }
 
     #[test]

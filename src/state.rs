@@ -5,8 +5,10 @@
 //! of its own, because the parts move on different clocks: the world when the
 //! mod exports, the palette when an admin joins, the tiles whenever either does.
 //!
-//! What it holds is here. Noticing that disk has moved is in [`crate::watch`],
-//! and what the page is told is in [`crate::feeds`].
+//! What it holds is here. Terrain arrives through [`State::take_chunks`] from
+//! [`crate::apiport`] and [`crate::pull`]; noticing that the palette or the
+//! names on disk have moved is in [`crate::watch`], and what the page is told is
+//! in [`crate::feeds`].
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -18,16 +20,19 @@ use image::RgbImage;
 
 use crate::auth::Sessions;
 use crate::cache::{At, Cache};
-use crate::columns::{World, columns_dir};
+use crate::columns::{Chunk, World, columns_dir};
+use crate::events::Events;
 use crate::config::Rules;
 use crate::error::{Error, Result};
 use crate::files;
 use crate::live::Live;
+use crate::memory::Memory;
 use crate::palette::Palette;
 use crate::pending::Pending;
 use crate::preferences::Preferences;
 use crate::pyramid::{self, TILE};
 use crate::render::{Renderer, UNMAPPED};
+use crate::store::{self, Arrived, Store, Stored};
 use crate::log::{say, warn};
 
 /// Which tiles one generation changed, as level and coordinates. `None` means
@@ -41,7 +46,11 @@ const HISTORY: usize = 128;
 
 pub struct State {
     pub data: PathBuf,
-    pub columns: PathBuf,
+    /// The map on disk: every chunk, every remembered version, and what each
+    /// person has seen. What `world` holds is this, read at start.
+    pub store: Arc<Store>,
+    /// What each person remembers of the map, and who shares it with whom.
+    pub memory: Arc<Memory>,
     pub world: RwLock<World>,
     /// Reloaded like the world is. A palette can arrive long after start-up —
     /// an admin's client sends one when the server cannot build its own — and
@@ -67,12 +76,9 @@ pub struct State {
     pub rules: Rules,
     /// The palette file's own timestamp.
     pub painted: Mutex<Option<SystemTime>>,
-    /// The regions directory's own timestamp, which is the cheap gate. The mod
-    /// writes a region beside itself and renames it into place — it must, or a
-    /// reader would see half a file — and both of those touch the directory.
-    pub seen: Mutex<Option<SystemTime>>,
-    /// When each region was last written. The mod only writes a region that
-    /// changed, so a timestamp is the whole signal; there is nothing to hash.
+    /// When the ground in each region last changed, read from the database and
+    /// moved as terrain arrives. What decides whether the stored zoom levels
+    /// above a region are behind it.
     pub regions: Mutex<HashMap<(i32, i32), SystemTime>>,
     /// Bumped whenever the world actually changes. The viewer watches this and
     /// it versions tile URLs, which is what gets a new map past the browser cache.
@@ -89,7 +95,11 @@ pub struct State {
     /// Level 0 tiles whose levels above are out of date. Drained by the builder,
     /// so many changes in one window cost one rebuild rather than many.
     pub stale: Mutex<HashSet<(i32, i32)>>,
+    /// Level 0 tiles that changed and no browser has been told of yet.
+    unannounced: Mutex<HashSet<At>>,
     pub cache: Mutex<Cache>,
+    /// Every browser waiting to be told of a change. See [`crate::events`].
+    pub events: Events,
 }
 
 impl State {
@@ -97,42 +107,72 @@ impl State {
     pub fn load(data: &Path, palette: Palette, cache_bytes: usize, rules: Rules) -> Result<Self> {
         let columns = columns_dir(data);
 
-        // A snapshot is this service's own picture of memory, not a claim about
-        // what the region files currently hold — the two can disagree the moment
-        // a region changes between the snapshot being written and this start. So
-        // using one means starting `seen`/`regions` as though nothing has been
-        // read yet, which sends the very next watch tick over every region file
-        // that exists to reconcile `world` against them — `World::apply` merges a
-        // region in rather than duplicating it, so replaying every region here
-        // costs a tick's worth of reads and corrects any drift, never doubles
-        // anything up. Loading straight from the region files already leaves
-        // `seen`/`regions` at their current mtimes, because that walk just
-        // finished being exactly that reconciliation.
-        let (world, seen, regions) = match crate::snapshot::read(data) {
-            Some(world) => (world, None, HashMap::new()),
-            None => (World::load(data)?, files::modified(&columns), region_times(&columns)),
+        let store = Store::open(data)?;
+        let world = if store.is_empty()? {
+            // A database with nothing in it and region files beside it is a
+            // server upgraded from a build whose map lived in those files. They
+            // are read once, in full, and become the database; from then on the
+            // database is the map and the files are what the mod last wrote.
+            // Each region is dated by its file, so the zoom levels already built
+            // from it are not rebuilt for having been imported.
+            let world = World::load(data)?;
+            let times = region_times(&columns);
+            for (at, chunks) in by_region(&world) {
+                let arrived: Vec<Arrived> = chunks
+                    .into_iter()
+                    .map(|((cx, cz), chunk)| Arrived { cx, cz, season: chunk.season(), record: chunk.record() })
+                    .collect();
+                let dated = times.get(&at).copied().unwrap_or_else(SystemTime::now);
+                store.put_chunks(world.edge, &arrived, dated)?;
+            }
+            if !world.is_empty() {
+                say!(
+                    "imported {} chunks from the region files into {}",
+                    world.chunks.len(),
+                    store::path_in(data).display()
+                );
+            }
+            world
+        } else {
+            let edge = store.edge()?;
+            let mut chunks = HashMap::new();
+            for held in store.chunks()? {
+                if let Some(chunk) = Chunk::from_record(&held.record, edge, held.season) {
+                    chunks.insert((held.cx, held.cz), chunk);
+                }
+            }
+            World::from_chunks(edge, chunks)
         };
+        let regions = store.region_times()?;
+        let store = Arc::new(store);
+        let memory = Arc::new(Memory::load(Arc::clone(&store)));
+        let preferences = Arc::new(Preferences::load(data));
+        for (uid, person) in preferences.all() {
+            memory.set_shares(&uid, person.share_map_with.iter().copied());
+        }
 
         Ok(Self {
+            store,
+            memory,
             world: RwLock::new(world),
             palette: RwLock::new(palette),
-            seen: Mutex::new(seen),
             regions: Mutex::new(regions),
             painted: Mutex::new(files::modified(&crate::palette::path_in(data))),
             live: Arc::new(Live::load(data)),
             sessions: Arc::new(Sessions::new()),
             pending: Arc::new(Pending::new()),
-            preferences: Arc::new(Preferences::load(data)),
+            preferences,
             names: RwLock::new(crate::watch::block_names(data).unwrap_or_default()),
             named: Mutex::new(files::modified(&crate::watch::names_path(data))),
             rules,
             generation: AtomicU64::new(1),
             history: Mutex::new(VecDeque::new()),
             stale: Mutex::new(HashSet::new()),
+            unannounced: Mutex::new(HashSet::new()),
             cache: Mutex::new(Cache::new(cache_bytes)),
+            events: Events::default(),
             sea_level: std::sync::atomic::AtomicI32::new(crate::facts::read(data).sea_level),
             data: data.to_path_buf(),
-            columns,
         })
     }
 
@@ -145,6 +185,143 @@ impl State {
     /// Takes the sea level again, for a world that has said it since start-up.
     pub fn resettle_sea_level(&self) {
         self.sea_level.store(crate::facts::read(&self.data).sea_level, Ordering::Relaxed);
+    }
+
+    /// Takes chunks that arrived, wherever from: into the database first and
+    /// then into the world, so that what is served is never ahead of what is
+    /// kept. Says what each did to the map, for whoever remembers the ground.
+    ///
+    /// The one door terrain comes in by. A record the mod pushed and a column
+    /// the puller fetched both pass through here, which is what makes the
+    /// database the map rather than one more copy of it.
+    pub fn take_chunks(&self, edge: usize, arrived: &[Arrived], at: SystemTime) -> Vec<Stored> {
+        if arrived.is_empty() {
+            return Vec::new();
+        }
+
+        let stored = match self.store.put_chunks(edge, arrived, at) {
+            Ok(stored) => stored,
+            Err(error) => {
+                warn!("could not store {} chunks: {error}", arrived.len());
+                return Vec::new();
+            }
+        };
+
+        if let Ok(mut world) = self.world.write() {
+            for chunk in arrived {
+                if let Some(read) = Chunk::from_record(&chunk.record, edge, chunk.season) {
+                    world.apply_one(chunk.cx, chunk.cz, edge, read);
+                }
+            }
+        }
+
+        if let Ok(mut regions) = self.regions.lock() {
+            for one in stored.iter().filter(|one| one.surface_moved()) {
+                regions.insert(store::region_of(one.cx, one.cz), at);
+            }
+        }
+        stored
+    }
+
+    /// Moves a chunk's season: the year turning under ground that has not.
+    /// Says whether anything moved, which is whether the tile wants drawing.
+    pub fn take_season(&self, cx: i32, cz: i32, season: u8) -> bool {
+        match self.store.set_season(cx, cz, season) {
+            Ok(false) => return false,
+            Ok(true) => {}
+            Err(error) => {
+                warn!("could not move the season of ({cx}, {cz}): {error}");
+                return false;
+            }
+        }
+        if let Ok(mut world) = self.world.write()
+            && let Some(chunk) = world.chunks.get_mut(&(cx, cz))
+        {
+            chunk.set_season(season);
+        }
+        true
+    }
+
+    /// Says that the ground in these tiles has changed, so that a browser is
+    /// told at once and the levels above are rebuilt on their own beat.
+    ///
+    /// A region is a level 0 tile, and slope shading reads the column to the
+    /// west and north of each pixel — so a region drawn also changes the western
+    /// edge of the tile east of it and the northern edge of the tile below.
+    ///
+    /// Level 0 is forgotten here and now, so the next request for it draws the
+    /// world as it is — and announced on the next beat of [`announce`](Self::announce),
+    /// so that ground arriving a few chunks at a time costs a browser one
+    /// repaint of a tile per beat rather than one per arrival. The levels above
+    /// are announced by the builder when it has made them, so a viewer is never
+    /// sent a coarse tile that is older than the fine one under it.
+    pub fn tiles_changed(&self, regions: impl IntoIterator<Item = (i32, i32)>) {
+        let mut repaint: Vec<(i32, i32)> =
+            regions.into_iter().flat_map(|(rx, rz)| [(rx, rz), (rx + 1, rz), (rx, rz + 1)]).collect();
+        repaint.sort_unstable();
+        repaint.dedup();
+        if repaint.is_empty() {
+            return;
+        }
+
+        let finest: Vec<At> = repaint.iter().map(|&(x, z)| (0, x, z)).collect();
+        self.drop_tiles(&finest);
+        self.mark_stale(repaint);
+        if let Ok(mut unannounced) = self.unannounced.lock() {
+            unannounced.extend(finest);
+        }
+    }
+
+    /// Tells every browser which level 0 tiles have changed since it last
+    /// said so — once per beat, however many arrivals the beat held. Nothing
+    /// is said on a beat where nothing moved, so the map's clock never turns
+    /// for nothing.
+    pub fn announce(&self) {
+        let changed: Vec<At> = {
+            let Ok(mut unannounced) = self.unannounced.lock() else { return };
+            if unannounced.is_empty() {
+                return;
+            }
+            let mut changed: Vec<At> = unannounced.drain().collect();
+            changed.sort_unstable();
+            changed
+        };
+        self.bump(Some(changed));
+    }
+
+    /// The same, for chunks that were just stored — and everybody who was not
+    /// there keeps the version they last saw.
+    pub fn terrain_changed(&self, stored: &[Stored]) {
+        self.tiles_changed(stored.iter().map(|one| store::region_of(one.cx, one.cz)));
+        // Filed under a beat of its own, with nothing in the map's own history
+        // for it: the tiles that moved for everybody were announced above, and
+        // this is what moved for each person alone.
+        for (uid, regions) in self.memory.changed(stored, || self.bump(Some(Vec::new()))) {
+            self.drop_remembered(&uid, &regions);
+        }
+    }
+
+    /// Takes what one person has set for themselves, and what follows from it:
+    /// whom their map is shared with is read from here by everything that draws
+    /// one, so it moves the moment the setting does.
+    pub fn keep_person(&self, uid: &str, person: crate::preferences::Person) -> bool {
+        let shares: Vec<i32> = person.share_map_with.clone();
+        if !self.preferences.set(uid, person) {
+            return false;
+        }
+        self.memory.set_shares(uid, shares);
+        true
+    }
+
+    /// Takes where somebody is standing: everything within `radius` chunks is
+    /// theirs to see, now and from now on.
+    pub fn seen_from(&self, uid: &str, x: i32, z: i32, radius: i32) {
+        let edge = self.chunk_edge().max(1) as i32;
+        let (cx, cz) = (x.div_euclid(edge), z.div_euclid(edge));
+        let sight: Vec<(i32, i32)> = crate::columns::disc_of((cx, cz), radius).collect();
+        if let Some(regions) = self.memory.saw(uid, &sight, || self.bump(Some(Vec::new()))) {
+            self.drop_remembered(uid, &regions);
+        }
     }
 
     pub fn generation(&self) -> u64 {
@@ -160,6 +337,7 @@ impl State {
                 history.pop_front();
             }
         }
+        self.events.map_changed();
         generation
     }
 
@@ -222,17 +400,17 @@ impl State {
     }
 
     /// One tile as PNG bytes, drawn or read as its level requires.
-    pub fn tile(&self, at: At) -> Result<Vec<u8>> {
+    pub fn tile(&self, at: At) -> Result<Arc<[u8]>> {
         if let Ok(mut cache) = self.cache.lock()
-            && let Some(bytes) = cache.get(&at)
+            && let Some(bytes) = cache.get("", &at)
         {
             return Ok(bytes);
         }
 
-        let bytes = if at.0 == 0 { self.finest(at.1, at.2)? } else { self.stored(at)? };
+        let bytes: Arc<[u8]> = if at.0 == 0 { self.finest(at.1, at.2)? } else { self.stored(at)? }.into();
 
         if let Ok(mut cache) = self.cache.lock() {
-            cache.insert(at, bytes.clone());
+            cache.insert(String::new(), at, Arc::clone(&bytes));
         }
         Ok(bytes)
     }
@@ -273,11 +451,16 @@ impl State {
     /// Never made on demand: a coarse tile is four of the level below, so making
     /// one here would make every tile beneath it — a thousand renders for a level
     /// five, while somebody waits.
+    ///
+    /// Served as the bytes on disk. The builder encoded the tile when it wrote
+    /// it, and decoding a picture only to encode the same picture again was,
+    /// for a while, most of what a request cost.
     fn stored(&self, (level, tx, tz): At) -> Result<Vec<u8>> {
-        let image = pyramid::read(&self.data, level, tx, tz).ok_or_else(|| {
-            Error::Empty(format!("level {level} tile ({tx}, {tz}) is not built yet"))
-        })?;
-        pyramid::encode(&image)
+        let path = pyramid::path(&self.data, level, tx, tz);
+        std::fs::read(&path).map_err(|error| match error.kind() {
+            std::io::ErrorKind::NotFound => Error::Empty(format!("level {level} tile ({tx}, {tz}) is not built yet")),
+            _ => Error::io(format!("reading {}", path.display()), error),
+        })
     }
 
     /// One level 0 tile as an image, or nothing where the world has no chunks.
@@ -324,7 +507,9 @@ impl State {
             return;
         };
 
-        let mut repainted: Vec<At> = changed.iter().map(|&(x, z)| (0, x, z)).collect();
+        // The level 0 tiles were announced when the ground arrived; what is
+        // announced here is only the levels this built.
+        let mut repainted: Vec<At> = Vec::new();
 
         for level in 1..=levels {
             let parents: HashSet<(i32, i32)> =
@@ -359,9 +544,6 @@ impl State {
             pyramid::record_palette(&self.data, &palette.fingerprint);
         }
 
-        // One announcement for the whole export: the level 0 tiles the watcher
-        // reloaded are in this list too, so a viewer fetches each changed tile
-        // once rather than once per level of the pyramid that touched it.
         let generation = self.bump(Some(repainted.clone()));
         say!("{} tiles rebuilt across {levels} levels (generation {generation})", repainted.len());
     }
@@ -390,8 +572,18 @@ impl State {
     }
 }
 
-/// When each region on disk was last written.
-pub fn region_times(dir: &Path) -> HashMap<(i32, i32), SystemTime> {
+/// A world's chunks gathered by the region each sits in.
+fn by_region(world: &World) -> HashMap<(i32, i32), Vec<((i32, i32), &Chunk)>> {
+    let mut grouped: HashMap<(i32, i32), Vec<((i32, i32), &Chunk)>> = HashMap::new();
+    for (&at, chunk) in &world.chunks {
+        grouped.entry(store::region_of(at.0, at.1)).or_default().push((at, chunk));
+    }
+    grouped
+}
+
+/// When each region file on disk was last written. Read once, on the start
+/// that imports them.
+fn region_times(dir: &Path) -> HashMap<(i32, i32), SystemTime> {
     let Ok(paths) = crate::columns::region_files(dir) else {
         return HashMap::new();
     };
@@ -400,4 +592,124 @@ pub fn region_times(dir: &Path) -> HashMap<(i32, i32), SystemTime> {
         .into_iter()
         .filter_map(|path| Some((crate::columns::region_coords(&path)?, files::modified(&path)?)))
         .collect()
+}
+
+/// What a test needs to stand a map up: a palette with a colour in it, and
+/// rules that say nothing surprising. Shared between the modules that build a
+/// `State`, so a rule added is a rule every one of them gets.
+#[cfg(test)]
+pub mod testing {
+    use super::*;
+
+    /// Writes a palette naming block 11 grey and block 22 red, and loads it.
+    pub fn palette_in(at: &Path) -> Palette {
+        std::fs::write(
+            crate::palette::path_in(at),
+            r##"{"Version":1,"GameVersion":"1.22.7","Source":"client","Fingerprint":"abc",
+                "Blocks":{"game:air":{"Id":0,"Rgb":null,"Invisible":true},
+                          "game:rock":{"Id":11,"Rgb":"#646464"},
+                          "game:brick":{"Id":22,"Rgb":"#c02020"}}}"##,
+        )
+        .expect("a palette");
+        Palette::load(at).expect("it parses")
+    }
+
+    pub fn rules(private_map: bool) -> Rules {
+        Rules {
+            markers_public: false,
+            markers_editable: false,
+            players_public: true,
+            live_refresh_ms: 2000,
+            private_map,
+            anonymous_spawn: false,
+            anonymous_spawn_radius_chunks: 8,
+            sight_radius_chunks: 0,
+        }
+    }
+
+    /// A map of this build's chunk edge, read from a fresh scratch directory.
+    pub fn state_in(at: &Path, private_map: bool) -> State {
+        State::load(at, palette_in(at), 1 << 20, rules(private_map)).expect("a start")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::testing::{palette_in, rules};
+    use super::*;
+    use crate::files::testing::Scratch;
+
+    /// The upgrade path: a server whose map lived in region files starts this
+    /// build, and the files become the database. The next start reads the
+    /// database alone, so the files may go.
+    #[test]
+    fn region_files_are_imported_once_and_the_database_is_the_map_after() {
+        let held = Scratch::new("state-import");
+        let at = held.at();
+        let columns = columns_dir(at);
+        std::fs::create_dir_all(&columns).unwrap();
+        std::fs::write(
+            columns.join("r.2.-3.msqr"),
+            crate::columns::testing::filed((2, -3), 4, &[(0, 7, 11), (17, 9, 11)], None),
+        )
+        .unwrap();
+
+        let first = State::load(at, palette_in(at), 1 << 20, rules(false)).expect("a first start");
+        assert_eq!(first.chunks(), 2, "both chunks came in off the file");
+        assert_eq!(first.store.counts().unwrap().chunks, 2, "and into the database");
+        drop(first);
+
+        // The files go, and the map is still there.
+        std::fs::remove_dir_all(&columns).unwrap();
+        let second = State::load(at, palette_in(at), 1 << 20, rules(false)).expect("a second start");
+        assert_eq!(second.chunks(), 2);
+        assert_eq!(second.chunk_edge(), 4);
+        let world = second.world.read().unwrap();
+        assert_eq!(world.column_at(32 * 4, -48 * 4).map(|c| (c.block, c.season)), Some((11, 7)));
+        assert_eq!(world.column_at(33 * 4, -47 * 4).map(|c| c.season), Some(9), "the season came back too");
+    }
+
+    /// The door every chunk comes in by: what is stored is what is served, and a
+    /// chunk that arrives again unchanged is reported as unchanged.
+    #[test]
+    fn a_chunk_taken_is_in_the_database_and_the_world_alike() {
+        let held = Scratch::new("state-take");
+        let at = held.at();
+        let state = State::load(at, palette_in(at), 1 << 20, rules(false)).expect("an empty start");
+
+        let record = Chunk::filled_with(crate::columns::Column { block: 11, height: 3, temperature: 1, rainfall: 2, season: 5 }, 4).record();
+        let stored = state.take_chunks(2, &[Arrived { cx: 1, cz: 1, season: 5, record: record.clone() }], SystemTime::now());
+        assert_eq!(stored.len(), 1);
+        assert!(stored[0].surface_moved());
+        assert_eq!(state.chunks(), 1);
+        assert_eq!(state.store.counts().unwrap().chunks, 1);
+
+        let again = state.take_chunks(2, &[Arrived { cx: 1, cz: 1, season: 5, record }], SystemTime::now());
+        assert!(!again[0].surface_moved(), "the same bytes are not a change");
+    }
+
+    /// Ground arriving in several pieces is one announcement, on the beat.
+    #[test]
+    fn changed_tiles_are_announced_once_per_beat() {
+        let held = Scratch::new("state-announce");
+        let at = held.at();
+        let state = State::load(at, palette_in(at), 1 << 20, rules(false)).expect("an empty start");
+        let before = state.generation();
+
+        state.tiles_changed([(0, 0)]);
+        state.tiles_changed([(0, 0)]);
+        state.tiles_changed([(3, 3)]);
+        assert_eq!(state.generation(), before, "nothing is said until the beat");
+
+        state.announce();
+        assert_eq!(state.generation(), before + 1, "three arrivals, one announcement");
+        let mut told = state.changes_since(before).expect("within what is remembered");
+        told.sort_unstable();
+        let mut expected = vec![(0, 0, 0), (0, 1, 0), (0, 0, 1), (0, 3, 3), (0, 4, 3), (0, 3, 4)];
+        expected.sort_unstable();
+        assert_eq!(told, expected, "each region, and the two tiles its shading reaches into");
+
+        state.announce();
+        assert_eq!(state.generation(), before + 1, "a quiet beat says nothing");
+    }
 }

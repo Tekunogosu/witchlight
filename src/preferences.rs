@@ -73,6 +73,13 @@ pub struct Person {
     /// to open on where they are standing wants it wherever they open it.
     #[serde(default)]
     pub follow_self: bool,
+
+    /// Which groups this person shares their map with, by the id the game
+    /// gives each group. Off for every group until they say otherwise: what
+    /// somebody has explored is theirs, and a group is a thing the game let
+    /// them be put in.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub share_map_with: Vec<i32>,
 }
 
 impl Person {
@@ -126,6 +133,16 @@ impl Preferences {
             .unwrap_or_default();
 
         Self { held: Mutex::new(held), path }
+    }
+
+    /// Everybody who has set anything, for a start that has to know who shares
+    /// with whom before the first request arrives.
+    #[must_use]
+    pub fn all(&self) -> Vec<(String, Person)> {
+        self.held
+            .lock()
+            .map(|held| held.iter().map(|(uid, person)| (uid.clone(), person.clone())).collect())
+            .unwrap_or_default()
     }
 
     /// What one person has set. Everybody has an answer, whether or not they
@@ -203,6 +220,7 @@ mod tests {
             private_by_default: Some(true),
             presets_by_default: true,
             follow_self: true,
+            share_map_with: Vec::new(),
         }
     }
 

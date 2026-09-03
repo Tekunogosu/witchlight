@@ -359,6 +359,15 @@
        standing wants that wherever they open it. -->
   <label class="line"><input id="want-follow" type="checkbox">Follow my player when I sign in</label>
   <p id="want-said" class="note"></p>
+  <!-- Whose map yours is. Under a private map what you have explored is yours
+       alone until you hand it to a group, one box per group the game has you
+       in. Drawn from what the service says about who is looking, so a player
+       in no group sees no boxes rather than an empty heading. -->
+  <div id="share-map" hidden>
+    <h3>Share my map with</h3>
+    <div id="share-groups"></div>
+    <p class="note">Everyone in a ticked group sees what you have explored, as you last saw it. Sharing is one way: tick a group to give, not to get.</p>
+  </div>
   <p id="profile-said"></p>
   <div class="deed">
     <a id="sign-out" href="/logout">Sign out</a>

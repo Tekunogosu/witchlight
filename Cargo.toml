@@ -1,6 +1,6 @@
 [package]
 name = "witchlight"
-version = "0.41.1"
+version = "0.43.0"
 edition = "2024"
 description = "Renders and serves a browsable map from Vintage Story world exports"
 license = "MIT"
@@ -19,6 +19,10 @@ ureq = { version = "3.4.0", default-features = false }
 toml = "1.1.4"
 dirs = "6.0.0"
 getrandom = "0.4.3"
+# The map's own database. `bundled` compiles SQLite into the binary, so the mod
+# still ships one self-contained executable and nothing on the machine has to
+# provide a library.
+rusqlite = { version = "0.40.2", features = ["bundled"] }
 
 [profile.release]
 opt-level = 3

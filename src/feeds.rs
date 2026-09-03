@@ -9,7 +9,8 @@ use std::collections::HashMap;
 use crate::facts;
 use crate::palette::Palette;
 use crate::pyramid::TILE;
-use crate::render::{Renderer, Surface};
+use crate::render::Surface;
+use crate::scope::Scope;
 use crate::state::State;
 use crate::urls::is_stored_name;
 
@@ -20,8 +21,8 @@ const MOST_BLOCKS_FOUND: usize = 24;
 impl State {
     /// The state of the map, and — when the caller says which generation it last
     /// drew — which tiles it needs to fetch again.
-    pub fn info(&self, since: Option<u64>) -> String {
-        let (min_x, min_z, max_x, max_z) = self.bounds();
+    pub fn info(&self, scope: &Scope, since: Option<u64>) -> String {
+        let (min_x, min_z, max_x, max_z) = self.bounds_for(scope);
         let facts = facts::read(&self.data);
         let mut body = serde_json::json!({
             "minX": min_x, "minZ": min_z, "maxX": max_x, "maxZ": max_z,
@@ -29,14 +30,14 @@ impl State {
             "spawnX": facts.spawn_x, "spawnZ": facts.spawn_z,
             "chunk": self.chunk_edge(),
             "levels": self.levels(),
-            "chunks": self.chunks(),
+            "chunks": self.chunks_for(scope),
             "generation": self.generation(),
         });
 
         // Without a `since` there is nothing to be behind on, so nothing is said
         // about tiles and a first-time viewer draws whatever it needs.
         if let Some(since) = since {
-            match self.changes_since(since) {
+            match self.changes_for(scope, since) {
                 Some(tiles) => body["tiles"] = serde_json::json!(tiles),
                 None => body["all"] = serde_json::json!(true),
             }
@@ -61,6 +62,17 @@ impl State {
             "MarkersPublic": self.rules.markers_public,
             "PublicMarkersEditable": self.rules.markers_editable,
             "PlayersPublic": self.rules.players_public,
+            "PrivateMap": self.rules.private_map,
+            "AnonymousSpawn": self.rules.anonymous_spawn,
+            // The groups this person is in, for the settings form to offer
+            // sharing with. Empty for a stranger, who is in nobody's.
+            "Groups": who
+                .as_ref()
+                .map(|who| self.memory.groups_of(&who.uid))
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(id, name)| serde_json::json!({ "Id": id, "Name": name }))
+                .collect::<Vec<_>>(),
             "Waiting": self.pending.waiting(),
         })
         .to_string()
@@ -136,15 +148,15 @@ impl State {
     ///
     /// The same reading the renderer made for that pixel, so the map never names
     /// a block it did not draw. `None` while the map is between hands.
-    pub fn block(&self, x: i32, z: i32) -> Option<String> {
-        let (Ok(world), Ok(palette)) = (self.world.read(), self.palette.read()) else {
+    pub fn block(&self, scope: &Scope, x: i32, z: i32) -> Option<String> {
+        let surface = self.surface_for(scope, x, z)?;
+        let Ok(palette) = self.palette.read() else {
             return None;
         };
         let Ok(names) = self.names.read() else {
             return None;
         };
 
-        let surface = Renderer::new(&world, &palette, self.sea_level()).surface_at(x, z);
         // Every field is a number, a fixed word, or a block code out of the
         // palette, so there is nothing here that can refuse to be JSON.
         serde_json::to_string(&Block::read(x, z, surface, &palette, &names)).ok()

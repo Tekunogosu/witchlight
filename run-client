@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+#
+# The game client, on its own data path under .testbed/, connected straight to
+# the server ./run-server runs. Its saves, settings and mods are all its own, so
+# the client you actually play on is untouched.
+#
+#   ./run-client            connect to the testbed server
+#
+# The same witchlight archive the server runs is installed on this side on every
+# start — the mod carries both halves and decides which to run.
+#
+# Override where the game is with CLIENT_DIR; the default is this machine's.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+data="$here/.testbed/client"
+client_dir="${CLIENT_DIR:-$HOME/.local/share/vintagestory}"
+port=42420
+
+mkdir -p "$data/Mods"
+if [ -f "$here/.testbed/server/Mods/witchlight.zip" ]; then
+    cp "$here/.testbed/server/Mods/witchlight.zip" "$data/Mods/witchlight.zip"
+else
+    echo "run-client: no archive in the testbed yet — start ./run-server first" >&2
+    exit 1
+fi
+
+echo "run-client: data in $data, connecting to 127.0.0.1:$port"
+cd "$client_dir"
+exec "$client_dir/Vintagestory" --dataPath="$data" --connect "127.0.0.1:$port"

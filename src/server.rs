@@ -14,11 +14,9 @@ use std::sync::Arc;
 use tiny_http::Server;
 
 use crate::api::Api;
-use crate::config::Rules;
 use crate::error::{Error, Result};
 use crate::facts;
 use crate::net;
-use crate::palette::Palette;
 use crate::pyramid;
 use crate::routes;
 use crate::state::State;
@@ -34,29 +32,17 @@ const MAX_WORKERS: usize = 64;
 
 pub fn serve(
     bind: &str,
-    data: &Path,
-    palette: Palette,
+    state: Arc<State>,
     api: Api,
     threads: usize,
-    cache_mb: usize,
-    rules: Rules,
-    autosave_interval: std::time::Duration,
     backfill_radius_chunks: i32,
 ) -> Result<()> {
-    let state = Arc::new(State::load(data, palette, cache_mb.max(1) * 1024 * 1024, rules)?);
+    let data = state.data.as_path();
     let puller = Arc::new(crate::pull::Puller::new(data, backfill_radius_chunks));
 
     // The map is the product and live data is a garnish, so an API channel that
     // will not bind is said out loud and stepped over rather than taken as fatal.
-    if let Err(error) = crate::apiport::serve(
-        api,
-        Arc::clone(&state.live),
-        Arc::clone(&state.sessions),
-        Arc::clone(&state.pending),
-        Arc::clone(&state.preferences),
-        Arc::clone(&puller),
-        data,
-    ) {
+    if let Err(error) = crate::apiport::serve(api, Arc::clone(&state), data) {
         warn!(
             "{error} — nobody will show on the map. Set `api_bind` to an address \
              this machine has free."
@@ -79,9 +65,9 @@ pub fn serve(
 
     settle(&state, data);
     watch::start(&state);
-    start_autosave(&state, data, autosave_interval);
 
     start_frontier(&puller, &state);
+    start_collecting(&state);
     crate::pull::start(Arc::clone(&puller), Arc::clone(&state));
 
     let mut others = Vec::with_capacity(threads - 1);
@@ -114,6 +100,20 @@ const FRONTIER_EVERY: std::time::Duration = std::time::Duration::from_secs(5);
 /// answer twice.
 const NEAR_EVERY: std::time::Duration = std::time::Duration::from_secs(2);
 
+/// How far one player sees, in chunks: the operator's setting where one is
+/// set, else the view distance the game granted that player, else what the
+/// mod says the server loads for anybody. Zero where none of them is known
+/// yet, which is nothing recorded for them this beat.
+fn sight_of(state: &State, puller: &crate::pull::Puller, granted: i32) -> i32 {
+    if state.rules.sight_radius_chunks > 0 {
+        state.rules.sight_radius_chunks
+    } else if granted > 0 {
+        granted
+    } else {
+        puller.reach()
+    }
+}
+
 /// Starts the two clocks that keep the puller's frontier fed: a player's own
 /// position, fast and first, and the map's own edge, slow and behind it.
 fn start_frontier(puller: &Arc<crate::pull::Puller>, state: &Arc<State>) {
@@ -123,22 +123,31 @@ fn start_frontier(puller: &Arc<crate::pull::Puller>, state: &Arc<State>) {
         std::thread::spawn(move || {
             loop {
                 std::thread::sleep(NEAR_EVERY);
-                let positions = state.live.positions();
-                if positions.is_empty() {
+                let whereabouts = state.live.whereabouts();
+                if whereabouts.is_empty() {
                     continue;
                 }
 
-                let edge = state.world.read().map(|world| world.edge).unwrap_or(0).max(1) as i32;
-                let chunks: Vec<(i32, i32)> =
-                    positions.iter().map(|&(x, z)| (x.div_euclid(edge), z.div_euclid(edge))).collect();
+                // What each of them can see from there is theirs to remember,
+                // and where the map may ask the game for ground beside them.
+                let edge = state.chunk_edge().max(1) as i32;
+                let mut stood: Vec<((i32, i32), i32)> = Vec::with_capacity(whereabouts.len());
+                for at in &whereabouts {
+                    let reach = sight_of(&state, &puller, at.reach);
+                    if reach <= 0 {
+                        continue;
+                    }
+                    state.seen_from(&at.uid, at.x, at.z, reach);
+                    stood.push(((at.x.div_euclid(edge), at.z.div_euclid(edge)), reach));
+                }
+                puller.visit(stood.iter().copied());
 
-                puller.visit(chunks.iter().copied());
-                let held: std::collections::HashSet<(i32, i32)> = state
-                    .world
-                    .read()
-                    .map(|world| world.chunks.keys().copied().collect())
-                    .unwrap_or_default();
-                puller.seed_near(chunks, &held);
+                // Asked of the world in place rather than copied out of it: a
+                // set of everything held is a set as big as the map, twice a
+                // second, for a question the map answers in one lookup.
+                let Ok(world) = state.world.read() else { continue };
+                let held = |at: (i32, i32)| world.chunks.contains_key(&at);
+                puller.seed_near(stood.iter().map(|(chunk, _)| *chunk), &held);
             }
         });
     }
@@ -149,40 +158,24 @@ fn start_frontier(puller: &Arc<crate::pull::Puller>, state: &Arc<State>) {
         loop {
             std::thread::sleep(FRONTIER_EVERY);
             let Ok(world) = state.world.read() else { continue };
-            let held: std::collections::HashSet<(i32, i32)> = world.chunks.keys().copied().collect();
-            puller.seed_edge(held.iter().copied(), &held);
+            let held = |at: (i32, i32)| world.chunks.contains_key(&at);
+            puller.seed_edge(world.chunks.keys().copied(), &held);
         }
     });
 }
 
-/// Starts the clock that writes this service's own snapshot of the world.
-///
-/// Its own thread rather than folded into [`watch::start`]'s clocks: those read
-/// what changed on disk, and this writes what is held in memory, on a gap an
-/// operator sets rather than one this decides for them.
-fn start_autosave(state: &Arc<State>, data: &Path, every: std::time::Duration) {
+/// How often remembered chunk versions nothing points at are freed.
+const COLLECT_EVERY: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Starts the clock that frees what nobody remembers any more.
+fn start_collecting(state: &Arc<State>) {
     let state = Arc::clone(state);
-    let data = data.to_path_buf();
     std::thread::spawn(move || {
         loop {
-            std::thread::sleep(every);
-            autosave(&state, &data);
+            std::thread::sleep(COLLECT_EVERY);
+            state.memory.collect();
         }
     });
-}
-
-/// Writes the snapshot once. A world nobody has loaded anything into yet writes
-/// nothing — see [`crate::snapshot::write`] — so an idle server between mod
-/// exports does not spend this thread's beat on an empty file.
-fn autosave(state: &State, data: &Path) {
-    let Ok(world) = state.world.read() else {
-        return;
-    };
-
-    match crate::snapshot::write(data, &world) {
-        Ok(()) => {}
-        Err(error) => warn!("could not write the service snapshot: {error}"),
-    }
 }
 
 /// Reconciles the stored zoom levels with the world and the palette in hand, and
@@ -251,13 +244,52 @@ fn settle(state: &State, data: &Path) {
 /// Takes requests until the server stops. Every thread runs this, and `recv`
 /// hands each request to whichever is free — the whole reason a cold map no
 /// longer arrives one tile at a time.
-fn answer(server: &Server, state: &State) {
+fn answer(server: &Server, state: &Arc<State>) {
     while let Ok(mut request) = server.recv() {
+        // The one response that waits: handed a thread of its own, so that
+        // this one goes back to taking requests. See `crate::events`.
+        if crate::urls::path(request.url()) == "/events" {
+            let state = Arc::clone(state);
+            std::thread::spawn(move || wait_for_events(request, &state));
+            continue;
+        }
+
         let response = routes::route(&mut request, state);
         if let Err(error) = request.respond(response) {
             warn!("response failed: {error}");
         }
     }
+}
+
+/// Answers `/events`: waits until the map or the live feed has moved past
+/// what the page last saw, then says what moved. The whole wait is on the
+/// thread this was handed.
+fn wait_for_events(request: tiny_http::Request, state: &State) {
+    let url = request.url().to_owned();
+    let since = crate::urls::param(&url, "since").and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+    let live = crate::urls::param(&url, "live").and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+    let who = state.sessions.who(&crate::http::cookies(&request));
+    let uid = who.map(|who| who.uid);
+
+    let waited = state.events.wait(|| state.generation() > since || state.events.live_seq() > live);
+    let reply = match waited {
+        None => crate::http::text(503, "too many browsers waiting — ask on a clock instead"),
+        Some(_) => {
+            let scope = state.scope_for(uid.as_deref());
+            let generation = state.generation();
+            let live_now = state.events.live_seq();
+            // Only what moved is carried: the map's changes since the page's
+            // generation, and the feed where the feed moved. A page told the
+            // map moved forty times a second must not be sent forty copies of
+            // where everybody is standing.
+            let info = if generation > since { state.info(&scope, Some(since)) } else { "null".to_owned() };
+            let feed = if live_now > live { state.live.body(uid.as_deref()) } else { "null".to_owned() };
+            crate::http::json(&format!(
+                r#"{{"generation":{generation},"liveSeq":{live_now},"info":{info},"live":{feed}}}"#
+            ))
+        }
+    };
+    let _ = request.respond(reply);
 }
 
 /// How many threads take requests. Zero means decide here.

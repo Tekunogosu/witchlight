@@ -9,6 +9,78 @@ which is where that rule is kept rather than in anybody's memory.
 A version that moved for the other half says so and lists nothing, which is not an
 omission: it is what "one release" looks like from the side that did not change.
 
+## 0.43.0
+
+**Deploy note:** both halves, upgraded together; nothing is cleared. The map
+service's `visited-chunks.json` is read afresh in its new shape, so the
+background fill starts from wherever players stand after the restart rather
+than from everywhere they have ever been, which is the point of this release.
+
+**Sight is a disc, and it is each player's own.** Standing somewhere adds the
+ground within view distance as the crow flies, not the square around it, and
+that distance is the one the game granted that player rather than the server's
+`MaxChunkRadius` for everybody. With a 256-block view on a server that loads
+twelve chunks, that is about 200 chunks around a player instead of 625.
+`sight_radius_chunks` still overrides both; `backfill_radius_chunks` is now the
+fallback for a player whose view distance the mod has not said.
+
+**The map stops filling behind a player after an hour.** Where somebody stood
+is kept for an hour and then let go, so the ground beside a path walked this
+morning is no longer asked for tonight. What was drawn stays drawn.
+
+**The map never generates terrain.** Before asking the game to load a column,
+the service asks whether the savegame holds it, and a column that is not there
+is not asked for. Until now a column at the corner of the square, or between a
+player's view distance and the server's, was generated on the map's behalf —
+which was most of what the game server was doing while somebody stood still.
+
+**Browsers are told once a second.** Ground arriving a few chunks at a time
+used to be an announcement per arrival, four a second while filling in, each
+of which had a browser fetch the same half-megabyte tile again. Level 0
+changes are now announced on a one-second beat.
+
+**Tiles cost less to serve.** A stored level is served as the bytes on disk
+rather than decoded and encoded again per request; every encode uses the
+fastest deflate level, which on shaded terrain is within three percent of the
+slowest for half the time; a cache hit hands out the bytes it holds instead of
+a copy. A chunk in memory is six bytes a column rather than eight.
+
+## 0.42.0
+
+**Deploy note:** both halves, upgraded together. **The map is kept**: a service
+starting with an empty database and region files beside it reads them once,
+whole, into `map.sqlite` and says so; `columns/` may be deleted afterwards. The
+whole-world snapshot and its `autosave_interval_ms` are gone with it. **Behaviour
+changes on upgrade:** `private_map` is on by default — see below — and the
+page's fallback clock `live_refresh_ms` defaults to one second.
+
+**The map lives in a database.** One SQLite file, compiled into the binary,
+holding every chunk, every version of a chunk somebody still remembers, and
+what each person has seen. A chunk is written when it changes and never
+otherwise, in place; the snapshot that rewrote the whole world every fifteen
+minutes is gone. See `src/store.rs`.
+
+**A map per person.** Under `private_map`, each reader is shown what they have
+been near, and ground that changed while they were away as they remember it,
+until they go back. Old versions are shared by content, so twenty people who
+remember the same old spawn share one kilobyte, and freed once nobody points at
+them. Sharing is per group, one checkbox each in a person's own settings on the
+page, and one way. The ground around spawn is everybody's, a stranger's
+included, as far as `anonymous_spawn_radius_chunks` reaches; `sight_radius_chunks`
+is how far standing somewhere reaches, and zero is the game's own radius. See
+`src/memory.rs` and `src/scope.rs`.
+
+**Told, not asked.** The page waits on `/events` and is answered the moment the
+map or the live feed moves — a long poll, since the server library's chunked
+writer cannot be flushed per event. A change reaches the screen within a round
+trip rather than within the next tick of a two-second clock, and the finest
+tiles are announced the moment ground arrives rather than when the levels above
+have been rebuilt. The two clocks stay as the fallback. See `src/events.rs`.
+
+**Terrain arrives on the API channel** — `POST /terrain`, deflated records,
+season-only entries where only the year moved — and is announced to every
+browser at once. The pull remains for ground nobody has exported yet.
+
 ## 0.41.1
 
 **Deploy note:** both halves, upgraded together. Nothing is cleared — a map part

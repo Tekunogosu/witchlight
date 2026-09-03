@@ -1,13 +1,16 @@
 // Asking the service what has changed, and starting the page.
 //
-// Three clocks: markers and players on the beat the operator set, terrain every
-// two seconds, and the things that only change when a mod set does asked once at
-// load.
+// The service is asked once and then told: `/events` is a request the service
+// holds until the map or the live feed has moved past what this page last saw,
+// and answers with exactly what a poll of each would have — see the service's
+// `events.rs`. The page asks again the moment it is answered, so a change
+// reaches the screen within a round trip of arriving at the service.
 //
-// Terrain used to be asked for every five. Nothing about the question is
-// expensive — `?since=` answers with the tiles that moved and usually with none
-// — and five seconds of it sat on top of every other wait between a player
-// walking into new ground and seeing it drawn.
+// Two clocks stay as the fallback: markers and players on the beat the operator
+// set, terrain every two seconds. They run only while the waiting request is
+// not, which is a proxy that will not hold a request open, or a service that has
+// too many browsers waiting already. The things that only change when a mod set
+// does are asked once at load.
 
 /**
  * How long to leave between asking where everybody is.
@@ -50,8 +53,18 @@ async function pollColours() {
 
 /** Players move constantly; markers rarely. Both are cheap to fetch. */
 async function pollLive() {
+  if (pushed) return;
   try {
     const live = await (await fetch('/live.json')).json();
+    await takeLive(live);
+  } catch (error) {
+    /* the service may be restarting */
+  }
+}
+
+/** Takes one reading of the live feed, however it arrived. */
+async function takeLive(live) {
+  try {
     players = live.Players || [];
     // How many are on, and who of them is in a group with whoever is asking.
     // Both are worked out by the mod and passed through per viewer, because a
@@ -118,9 +131,19 @@ async function pollLive() {
  * square instead of the map.
  */
 async function pollWorld() {
+  if (pushed && generation !== 0) return;
   try {
     const query = generation === 0 ? '' : `?since=${generation}`;
     const info = await (await fetch(`/info.json${query}`, { cache: 'no-store' })).json();
+    takeInfo(info);
+  } catch (error) {
+    /* the service may be restarting; try again next time */
+  }
+}
+
+/** Takes one reading of where the map stands, however it arrived. */
+function takeInfo(info) {
+  try {
     if (info.generation === generation) return;
 
     const grew = terrain === null
@@ -156,7 +179,46 @@ async function pollWorld() {
     started(ask(), 'looking up the block under the pointer');
     say();
   } catch (error) {
-    /* the service may be restarting; try again next time */
+    /* a reading the page could not take is one the next will replace */
+  }
+}
+
+/**
+ * Whether the service is telling this page of changes as they happen, which is
+ * what lets the two clocks below stand down.
+ */
+let pushed = false;
+
+/** The live feed's own clock, as the service numbers it. */
+let liveSeq = 0;
+
+/**
+ * Waits on the service for the next change, takes it, and waits again.
+ *
+ * Nothing is asked while the map's first reading is still on its way: the wait
+ * says what changed since a generation, and until there is one there is
+ * nothing to be since. A refusal — too many browsers waiting, or a proxy that
+ * would not hold the request — leaves the clocks running and tries again
+ * later, so a page never goes quiet for want of this.
+ */
+async function pushLoop() {
+  for (;;) {
+    if (generation === 0) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+      continue;
+    }
+    try {
+      const answer = await fetch(`/events?since=${generation}&live=${liveSeq}`, { cache: 'no-store' });
+      if (!answer.ok) throw new Error(String(answer.status));
+      const moved = await answer.json();
+      pushed = true;
+      liveSeq = Number.isFinite(moved.liveSeq) ? moved.liveSeq : liveSeq;
+      if (moved.info) takeInfo(moved.info);
+      if (moved.live) await takeLive(moved.live);
+    } catch (error) {
+      pushed = false;
+      await new Promise(resolve => setTimeout(resolve, 5000));
+    }
   }
 }
 
@@ -184,3 +246,4 @@ beat(pollLive, LIVE_BEAT, 'the live poll');
 beat(watchMine, 15000, 'what this person has set');
 beat(pollWorld, 2000, 'the terrain poll');
 started(pollWorld().then(pollIcons).then(pollColours).then(pollLive), 'the first poll');
+started(pushLoop(), 'waiting on the service for changes');

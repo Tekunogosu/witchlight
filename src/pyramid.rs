@@ -151,14 +151,17 @@ pub fn write(exports: &Path, level: u32, x: i32, z: i32, image: &RgbImage) -> Re
         .map_err(|error| Error::io(format!("writing {}", target.display()), error))
 }
 
-/// Encodes one tile, losslessly and without filtering.
+/// Encodes one tile, losslessly, without filtering and at the fastest level.
 ///
-/// The filtering is the whole point. PNG normally predicts each pixel from its
-/// neighbours and stores the difference, which is a large win on smooth images
-/// and a loss on this one: a tile is one block per pixel, each block a slightly
-/// different shade, so the differences are noisier than the values. Measured
-/// across the levels, turning filtering off is between 13 and 66 percent smaller
-/// than leaving it adaptive, and beats lossless WebP everywhere.
+/// PNG normally predicts each pixel from its neighbours and stores the
+/// difference, which is a large win on smooth images and none on this one: a
+/// tile is one block per pixel, each block its own shade under its own slope,
+/// so the differences are as noisy as the values. Measured on shaded terrain,
+/// a tile is about seventy percent of its raw size whatever is chosen: the
+/// best filter recovers six percent, and the slowest deflate level recovers
+/// under three percent over the fastest for twice the time. Level 0 is drawn
+/// and encoded on demand, so the time is the whole cost and the bytes are not
+/// worth it.
 ///
 /// Nothing here can discard colour. A tile is continuous tone — slope shading
 /// over climate tinting gives thousands of shades to a square of terrain — so an
@@ -166,7 +169,7 @@ pub fn write(exports: &Path, level: u32, x: i32, z: i32, image: &RgbImage) -> Re
 /// are the rare ones: ore, water edges, anything small.
 pub fn encode(image: &RgbImage) -> Result<Vec<u8>> {
     let mut encoded = Vec::new();
-    PngEncoder::new_with_quality(&mut encoded, CompressionType::Best, FilterType::NoFilter)
+    PngEncoder::new_with_quality(&mut encoded, CompressionType::Fast, FilterType::NoFilter)
         .write_image(
             image.as_raw(),
             image.width(),

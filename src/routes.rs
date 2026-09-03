@@ -47,11 +47,18 @@ pub fn route(request: &mut Request, state: &State) -> Reply {
         }
         "/colors.json" => http::json(&state.live.colors()),
         "/icons.json" => http::json(&state.icons()),
-        "/info.json" => http::json(&state.info(urls::since_of(&url))),
+        "/info.json" => {
+            let who = state.sessions.who(&http::cookies(request));
+            let scope = state.scope_for(who.as_ref().map(|who| who.uid.as_str()));
+            http::json(&state.info(&scope, urls::since_of(&url)))
+        }
         "/blocks.json" => {
             http::json(&state.blocks_like(&urls::decoded(urls::param(&url, "q").unwrap_or_default())))
         }
-        "/block.json" => match urls::block_asked(&url).map(|(x, z)| state.block(x, z)) {
+        "/block.json" => match urls::block_asked(&url).map(|(x, z)| {
+            let who = state.sessions.who(&http::cookies(request));
+            state.block(&state.scope_for(who.as_ref().map(|who| who.uid.as_str())), x, z)
+        }) {
             Some(Some(body)) => http::json(&body),
             Some(None) => http::text(503, "the map is being reloaded"),
             None => http::text(400, "name the block with ?x= and ?z="),
@@ -125,8 +132,14 @@ fn stored(request: &mut Request, state: &State, path: &str) -> Reply {
     }
 
     if let Some(at) = urls::tile_coords(path) {
-        return match state.tile(at) {
-            Ok(bytes) => http::tile(&bytes),
+        // Whose tile this is depends on who is asking, and a tile drawn for one
+        // person is marked private so that nothing between here and their
+        // browser hands it to anybody else.
+        let who = state.sessions.who(&http::cookies(request));
+        let scope = state.scope_for(who.as_ref().map(|who| who.uid.as_str()));
+        return match state.tile_for(&scope, at) {
+            Ok(bytes) if scope.is_whole() => http::tile(&bytes),
+            Ok(bytes) => http::private_tile(&bytes),
             // A tile nobody has built is missing, not broken. Saying so lets a
             // viewer draw around it rather than treat the map as failing, and
             // keeps a real failure worth noticing.
@@ -348,7 +361,7 @@ fn preferences(request: &mut Request, state: &State) -> Reply {
             let Ok(person) = serde_json::from_str::<Person>(&body) else {
                 return http::text(400, "expected presets and defaults");
             };
-            if state.preferences.set(&who.uid, person) {
+            if state.keep_person(&who.uid, person) {
                 http::json(&kept(state, &who.uid))
             } else {
                 http::text(500, "those could not be kept")

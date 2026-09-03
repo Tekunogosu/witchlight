@@ -1,28 +1,26 @@
 //! Noticing that the mod has written something.
 //!
-//! One thread, on one clock. This used to run on every request, which was a
-//! filesystem check per tile and — with more than one thread taking requests —
-//! two of them racing to reload the same regions and bumping the generation
-//! twice for one export, so every viewer repainted twice.
+//! The palette, the block names and the world's facts still arrive as files —
+//! they are small, change rarely, and are worth having when the mod is off.
+//! Terrain no longer does: it arrives over the API channel and goes into the
+//! database, see [`crate::apiport`] and [`crate::store`].
 //!
-//! Every file here is watched the same way: its own timestamp is the cheap gate,
-//! and only a timestamp that moved earns a read. The common tick is three stat
-//! calls and nothing else.
+//! One thread, on one clock. Every file here is watched the same way: its own
+//! timestamp is the cheap gate, and only a timestamp that moved earns a read.
+//! The common tick is three stat calls and nothing else.
 
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use crate::columns::Region;
 use crate::files;
 use crate::palette::Palette;
-use crate::state::{State, region_times};
+use crate::state::State;
 use crate::log::{say, warn};
 
-/// How often to look for a newer export. The mod writes at most every thirty
-/// seconds, so this is far more attentive than it needs to be and still costs
-/// three stat calls when nothing has changed.
+/// How often to look for a newer palette or set of names. Far more attentive
+/// than it needs to be, and still three stat calls when nothing has changed.
 const WATCH_EVERY: Duration = Duration::from_secs(1);
 
 /// How often the levels above zero are rebuilt from what has changed.
@@ -33,10 +31,20 @@ const WATCH_EVERY: Duration = Duration::from_secs(1);
 /// rebuilding eleven levels per change would be.
 const BUILD_EVERY: Duration = Duration::from_secs(2);
 
-/// Starts the two background clocks: one that reads what changed, one that
-/// redraws what it changed.
+/// How often browsers are told which level 0 tiles moved.
+///
+/// Ground arrives a few chunks at a time, several times a second while the map
+/// is filling in, and every arrival used to be its own announcement: a browser
+/// looking at that ground fetched the same half-megabyte tile again for each.
+/// One announcement a beat is one fetch a beat, and a second behind is not
+/// something anybody watching a map fill in can see.
+const ANNOUNCE_EVERY: Duration = Duration::from_secs(1);
+
+/// Starts the background clocks: one that reads what changed, one that tells
+/// browsers, one that redraws the levels above.
 pub fn start(state: &Arc<State>) {
     every(WATCH_EVERY, Arc::clone(state), State::refresh);
+    every(ANNOUNCE_EVERY, Arc::clone(state), State::announce);
     every(BUILD_EVERY, Arc::clone(state), State::build_levels);
 }
 
@@ -78,7 +86,6 @@ impl State {
     pub fn refresh(&self) {
         self.refresh_palette();
         self.refresh_names();
-        self.refresh_world();
         // The mod writes the world's facts once it has a world, which on a cold
         // start is after this has already been read for the first time. Taken
         // again on the beat rather than at start-up only, so a service that came
@@ -169,100 +176,6 @@ impl State {
              (generation {generation}, tiles dropped)"
         );
         self.report_coverage();
-    }
-
-    /// Reloads the regions the mod has rewritten, and forgets the ones it removed.
-    fn refresh_world(&self) {
-        let current = files::modified(&self.columns);
-        let Ok(mut seen) = self.seen.lock() else {
-            return;
-        };
-        if current == *seen {
-            return;
-        }
-
-        let (touched, incomplete) = self.reload_regions();
-
-        // Leaving the directory unseen sends the next look back for whatever was
-        // half-written this time. The lock is held across the reload, so this is
-        // the only thread that can be doing any of it.
-        *seen = if incomplete { None } else { current };
-        drop(seen);
-
-        if touched.is_empty() {
-            return;
-        }
-
-        // Slope shading reads the column to the west and the one to the north, so
-        // a region also changes the western edge of the tile east of it and the
-        // northern edge of the tile below. A region is a level 0 tile, so these
-        // are tile coordinates already.
-        let mut repaint: Vec<(i32, i32)> = touched
-            .iter()
-            .flat_map(|&(rx, rz)| [(rx, rz), (rx + 1, rz), (rx, rz + 1)])
-            .collect();
-        repaint.sort_unstable();
-        repaint.dedup();
-
-        self.drop_tiles(&repaint.iter().map(|&(x, z)| (0, x, z)).collect::<Vec<_>>());
-
-        // Handed to the builder, which announces the change once it has rebuilt
-        // the levels above as well. Announcing it here too would announce it
-        // twice: the builder follows two seconds later and bumps the generation
-        // again, and since the generation versions every tile URL, that is the
-        // same pixels fetched under two different names. On a dense world a tile
-        // is a third of a megabyte, so the second fetch is not free and the swap
-        // is visible.
-        self.mark_stale(repaint);
-
-        // Coverage is a pass over every column in the world, which is worth it
-        // when the palette changes because that changes every tile. A region
-        // arriving changes one square, so it is reported by count alone.
-        say!("{} regions reloaded — {} chunks", touched.len(), self.chunks());
-    }
-
-    /// Takes the regions whose files have moved, and drops the ones that have
-    /// gone. Says which squares changed, and whether anything was caught being
-    /// written and must be tried again.
-    fn reload_regions(&self) -> (Vec<(i32, i32)>, bool) {
-        let now = region_times(&self.columns);
-        let Ok(mut held) = self.regions.lock() else {
-            return (Vec::new(), true);
-        };
-
-        let mut touched = Vec::new();
-        let mut incomplete = false;
-
-        for (at, time) in &now {
-            if held.get(at) == Some(time) {
-                continue;
-            }
-
-            // A region being written as it is read is not worth complaining
-            // about, but it must be tried again rather than remembered as done.
-            match Region::read(&self.columns.join(format!("r.{}.{}.msqr", at.0, at.1))) {
-                Ok(region) => {
-                    if let Ok(mut world) = self.world.write() {
-                        world.apply(region);
-                    }
-                    held.insert(*at, *time);
-                    touched.push(*at);
-                }
-                Err(_) => incomplete = true,
-            }
-        }
-
-        for at in held.keys().copied().collect::<Vec<_>>() {
-            if !now.contains_key(&at) {
-                if let Ok(mut world) = self.world.write() {
-                    world.forget(at);
-                }
-                held.remove(&at);
-                touched.push(at);
-            }
-        }
-
-        (touched, incomplete)
     }
 }
 

@@ -18,6 +18,10 @@ mod keep {
     /// Anything vendored, and any tile: both are versioned in their URL, so a
     /// given address can never stand for different bytes.
     pub const FOREVER: &str = "public, max-age=31536000, immutable";
+    /// A tile drawn for one person. As final as any tile, and kept only by the
+    /// browser it was drawn for: a shared cache between here and there must
+    /// never hand one reader's map to the next.
+    pub const PRIVATELY: &str = "private, max-age=31536000, immutable";
     /// A marker icon. Rarely changed, but adding a mod changes the set.
     pub const AN_HOUR: &str = "public, max-age=3600";
     /// A player's picture. Its name comes from who they are rather than from
@@ -87,6 +91,11 @@ pub fn portrait(bytes: &[u8]) -> Reply {
 /// A rendered tile. Safe to keep forever: a changed world is a changed `?v=`.
 pub fn tile(bytes: &[u8]) -> Reply {
     cached(bytes, "image/png", keep::FOREVER)
+}
+
+/// A tile composed for one reader. See `keep::PRIVATELY`.
+pub fn private_tile(bytes: &[u8]) -> Reply {
+    cached(bytes, "image/png", keep::PRIVATELY)
 }
 
 pub fn text(status: u16, body: &str) -> Reply {

@@ -122,6 +122,7 @@ function drawProfile() {
   wantPresets.checked = Boolean(mine.PresetsByDefault);
   wantPrivate.checked = privateByDefault();
   wantFollow.checked = Boolean(mine.FollowSelf);
+  drawShares(named);
   wantPresets.disabled = !named;
   wantPrivate.disabled = !named;
   wantFollow.disabled = !named;
@@ -154,7 +155,43 @@ function draftProfile() {
     presets: wantPresets.checked,
     private: wantPrivate.checked,
     follow: wantFollow.checked,
+    shares: [...document.querySelectorAll('#share-groups input:checked')]
+      .map(box => Number(box.value))
+      .filter(Number.isFinite),
   };
+}
+
+/**
+ * One box per group this person is in, ticked where they share their map with
+ * it. Shown only under a private map, since there is nothing to share
+ * otherwise, and only to somebody signed in, since a stranger is in no group.
+ */
+function drawShares(named) {
+  const section = document.getElementById('share-map');
+  const list = document.getElementById('share-groups');
+  const groups = (viewer && Array.isArray(viewer.Groups)) ? viewer.Groups : [];
+  const shown = Boolean(named) && Boolean(viewer && viewer.PrivateMap) && groups.length > 0;
+  section.hidden = !shown;
+  list.textContent = '';
+  if (!shown) return;
+
+  const sharing = new Set(Array.isArray(mine.ShareMapWith) ? mine.ShareMapWith : []);
+  for (const group of groups) {
+    const line = document.createElement('label');
+    line.className = 'line';
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.value = String(group.Id);
+    box.checked = sharing.has(group.Id);
+    // Named per group, so a script or a screen reader can tell the boxes apart.
+    box.setAttribute('aria-label', `Share my map with ${group.Name}`);
+    box.addEventListener('change', () => {
+      draftProfile();
+      sayProfile('Not kept yet.');
+    });
+    line.append(box, document.createTextNode(String(group.Name)));
+    list.append(line);
+  }
 }
 
 function sayProfile(what, wrong) {
@@ -178,6 +215,7 @@ async function keepProfile() {
     PresetsByDefault: draft.presets,
     PrivateByDefault: draft.private,
     FollowSelf: draft.follow,
+    ShareMapWith: draft.shares,
   });
   drawProfile();
   sayProfile(kept ? 'Kept.' : 'The map service is not answering.', !kept);

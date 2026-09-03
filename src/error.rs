@@ -11,6 +11,9 @@ pub enum Error {
     Empty(String),
     /// The settings do not say enough to act on, and only a person can settle it.
     Config(String),
+    /// The map's own database refused something. What was being done and what
+    /// it said, since the underlying error type is the library's own.
+    Database { doing: String, message: String },
 }
 
 impl Error {
@@ -25,6 +28,10 @@ impl Error {
     pub fn config(message: impl Into<String>) -> Self {
         Self::Config(message.into())
     }
+
+    pub fn database(doing: impl Into<String>, error: rusqlite::Error) -> Self {
+        Self::Database { doing: doing.into(), message: error.to_string() }
+    }
 }
 
 impl fmt::Display for Error {
@@ -33,6 +40,7 @@ impl fmt::Display for Error {
             Self::Io { doing, source } => write!(f, "{doing}: {source}"),
             Self::Parse { path, message } => write!(f, "{}: {message}", path.display()),
             Self::Empty(message) | Self::Config(message) => f.write_str(message),
+            Self::Database { doing, message } => write!(f, "{doing}: {message}"),
         }
     }
 }
@@ -41,7 +49,7 @@ impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Io { source, .. } => Some(source),
-            Self::Parse { .. } | Self::Empty(_) | Self::Config(_) => None,
+            Self::Parse { .. } | Self::Empty(_) | Self::Config(_) | Self::Database { .. } => None,
         }
     }
 }

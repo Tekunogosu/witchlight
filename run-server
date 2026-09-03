@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+#
+# A throwaway Vintage Story server for testing witchlight, with its own data path
+# under .testbed/ so nothing touches a real server or the client's own saves.
+#
+#   ./run-server            start it, in the foreground, console attached
+#   ./run-server --fresh    delete the testbed world and start again
+#
+# The newest witchlight archive in the mod repository's dist/ is copied into the
+# testbed's Mods folder on every start, so the server always runs what was last
+# packaged. The map serves on http://127.0.0.1:8098 and the game listens on
+# 127.0.0.1:42420, which is what ./run-client connects to.
+#
+# Override where the game and the mod repository are with SERVER_DIR and
+# WITCHLIGHT_MOD_REPO; the defaults are this machine's.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+data="$here/.testbed/server"
+server_dir="${SERVER_DIR:-$HOME/vintagestory-server}"
+mod_repo="${WITCHLIGHT_MOD_REPO:-$here/../../witchlight-csharp}"
+port=42420
+map_port=8098
+
+if [ "${1:-}" = "--fresh" ]; then
+    rm -rf "$data"
+fi
+mkdir -p "$data/Mods" "$data/ModConfig" "$data/Saves"
+
+# The mod, newest archive by version, into the one name the folder may hold.
+archive=$(ls -1 "$mod_repo"/dist/witchlight_*.zip 2>/dev/null | grep -v _client | sort -V | tail -n 1 || true)
+if [ -z "$archive" ]; then
+    echo "run-server: no witchlight archive in $mod_repo/dist — run package.sh there first" >&2
+    exit 1
+fi
+cp "$archive" "$data/Mods/witchlight.zip"
+echo "run-server: installed $(basename "$archive")"
+
+# Only what differs from the game's own defaults; the server fills in the rest
+# and rewrites the file. Loopback and no advertising, so nothing but this
+# machine can find it.
+if [ ! -f "$data/serverconfig.json" ]; then
+    cat > "$data/serverconfig.json" <<JSON
+{
+  "ServerName": "witchlight testbed",
+  "Ip": "127.0.0.1",
+  "Port": $port,
+  "Upnp": false,
+  "AdvertiseServer": false,
+  "MaxClients": 4,
+  "PassTimeWhenEmpty": false,
+  "WorldConfig": {
+    "Seed": "12345",
+    "SaveFileLocation": "$data/Saves/testbed.vcdbs",
+    "WorldName": "testbed",
+    "PlayStyle": "surviveandbuild",
+    "PlayStyleLangCode": "preset-surviveandbuild",
+    "WorldType": "standard",
+    "AllowCreativeMode": true
+  }
+}
+JSON
+fi
+
+# The map service's settings, written once with what the testbed needs and left
+# alone after, so a setting changed by hand for a test stays changed.
+if [ ! -f "$data/ModConfig/witchlight.conf" ]; then
+    cat > "$data/ModConfig/witchlight.conf" <<TOML
+# witchlight testbed. Every other setting is the default.
+bind = "127.0.0.1:$map_port"
+announce_url = "http://127.0.0.1:$map_port"
+export_interval_ms = 5000
+TOML
+fi
+
+echo "run-server: data in $data"
+echo "run-server: game on 127.0.0.1:$port, map on http://127.0.0.1:$map_port"
+cd "$server_dir"
+exec "$server_dir/StratumServer" --dataPath="$data"

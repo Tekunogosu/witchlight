@@ -41,6 +41,17 @@ pub struct Rules {
     /// milliseconds. Already held to a gap a browser can keep up with — the
     /// clamping is `Config::rules`, so nothing downstream has to wonder.
     pub live_refresh_ms: u64,
+    /// Whether each person is shown the map as they last saw it rather than the
+    /// map as it is. See [`crate::memory`].
+    pub private_map: bool,
+    /// Under a private map, whether the ground around spawn is shown to
+    /// everybody, a browser with no session included.
+    pub anonymous_spawn: bool,
+    /// How far from spawn that reaches, in chunks each way.
+    pub anonymous_spawn_radius_chunks: i32,
+    /// How far a player sees, in chunks each way. Zero means the game's own
+    /// chunk radius, as the mod reports it.
+    pub sight_radius_chunks: i32,
 }
 
 /// Which privilege each `wl` command asks of whoever types it.
@@ -177,19 +188,6 @@ pub const REFRESH_FLOOR_MS: u64 = 250;
 /// and past a minute the form has given up waiting before the answer arrives.
 pub const REFRESH_CEILING_MS: u64 = 60_000;
 
-/// The shortest gap allowed between two of this service's own snapshots.
-///
-/// Half a minute: a snapshot is a pass over everything held in memory, and
-/// anything more frequent than this is a settings file asking to spend more time
-/// saving than serving.
-pub const AUTOSAVE_FLOOR_MS: u64 = 30_000;
-
-/// The longest.
-///
-/// An hour, past which a crash risks losing more than a server left running
-/// that long between saves should ever accept losing.
-pub const AUTOSAVE_CEILING_MS: u64 = 3_600_000;
-
 /// What `admin` is short for.
 pub const ADMIN: &str = "admin";
 
@@ -301,10 +299,40 @@ pub struct Config {
     /// from sending them.
     pub players_public: bool,
 
-    /// How long the page leaves between asking where everybody is, in
-    /// milliseconds.
+    /// Whether each person is shown the map as they last saw it.
     ///
-    /// Two seconds. Players, markers, claims and whether a marker just asked for
+    /// On. A public server is not one map: it is a map per person, of what that
+    /// person has been near, and ground that changed while they were away stays
+    /// as they remember it until they go back. Off, everybody is shown the same
+    /// map, which is what a server of friends wants and what the map always did.
+    ///
+    /// The mod reads it too: while it is on, where a player stands is their
+    /// group's to see and nobody else's, whatever `players_public` says.
+    pub private_map: bool,
+
+    /// Whether the ground around spawn is everybody's to see under a private
+    /// map — a browser with no session included, which is otherwise shown
+    /// nothing at all.
+    pub anonymous_spawn: bool,
+
+    /// How far from spawn that reaches, in chunks each way. Eight is a square
+    /// half a kilometre across.
+    pub anonymous_spawn_radius_chunks: i32,
+
+    /// How far a player sees, in chunks as the crow flies: what standing
+    /// somewhere adds to their map. Zero means each player's own view distance
+    /// as the game granted it, which is as far as it loads chunks for them —
+    /// or the server's `MaxChunkRadius` where the mod is too old to say.
+    pub sight_radius_chunks: i32,
+
+    /// How long the page leaves between asking where everybody is, in
+    /// milliseconds, where it has to ask at all.
+    ///
+    /// One second. The page is told of changes as they happen — see
+    /// `events.rs` — and asks on this clock only while that is not working:
+    /// a proxy that will not hold a request open, or a service with too many
+    /// browsers waiting already. Then this is the whole of how fresh the live
+    /// half of the map is. Players, markers, claims and whether a marker just asked for
     /// has been made all arrive on this one beat, so this number is the whole of
     /// how fresh the live half of the map is. Lower it on a server where people
     /// watch each other move; raise it on one where a browser left open all day
@@ -339,32 +367,20 @@ pub struct Config {
     /// and past ten minutes a map is not a picture of a world people are in.
     pub export_interval_ms: u64,
 
-    /// How often this writes its own in-memory map to disk, in milliseconds.
+    /// How far around a player the terrain puller may fill in, in chunks as
+    /// the crow flies, where the mod has not said how far that player sees.
     ///
-    /// Fifteen minutes. This is not the mod's export — that is `export_interval_ms`,
-    /// on the other side of the map, writing what the game has seen. This is the
-    /// service's own snapshot of what it holds in memory, so a crash between two
-    /// of these loses at most this much rather than everything since the process
-    /// started. Written again on a clean stop regardless of when the last one
-    /// landed, so an orderly shutdown never loses anything this could have saved.
-    ///
-    /// Held between thirty seconds and one hour: a snapshot is a pass over
-    /// everything held in memory, and past an hour a crash costs more than a
-    /// server left running that long should ever risk.
-    pub autosave_interval_ms: u64,
-
-    /// How far past a player's own reach the terrain puller may fill in, in
-    /// chunks.
-    ///
-    /// Zero means the game server's own `MaxChunkRadius` — the same distance the
-    /// game already loads chunks to, which is what an in-game map could ever
+    /// Zero means the game server's own `MaxChunkRadius` — the furthest the
+    /// game loads chunks for anybody, which is what an in-game map could ever
     /// have shown a player standing there. Backfilling any further than that
     /// draws ground the generator laid down and nobody could have walked to,
     /// which is not the shape a map of what has been explored should have.
     ///
-    /// Set past zero only to draw wider than the game itself ever showed anyone —
-    /// worth doing on a server whose operator wants the web map more generous
-    /// than the client, never worth doing by accident.
+    /// A mod that reports each player's own view distance makes this the
+    /// fallback for a player it has not reported yet. Set it past zero only to
+    /// draw wider than the game showed anyone — worth doing on a server whose
+    /// operator wants the web map more generous than the client, never worth
+    /// doing by accident.
     pub backfill_radius_chunks: i32,
 
     /// How many threads render tiles. Zero decides from the machine, capped so
@@ -446,10 +462,13 @@ impl Default for Config {
             api_token: String::new(),
             markers_public: false,
             markers_public_editable: false,
+            private_map: true,
+            anonymous_spawn: true,
+            anonymous_spawn_radius_chunks: 8,
+            sight_radius_chunks: 0,
             players_public: true,
-            live_refresh_ms: 2000,
+            live_refresh_ms: 1000,
             export_interval_ms: 10_000,
-            autosave_interval_ms: 15 * 60_000,
             backfill_radius_chunks: 0,
             threads: 0,
             tile_cache_mb: 256,
@@ -552,19 +571,11 @@ impl Config {
             // Clamped here rather than where it is read, so that the number the
             // page is handed and the number a test asks about are the same one.
             live_refresh_ms: self.live_refresh_ms.clamp(REFRESH_FLOOR_MS, REFRESH_CEILING_MS),
+            private_map: self.private_map,
+            anonymous_spawn: self.anonymous_spawn,
+            anonymous_spawn_radius_chunks: self.anonymous_spawn_radius_chunks,
+            sight_radius_chunks: self.sight_radius_chunks,
         }
-    }
-
-    /// How long to leave between the service's own snapshots, clamped.
-    ///
-    /// Clamped here rather than where it is read, for the same reason
-    /// `live_refresh_ms` is: the number a test asks about and the number the
-    /// clock actually runs on must be the same one.
-    #[must_use]
-    pub fn autosave_interval(&self) -> std::time::Duration {
-        std::time::Duration::from_millis(
-            self.autosave_interval_ms.clamp(AUTOSAVE_FLOOR_MS, AUTOSAVE_CEILING_MS),
-        )
     }
 
     /// Loads `path`. A missing file is not an error — the defaults are a working
@@ -780,11 +791,38 @@ const NOTES: &[(&str, &str)] = &[
          which is the half that knows the groups.",
     ),
     (
+        "private_map",
+        "Whether each person is shown the map as they last saw it. On, and a\n\
+         public server is a map per person: what they have been near, with ground\n\
+         that changed while they were away kept as they remember it until they\n\
+         go back. Off, everybody is shown the same map. Read by the mod too: while\n\
+         this is on a player's position is their group's to see and nobody else's.",
+    ),
+    (
+        "anonymous_spawn",
+        "Under a private map, whether the ground around spawn is everybody's to\n\
+         see, a browser nobody has logged in on included. On. Off, a browser with\n\
+         no session is shown nothing until somebody logs in on it.",
+    ),
+    (
+        "anonymous_spawn_radius_chunks",
+        "How far from spawn that reaches, in chunks each way. 8 is a square half a\n\
+         kilometre across.",
+    ),
+    (
+        "sight_radius_chunks",
+        "How far a player sees, in chunks as the crow flies: standing somewhere\n\
+         adds this much around them to their map. 0 uses each player's own view\n\
+         distance as the game granted it, which is as far as it loads chunks\n\
+         for them.",
+    ),
+    (
         "live_refresh_ms",
         "How long the page leaves between asking where everybody is, in\n\
-         milliseconds. Players, markers and claims all arrive on this one beat, so\n\
-         it is the whole of how fresh the live half of the map is. Anything below\n\
-         250 is served as 250 and anything above 60000 as 60000.",
+         milliseconds, where it has to ask at all. The page is told of changes\n\
+         as they happen and asks on this clock only while that is not working;\n\
+         then players, markers and claims all arrive on this one beat. Anything\n\
+         below 250 is served as 250 and anything above 60000 as 60000.",
     ),
     (
         "export_interval_ms",
@@ -797,21 +835,12 @@ const NOTES: &[(&str, &str)] = &[
          the mod, which is the half that does the writing.",
     ),
     (
-        "autosave_interval_ms",
-        "How often this writes its own in-memory map to disk, in milliseconds.\n\
-         Not the mod's export — this is the service's own snapshot of what it\n\
-         holds in memory, so a crash between two of these loses at most this\n\
-         much rather than everything since the process started. A clean stop\n\
-         writes one regardless of when the last landed. Anything below 30000 is\n\
-         used as 30000 and anything above 3600000 as 3600000.",
-    ),
-    (
         "backfill_radius_chunks",
-        "How far past a player's own reach the terrain puller may fill in, in\n\
-         chunks. 0 uses the game server's own MaxChunkRadius — the same distance\n\
-         the game already loads chunks to, so the map never draws ground no\n\
-         in-game map could have shown anyone. Set past 0 to draw wider than the\n\
-         game itself ever showed anyone.",
+        "How far around a player the terrain puller may fill in, in chunks,\n\
+         where the mod has not said how far that player sees. 0 uses the game\n\
+         server's own MaxChunkRadius — the furthest it loads chunks for anybody,\n\
+         so the map never draws ground no in-game map could have shown. Set\n\
+         past 0 to draw wider than the game itself ever showed anyone.",
     ),
     (
         "threads",
@@ -971,7 +1000,7 @@ mod tests {
     #[test]
     fn the_live_beat_is_held_to_a_gap_a_browser_can_keep_up_with() {
         let told = |ms| Config { live_refresh_ms: ms, ..Config::default() }.rules().live_refresh_ms;
-        assert_eq!(Config::default().live_refresh_ms, 2000, "two seconds, as it always was");
+        assert_eq!(Config::default().live_refresh_ms, 1000, "one second: the clock the page falls back to");
         assert_eq!(told(500), 500, "what an operator asked for is what the page is told");
         // A gap of nothing is a browser asking again the instant it is answered.
         assert_eq!(told(0), REFRESH_FLOOR_MS);

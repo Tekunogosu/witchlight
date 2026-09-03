@@ -60,8 +60,12 @@ bind = "0.0.0.0:8080"                 # every interface; 127.0.0.1 for this mach
 api_bind = ""                         # where the mod posts; empty means loopback on a free port
 api_token = ""                        # what it must present; empty means a fresh one each start
 markers_public = false                # whether a marker nobody has chosen for is everyone's
-live_refresh_ms = 2000                # how often the page asks where everybody is
-export_interval_ms = 10000            # how often the mod writes what the terrain did
+private_map = true                    # each person sees the map as they last saw it
+anonymous_spawn = true                # under a private map, spawn is everybody's to see
+anonymous_spawn_radius_chunks = 8     # how far from spawn that reaches
+sight_radius_chunks = 0               # how far a player sees; 0 means their own view distance
+live_refresh_ms = 1000                # how often the page asks, where it has to ask
+export_interval_ms = 10000            # how often the mod checks the season and re-reads what moved
 autostart = true                      # whether the server mod starts this itself
 announce = true                       # whether it tells joining players where the map is
 announce_url = ""                     # and what to tell them; empty means work it out
@@ -92,11 +96,21 @@ may ask it for things, which are questions about the pair rather than about eith
 half, so they sit with everything else about the map instead of in a file of their
 own.
 
+`private_map` is what a public server wants and a server of friends does not.
+On, nobody is shown the world: each person is shown what they have been near,
+and ground that changed while they were away stays as they remember it until
+they go back — see *A map per person* below. Off, everybody is shown the same
+map, which is what the map always did. `anonymous_spawn` and its radius decide
+what a browser nobody has signed in on is shown under a private map, which is
+the ground around spawn and nothing else; `sight_radius_chunks` is how far
+standing somewhere reaches, as the crow flies, and zero is each player's own
+view distance as the game granted it.
+
 `live_refresh_ms` is the gap the page leaves between one live answer and the next
-question. Players, markers, claims and the confirmation that a marker just asked
-for was made all arrive on that one beat, so it is the whole of how fresh the live
-half of the map is: lower it on a server where people watch each other move, raise
-it where a browser left open all day should cost the machine less. Anything below
+question, where it has to ask at all. The page is told of changes the moment
+they arrive — see *Serving* — and falls back to asking on this clock only where
+that is not working. Then players, markers, claims and the confirmation that a
+marker just asked for was made all arrive on this one beat. Anything below
 250 is served as 250 and anything above 60000 as 60000, and the page is told the
 number when it is served — so a change reaches a browser once the service has
 restarted and the page has been reloaded.
@@ -272,35 +286,48 @@ witchlight: surface 96% painted, 4% nothing to draw, 0% waiting on a colour, 0% 
 |---|---|
 | `palette.json` | every block: its id in this world, an average colour or which kind of colourless it is, and which colour maps tint it |
 | `colormaps/*.png` | the game's lookup images, sampled by climate and by season |
-| `columns/r.{x}.{z}.msqr` | per chunk column: top block, its height, the climate there, and the chunk's season |
+| `map.sqlite` | **written here**: every chunk the map holds, every version of one somebody still remembers, and what each person has seen |
 | `tiles/{level}/…` | **written here**, the zoom levels above one block per pixel |
 
-The map is a directory of regions rather than one file. A region is eight chunks
-on a side, which at a chunk edge of 32 is 256 blocks — **exactly one tile**. A
-chunk that changes therefore belongs to one region file and one tile, so the mod
-rewrites what moved rather than the whole map, and this side reloads one region
-and drops one tile rather than starting over.
+The terrain is the service's own. The mod reads the surface of a chunk whose
+blocks moved and posts it over the API channel within a quarter of a second —
+a record of six bytes per column, deflated — and this side puts it in the
+database, in memory, and on the screen of every browser looking at that square.
+A chunk is written when it changes and never otherwise, and the file is updated
+in place, so a quiet server touches the disk for nothing. The database is one
+SQLite file, compiled into the binary, so nothing on the machine has to provide
+one.
 
-**Each chunk inside a region is compressed on its own, behind a directory of
-fixed size** — the layout is documented at the head of `src/columns.rs`. That is
-what lets the mod write a chunk without touching the two hundred and fifty-five
-beside it: a change costs its own kilobyte rather than the quarter-megabyte square
-it sits in, which on a busy server is the difference between half a gigabyte an
-hour and a few megabytes. A chunk carries a CRC-32, and one whose bytes do not
-answer to it is read as a chunk the map does not hold — which is what a run that
-died mid-write leaves behind, and what the mod's repair then fills in. Chunks
-accumulate across exports, so the map keeps everything the server has ever had
-loaded.
+A region is sixteen chunks on a side, which at a chunk edge of 32 is 512 blocks
+— **exactly one tile** at the finest level, and the same square the game calls
+a map region. A chunk that changes therefore belongs to one tile, so this side
+drops one tile rather than starting over.
 
-The format still moves while Witchlight is alpha. A region this build cannot read
-is skipped and said so on stderr, and the mod clears a map it cannot read on start
-rather than upgrading it — so an upgrade costs the explored area, which comes back
-as players move through it.
+The map used to be a directory of region files, `columns/r.{x}.{z}.msqr`,
+written by the mod and watched from here. A service that starts with an empty
+database and finds those files reads them once, whole, into the database, and
+never again; the layout is still documented at the head of `src/columns.rs` for
+that reading. The files may be deleted once the import has been logged.
 
-**All three are reloaded while the service runs.** That matters as much for the
-palette as the terrain: on a dedicated server the palette arrives from an admin's
-client some time after start-up, and a service that read it once would show nothing
-until restarted.
+**A map per person.** Under `private_map`, what somebody is shown is decided
+from two things the database keeps about them — see `src/memory.rs`. Every
+chunk within sight of where they have stood is *discovered*, one bit per chunk.
+A discovered chunk that changed while they were not there is a *divergence*: a
+pointer at the version they last saw, which stays in the database for as long
+as anybody points at it. So a player leaving spawn keeps spawn as it was, a
+player coming back has the divergence cleared and sees it as it is, and twenty
+people who all remember the same old spawn share one kilobyte. A tile for a
+reader is the tile everybody gets with ground they have never been near painted
+out and ground they remember drawn from the version they remember, composed
+when asked for and kept in memory only. Sharing is a choice each person makes
+per group, in their own settings on the page: tick a group and everyone in it
+sees what you have explored, as you last saw it. The ground around spawn is
+everybody's, a browser nobody has signed in on included, as far as
+`anonymous_spawn_radius_chunks` reaches.
+
+**The palette and the colour maps are reloaded while the service runs.** On a
+dedicated server the palette arrives from an admin's client some time after
+start-up, and a service that read it once would show nothing until restarted.
 
 Players and markers do not come from a file. The mod posts them on the **API
 channel** — a second listener on loopback, on whatever port the machine had free,
@@ -344,33 +371,35 @@ neighbours, lighting the world from the north-west the way every game map does.
 
 ## Serving
 
-Tiles are 256×256 at one pixel per block, rendered **on request** and then cached,
+Tiles are 512×512 at one pixel per block, rendered **on request** and then cached,
 so start-up costs nothing and only the part of the world someone looks at is drawn.
 
-Every request stats the export; if the timestamp moved, the file is read and hashed,
-and only a genuinely different hash triggers a reload — otherwise the mod's
-30-second rewrite would re-render everything for nothing. A real reload bumps a
-**generation** counter, which appears in `/info.json` and in tile URLs as `?v=N`.
-That is what gets new terrain past the browser cache; tiles are otherwise marked
-immutable and cached for a year, while the page and both feeds are `no-store`.
+Terrain arriving bumps a **generation** counter, which appears in `/info.json`
+and in tile URLs as `?v=N`. That is what gets new terrain past the browser
+cache; tiles are otherwise marked immutable and cached for a year — privately,
+where they were composed for one reader — while the page and both feeds are
+`no-store`.
 
 | Route | |
 |---|---|
 | `/` | the viewer: drag to pan, scroll to zoom |
-| `/tiles/{x}/{z}.png` | one tile, versioned by `?v=` |
-| `/info.json` | bounds, chunk edge, chunk count, generation |
+| `/tiles/{level}/{x}/{z}.png` | one tile, versioned by `?v=`, drawn for whoever is asking |
+| `/info.json` | bounds, chunk edge, chunk count, generation, as whoever is asking sees them |
+| `/events?since=&live=` | held until the map or the live feed has moved past what the page last saw, then what moved |
 | `/block.json?x=&z=` | what is at one block: its code, its surface height, its climate |
 | `/live.json` | players and markers, from memory. A player carries `Facing`, which way they are looking in degrees clockwise from north, and `Portrait`, the name of their picture, with `PortraitAt`, when it was drawn, where they have sent one |
 | `/icons.json`, `/icons/{name}.svg` | the pictures markers are drawn with |
 | `/portraits/{name}.png` | a picture a player's own client drew of their seraph. Ask with `?v={PortraitAt}`: the name is the player's and does not change when the picture does |
 
-The page polls `/info.json` every 2 seconds and `/live.json` on the beat
-`live_refresh_ms` sets, which is two seconds until an operator says otherwise. It
-asks with
-`?since=` and gets back the tiles that actually changed, so a server where someone
-is building repaints one square rather than the map, and each tile is swapped only
-once its replacement has decoded — the old one stays up meanwhile, so the map never
-blinks. Players draw
+The page asks `/events` and is answered the moment something moves — a long
+poll, which is an ordinary request the service holds until there is something
+to say, and which the page reissues as soon as it is answered. It carries the
+tiles that actually changed since the page's generation, so a server where
+someone is building repaints one square rather than the map, and each tile is
+swapped only once its replacement has decoded — the old one stays up meanwhile,
+so the map never blinks. Where the waiting request is refused or will not stay
+open, the page falls back to asking `/info.json` every two seconds and
+`/live.json` on the beat `live_refresh_ms` sets. Players draw
 as cyan dots with their name; markers as diamonds in their owner's colour, with the
 title above and the owner below — every death marker is titled "You died here", so
 the owner is the only thing that says whose it is.
@@ -517,12 +546,16 @@ needed it. Reading order, roughly outside in:
 | `routes.rs` | what the public port answers, and to what |
 | `apiport.rs` `api.rs` | the private channel the mod posts on, and where it is published |
 | `state.rs` | what the request threads share |
-| `watch.rs` | noticing that the mod has written something |
+| `store.rs` | the map's own database: chunks, remembered versions, what each person has seen |
+| `memory.rs` | what each person remembers of the map, and who shares it with whom |
+| `scope.rs` | what one reader is shown: the whole map, or their memory of it |
+| `events.rs` | telling a browser the moment something changes |
+| `watch.rs` | noticing that the mod has written a palette or the block names |
 | `feeds.rs` | the JSON the page asks for |
 | `viewer.rs` `viewer/` | the page: markup, style, and the scripts joined in order |
 | `chrome.rs` | which marks the furniture wears, and which of the vendored pack reach the binary |
 | `columns.rs` `pyramid.rs` `render.rs` `palette.rs` `color.rs` | the map itself, from region file to pixel |
-| `live.rs` `pending.rs` `preferences.rs` `auth.rs` `facts.rs` | what the two halves say to each other |
+| `live.rs` `pending.rs` `preferences.rs` `auth.rs` `facts.rs` `wire.rs` | what the two halves say to each other |
 | `http.rs` `urls.rs` `cache.rs` `net.rs` `files.rs` `random.rs` `error.rs` | utilities, which know nothing about maps |
 
 Nothing in the last row imports anything above it. That is the whole of what

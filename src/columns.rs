@@ -1,19 +1,18 @@
-//! The exported surface of the world.
+//! The surface of the world, as columns, and the region files it once came in.
 //!
-//! The map is a directory of regions rather than one file. A region is sixteen
-//! chunks on a side, which at a chunk edge of 32 is 512 blocks — one rendered
-//! tile at its finest level, and the same square the game calls a map region. A
-//! chunk that changes therefore belongs to one file and one tile, so the server
-//! mod rewrites what moved instead of the whole map, and this side reloads one
-//! region and redraws one tile instead of starting over.
+//! A region is sixteen chunks on a side, which at a chunk edge of 32 is 512
+//! blocks — one rendered tile at its finest level, and the same square the game
+//! calls a map region. A chunk that changes therefore belongs to one tile, so
+//! this side redraws one tile instead of starting over.
+//!
+//! The map lives in the database now — see [`crate::store`] — and the mod sends
+//! each chunk's record over the API channel as it changes. The region file
+//! format below is what an older mod wrote beside the map, and is read once, on
+//! the first start that finds a database with nothing in it, to carry that map
+//! across. Nothing writes it any more.
 //!
 //! Each chunk in a region is compressed on its own, behind a directory of fixed
-//! size. Version 4 was one gzip stream over the whole region, which meant the mod
-//! could not write one chunk without rewriting the other two hundred and
-//! fifty-five — and meant this side had to inflate a quarter of a megabyte to
-//! look at one of them.
-//!
-//! Little endian, version 5. Nothing outside a payload is compressed:
+//! size. Little endian, version 5. Nothing outside a payload is compressed:
 //!
 //! ```text
 //!   0  magic     "MSQR"
@@ -37,11 +36,10 @@
 //! A chunk's slot is its position in the region — `dz * REGION_CHUNKS + dx` — so a
 //! record carries no coordinates and cannot disagree with where it is filed.
 //!
-//! Payloads are appended and never overwritten, so a file carries bytes nothing
-//! points at until the mod packs it down; a reader walks the directory and never
-//! the file. A slot whose bytes do not answer to the checksum beside them is read
-//! as a chunk the map does not hold, which is what a run that died mid-append
-//! leaves behind — and which the mod's own repair then fills in.
+//! Payloads were appended and never overwritten, so a file carries bytes nothing
+//! points at; a reader walks the directory and never the file. A slot whose
+//! bytes do not answer to the checksum beside them is read as a chunk the map
+//! does not hold, which is what a run that died mid-append left behind.
 //!
 //! Season is where the chunk sits in the year. It is per chunk rather than per
 //! column because seasons vary by latitude and not across thirty-two blocks, and
@@ -62,7 +60,10 @@ use crate::log::warn;
 
 const MAGIC: &[u8; 4] = b"MSQR";
 pub const VERSION: u16 = 5;
-const ENTRY_BYTES: usize = 6;
+/// Bytes per column in a record: the six fields the mod packs, see the module
+/// documentation. Public because a record is also what crosses the API channel
+/// and what the database stores, and every reader of one is this arithmetic.
+pub const ENTRY_BYTES: usize = 6;
 const HEADER_BYTES: usize = 20;
 const SLOT_BYTES: usize = 16;
 
@@ -75,6 +76,26 @@ const SLOTS: usize = (REGION_CHUNKS * REGION_CHUNKS) as usize;
 /// Where the first payload can start, which is past the directory.
 const PAYLOADS_FROM: usize = HEADER_BYTES + SLOTS * SLOT_BYTES;
 
+/// A record deflated, which is how one travels and how one is stored. The
+/// inverse of [`unpack`].
+#[must_use]
+pub fn pack(record: &[u8]) -> Vec<u8> {
+    use std::io::Write as _;
+    let mut packing = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
+    // Writing to a Vec cannot fail; the fallback keeps the signature honest
+    // without pretending a fault path exists.
+    packing.write_all(record).and_then(|()| packing.finish()).unwrap_or_default()
+}
+
+/// A deflated record inflated again, or nothing where the bytes are not a
+/// deflate stream.
+#[must_use]
+pub fn unpack(packed: &[u8]) -> Option<Vec<u8>> {
+    let mut record = Vec::new();
+    flate2::read::DeflateDecoder::new(packed).read_to_end(&mut record).ok()?;
+    Some(record)
+}
+
 /// Which chunks a region holds.
 ///
 /// The direction this program needs. A region is a fixed square of chunk
@@ -86,10 +107,38 @@ pub fn chunks_of((rx, rz): (i32, i32)) -> impl Iterator<Item = (i32, i32)> {
         .flat_map(move |dz| (0..REGION_CHUNKS).map(move |dx| (rx * REGION_CHUNKS + dx, rz * REGION_CHUNKS + dz)))
 }
 
+/// Every chunk within `radius` chunks of `centre`, as the crow flies — a disc
+/// rather than a square, which is the shape the game loads ground around a
+/// player in, and about a quarter fewer chunks than the square that contains it.
+///
+/// The one reading of "how far somebody sees": what a player standing somewhere
+/// discovers, and what the map is allowed to ask the game for beside them, are
+/// both this, so the two can never disagree about a corner.
+pub fn disc_of((cx, cz): (i32, i32), radius: i32) -> impl Iterator<Item = (i32, i32)> {
+    let reach = i64::from(radius) * i64::from(radius);
+    (-radius..=radius).flat_map(move |dz| {
+        (-radius..=radius)
+            .filter(move |dx| i64::from(*dx) * i64::from(*dx) + i64::from(dz) * i64::from(dz) <= reach)
+            .map(move |dx| (cx + dx, cz + dz))
+    })
+}
+
 /// Where the regions live inside the export directory.
 #[must_use]
 pub fn columns_dir(exports: &Path) -> PathBuf {
     exports.join("columns")
+}
+
+/// One column as a chunk stores it: the six bytes a record carries for it and
+/// nothing the chunk carries once for all of them. Two bytes narrower than
+/// [`Column`], which across the million columns of a modest world is a quarter
+/// of the map's memory.
+#[derive(Debug, Clone, Copy)]
+struct Entry {
+    block: u16,
+    height: i16,
+    temperature: u8,
+    rainfall: u8,
 }
 
 /// One column: what is on top, how high, and the climate there.
@@ -122,8 +171,107 @@ impl Column {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct Chunk {
-    pub columns: Vec<Column>,
+    entries: Vec<Entry>,
+    /// Where this chunk sits in the year. One fact per chunk, handed to every
+    /// column read out of it.
+    season: u8,
+}
+
+impl Chunk {
+    /// Reads a record — `edge * edge` entries of [`ENTRY_BYTES`] — into columns,
+    /// or nothing where the bytes are not that many. Season is not in a record;
+    /// it travels beside one, so it is given here.
+    ///
+    /// The one reading of the wire format. A region payload, a column the mod
+    /// answers a pull with, and a record out of the database are all this.
+    #[must_use]
+    pub fn from_record(record: &[u8], edge: usize, season: u8) -> Option<Self> {
+        if edge == 0 || record.len() < edge * edge * ENTRY_BYTES {
+            return None;
+        }
+
+        let mut entries = Vec::with_capacity(edge * edge);
+        for index in 0..edge * edge {
+            let entry = &record[index * ENTRY_BYTES..];
+            entries.push(Entry {
+                block: u16::from_le_bytes([entry[0], entry[1]]),
+                height: i16::from_le_bytes([entry[2], entry[3]]),
+                temperature: entry[4],
+                rainfall: entry[5],
+            });
+        }
+        Some(Self { entries, season })
+    }
+
+    /// A chunk of `columns` all alike, for a test that needs ground and does
+    /// not care what it is.
+    #[cfg(test)]
+    pub fn filled_with(column: Column, columns: usize) -> Self {
+        let entry = Entry {
+            block: column.block,
+            height: column.height,
+            temperature: column.temperature,
+            rainfall: column.rainfall,
+        };
+        Self { entries: vec![entry; columns], season: column.season }
+    }
+
+    /// The column at `index`, counted along rows, or nothing past the end.
+    #[must_use]
+    pub fn column(&self, index: usize) -> Option<Column> {
+        let entry = self.entries.get(index)?;
+        Some(Column {
+            block: entry.block,
+            height: entry.height,
+            temperature: entry.temperature,
+            rainfall: entry.rainfall,
+            season: self.season,
+        })
+    }
+
+    /// How many columns this chunk holds.
+    #[cfg(test)]
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Moves the chunk's season: the year turning under ground that has not.
+    pub fn set_season(&mut self, season: u8) {
+        self.season = season;
+    }
+
+    /// The columns as a record again: the inverse of [`from_record`](Self::from_record).
+    #[must_use]
+    pub fn record(&self) -> Vec<u8> {
+        let mut record = Vec::with_capacity(self.entries.len() * ENTRY_BYTES);
+        for entry in &self.entries {
+            record.extend_from_slice(&entry.block.to_le_bytes());
+            record.extend_from_slice(&entry.height.to_le_bytes());
+            record.push(entry.temperature);
+            record.push(entry.rainfall);
+        }
+        record
+    }
+
+    /// The edge a record of this many bytes has, or nothing where it is not a
+    /// square number of entries.
+    #[must_use]
+    pub fn edge_of(record_len: usize) -> Option<usize> {
+        if record_len % ENTRY_BYTES != 0 {
+            return None;
+        }
+        let entries = record_len / ENTRY_BYTES;
+        let edge = (entries as f64).sqrt().round() as usize;
+        (edge > 0 && edge * edge == entries).then_some(edge)
+    }
+
+    /// Where this chunk sits in the year.
+    #[must_use]
+    pub fn season(&self) -> u8 {
+        self.season
+    }
 }
 
 /// One region file, parsed.
@@ -239,24 +387,7 @@ impl Slot {
             return None;
         }
 
-        let mut record = Vec::with_capacity(edge * edge * ENTRY_BYTES);
-        flate2::read::DeflateDecoder::new(packed).read_to_end(&mut record).ok()?;
-        if record.len() < edge * edge * ENTRY_BYTES {
-            return None;
-        }
-
-        let mut columns = Vec::with_capacity(edge * edge);
-        for index in 0..edge * edge {
-            let entry = &record[index * ENTRY_BYTES..];
-            columns.push(Column {
-                block: u16::from_le_bytes([entry[0], entry[1]]),
-                height: i16::from_le_bytes([entry[2], entry[3]]),
-                temperature: entry[4],
-                rainfall: entry[5],
-                season: self.season,
-            });
-        }
-        Some(Chunk { columns })
+        Chunk::from_record(&unpack(packed)?, edge, self.season)
     }
 }
 
@@ -319,13 +450,12 @@ impl World {
         Self { edge: 0, chunks: HashMap::new(), regions: HashMap::new() }
     }
 
-    /// A world built straight from chunks already in hand, for
-    /// [`crate::snapshot`] reading its own file back rather than a region at a
-    /// time. `regions` is rebuilt by grouping the chunks given into the same
-    /// squares [`apply`](Self::apply) would have grouped them into one region at
-    /// a time — a snapshot holds no record of which region file a chunk came
-    /// from, only that it exists, so the grouping here runs over the whole world
-    /// at once instead of one square of it.
+    /// A world built straight from chunks already in hand, which is how the
+    /// database is read back at start. `regions` is rebuilt by grouping the
+    /// chunks into the same squares [`apply`](Self::apply) would have grouped
+    /// them into one region at a time — the database holds no record of which
+    /// region file a chunk once came from, only that it exists, so the grouping
+    /// here runs over the whole world at once instead of one square of it.
     #[must_use]
     pub fn from_chunks(edge: usize, chunks: HashMap<(i32, i32), Chunk>) -> Self {
         let mut by_region: HashMap<(i32, i32), Vec<(i32, i32)>> = HashMap::new();
@@ -440,7 +570,7 @@ impl World {
         let edge = self.edge as i32;
         let chunk = self.chunks.get(&(x.div_euclid(edge), z.div_euclid(edge)))?;
         let (dx, dz) = (x.rem_euclid(edge) as usize, z.rem_euclid(edge) as usize);
-        chunk.columns.get(dz * self.edge + dx).copied()
+        chunk.column(dz * self.edge + dx)
     }
 
     /// World bounds in blocks: the area worth drawing.
@@ -476,8 +606,11 @@ pub fn region_coords(path: &Path) -> Option<(i32, i32)> {
     Some((x.parse().ok()?, z.parse().ok()?))
 }
 
+/// A region file built the way the mod builds one, for any test that needs a
+/// real one on disk. Kept apart from this module's own tests so that the
+/// start-up path can be held to the same bytes.
 #[cfg(test)]
-mod tests {
+pub mod testing {
     use super::*;
     use std::io::Write as _;
 
@@ -488,7 +621,7 @@ mod tests {
     /// Takes the chunks to file and, for one of them, whether to spoil its
     /// payload after the checksum was taken over the good bytes — which is what a
     /// run that died part way through an append leaves behind.
-    fn filed(at: (i32, i32), edge: usize, chunks: &[(usize, u8, u16)], spoil: Option<usize>)
+    pub fn filed(at: (i32, i32), edge: usize, chunks: &[(usize, u8, u16)], spoil: Option<usize>)
     -> Vec<u8> {
         let mut file = vec![0u8; PAYLOADS_FROM];
         file[..4].copy_from_slice(MAGIC);
@@ -531,6 +664,14 @@ mod tests {
         file
     }
 
+}
+
+#[cfg(test)]
+mod tests {
+    use super::testing::filed;
+    use super::*;
+    use std::collections::HashSet;
+
     /// The format, held to the shape both halves write and read it in.
     #[test]
     fn a_region_reads_back_as_the_chunks_that_were_filed_in_it() {
@@ -549,11 +690,11 @@ mod tests {
         assert!(read.chunks.contains_key(&(47, -33)), "slot 255 is the far corner");
 
         let corner = &read.chunks[&(32, -48)];
-        assert_eq!(corner.columns.len(), 16);
-        assert_eq!(corner.columns[0].block, 11);
-        assert_eq!(corner.columns[5].height, 5, "a column is where the record put it");
-        assert_eq!(corner.columns[0].season, 7, "the season comes off the directory");
-        assert_eq!(read.chunks[&(33, -47)].columns[0].season, 9);
+        assert_eq!(corner.len(), 16);
+        assert_eq!(corner.column(0).unwrap().block, 11);
+        assert_eq!(corner.column(5).unwrap().height, 5, "a column is where the record put it");
+        assert_eq!(corner.column(0).unwrap().season, 7, "the season comes off the directory");
+        assert_eq!(read.chunks[&(33, -47)].column(0).unwrap().season, 9);
     }
 
     /// A half-written payload is a chunk the map does not hold, not a chunk of
@@ -585,6 +726,18 @@ mod tests {
         assert!(Region::parse(&[0u8; 8], path).is_err(), "nor a file shorter than a directory");
     }
 
+    /// Sight is a disc: the corners of the square around it are out of reach.
+    #[test]
+    fn a_disc_holds_its_axes_and_not_its_corners() {
+        let disc: HashSet<(i32, i32)> = disc_of((10, -10), 2).collect();
+        assert_eq!(disc.len(), 13);
+        assert!(disc.contains(&(10, -10)));
+        assert!(disc.contains(&(12, -10)) && disc.contains(&(10, -8)), "two out along an axis");
+        assert!(disc.contains(&(11, -9)), "one out along both is 1.4 out");
+        assert!(!disc.contains(&(12, -8)), "two out along both is 2.8 out");
+        assert_eq!(disc_of((0, 0), 0).count(), 1, "no reach is the chunk itself");
+    }
+
     fn column(temperature: u8, rainfall: u8) -> Column {
         Column { block: 0, height: 0, temperature, rainfall, season: 0 }
     }
@@ -594,7 +747,7 @@ mod tests {
         Region {
             at,
             edge: 2,
-            chunks: HashMap::from([(chunk, Chunk { columns: vec![column(0, 0); 4] })]),
+            chunks: HashMap::from([(chunk, Chunk::filled_with(column(0, 0), 4))]),
         }
     }
 
