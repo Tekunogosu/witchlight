@@ -43,7 +43,7 @@ use crate::error::{Error, Result};
 /// The schema this build writes. A file at another number is a file another
 /// build wrote, and refusing it is the honest answer until there is a migration
 /// to run.
-const SCHEMA: i64 = 1;
+const SCHEMA: i64 = 2;
 
 /// Chunks in a region, which is how many bits a `discovered` row holds.
 const BITS: usize = (REGION_CHUNKS * REGION_CHUNKS) as usize;
@@ -101,6 +101,25 @@ impl Stored {
 }
 
 /// One person's discovered chunks in one region.
+/// One browser's login, as the database keeps it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Session {
+    /// The word the cookie carries.
+    pub word: String,
+    pub uid: String,
+    pub name: String,
+    /// When the browser was last seen, to the second.
+    pub seen: SystemTime,
+}
+
+/// The sessions table, said once for the fresh schema and the upgrade to it.
+const SESSIONS_TABLE: &str = "CREATE TABLE sessions (
+                             word TEXT PRIMARY KEY,
+                             uid TEXT NOT NULL,
+                             name TEXT NOT NULL,
+                             seen INTEGER NOT NULL
+                         ) WITHOUT ROWID;";
+
 pub struct Discovered {
     pub uid: String,
     pub rx: i32,
@@ -208,9 +227,18 @@ impl Store {
                              name TEXT PRIMARY KEY,
                              value INTEGER NOT NULL
                          ) WITHOUT ROWID;
+                         {SESSIONS_TABLE}
                          PRAGMA user_version = {SCHEMA};"
                     ))
                     .map_err(|error| Error::database("creating the schema", error))?;
+                Ok(())
+            }
+            // Schema 1 is schema 2 without the sessions: a map from before
+            // logins were kept is carried forward with everything it holds.
+            1 => {
+                connection
+                    .execute_batch(&format!("{SESSIONS_TABLE} PRAGMA user_version = {SCHEMA};"))
+                    .map_err(|error| Error::database("adding the sessions table", error))?;
                 Ok(())
             }
             SCHEMA => Ok(()),
@@ -222,6 +250,61 @@ impl Store {
                 ),
             }),
         }
+    }
+
+    /// Every browser still logged in.
+    pub fn sessions(&self) -> Result<Vec<Session>> {
+        let connection = self.lock();
+        let mut statement = connection
+            .prepare("SELECT word, uid, name, seen FROM sessions")
+            .map_err(|error| Error::database("reading the sessions", error))?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok(Session {
+                    word: row.get(0)?,
+                    uid: row.get(1)?,
+                    name: row.get(2)?,
+                    seen: UNIX_EPOCH + Duration::from_secs(row.get::<_, i64>(3)?.max(0) as u64),
+                })
+            })
+            .map_err(|error| Error::database("reading the sessions", error))?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|error| Error::database("reading a session", error))
+    }
+
+    /// Records one browser's login, whole.
+    pub fn put_session(&self, session: &Session) -> Result<()> {
+        self.lock()
+            .execute(
+                "INSERT INTO sessions (word, uid, name, seen) VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT (word) DO UPDATE SET uid = excluded.uid, name = excluded.name, seen = excluded.seen",
+                params![session.word, session.uid, session.name, seconds(session.seen)],
+            )
+            .map_err(|error| Error::database("recording a login", error))?;
+        Ok(())
+    }
+
+    /// Moves one browser's last-seen time forward.
+    pub fn touch_session(&self, word: &str, seen: SystemTime) -> Result<()> {
+        self.lock()
+            .execute("UPDATE sessions SET seen = ?2 WHERE word = ?1", params![word, seconds(seen)])
+            .map_err(|error| Error::database("noting a login was used", error))?;
+        Ok(())
+    }
+
+    /// Forgets one browser.
+    pub fn delete_session(&self, word: &str) -> Result<()> {
+        self.lock()
+            .execute("DELETE FROM sessions WHERE word = ?1", params![word])
+            .map_err(|error| Error::database("forgetting a login", error))?;
+        Ok(())
+    }
+
+    /// Forgets every browser. Answers how many there were.
+    pub fn clear_sessions(&self) -> Result<usize> {
+        self.lock()
+            .execute("DELETE FROM sessions", [])
+            .map_err(|error| Error::database("forgetting every login", error))
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Connection> {

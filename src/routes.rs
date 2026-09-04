@@ -29,7 +29,7 @@ pub fn route(request: &mut Request, state: &State) -> Reply {
         // answers with a redirect so the word leaves the address bar at once:
         // what stays in history, in a bookmark and in a pasted link is `/`.
         "/login" => match urls::link_asked(&url).and_then(|link| state.sessions.redeem(link)) {
-            Some(session) => http::redirect("/", Some(&crate::auth::seat(&session))),
+            Some(session) => http::redirect("/", Some(&state.sessions.seat(&session))),
             None => http::redirect("/?login=expired", None),
         },
         "/logout" => {

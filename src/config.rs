@@ -52,6 +52,11 @@ pub struct Rules {
     /// How far a player sees, in chunks each way. Zero means the game's own
     /// chunk radius, as the mod reports it.
     pub sight_radius_chunks: i32,
+    /// How long a browser stays logged in after it was last seen, in hours.
+    /// Zero means for ever.
+    pub session_hours: u64,
+    /// Whether a restart of the service logs every browser out.
+    pub sessions_reset_on_restart: bool,
 }
 
 /// Which privilege each `wl` command asks of whoever types it.
@@ -325,6 +330,24 @@ pub struct Config {
     /// or the server's `MaxChunkRadius` where the mod is too old to say.
     pub sight_radius_chunks: i32,
 
+    /// How long a browser stays logged in after it was last seen, in hours.
+    ///
+    /// Zero, which means for ever: a login is kept until that browser logs out
+    /// or the operator forgets everybody with `sessions_reset_on_restart`. A
+    /// map is a thing somebody opens for a minute while playing, and a login
+    /// that lapses is the most common reason to have to find the link again.
+    /// Set it where a browser left logged in on a shared machine is the larger
+    /// worry than a login link asked for again.
+    pub session_hours: u64,
+
+    /// Whether a restart of the service logs every browser out.
+    ///
+    /// Off: logins are kept in the map's database and survive a restart, so a
+    /// game server that restarts nightly does not cost everybody a login each
+    /// morning. On, every restart starts with nobody logged in, which is the
+    /// one way to be sure a session handed out before is worth nothing now.
+    pub sessions_reset_on_restart: bool,
+
     /// How long the page leaves between asking where everybody is, in
     /// milliseconds, where it has to ask at all.
     ///
@@ -466,6 +489,8 @@ impl Default for Config {
             anonymous_spawn: true,
             anonymous_spawn_radius_chunks: 8,
             sight_radius_chunks: 0,
+            session_hours: 0,
+            sessions_reset_on_restart: false,
             players_public: true,
             live_refresh_ms: 1000,
             export_interval_ms: 10_000,
@@ -575,6 +600,8 @@ impl Config {
             anonymous_spawn: self.anonymous_spawn,
             anonymous_spawn_radius_chunks: self.anonymous_spawn_radius_chunks,
             sight_radius_chunks: self.sight_radius_chunks,
+            session_hours: self.session_hours,
+            sessions_reset_on_restart: self.sessions_reset_on_restart,
         }
     }
 
@@ -815,6 +842,18 @@ const NOTES: &[(&str, &str)] = &[
          adds this much around them to their map. 0 uses each player's own view\n\
          distance as the game granted it, which is as far as it loads chunks\n\
          for them.",
+    ),
+    (
+        "session_hours",
+        "How long a browser stays logged in after it was last seen, in hours.\n\
+         0 means for ever: a login is kept until that browser logs out or\n\
+         sessions_reset_on_restart forgets everybody.",
+    ),
+    (
+        "sessions_reset_on_restart",
+        "Whether a restart of the service logs every browser out. Off, so\n\
+         logins are kept in the map's database and survive a restart. On,\n\
+         every restart starts with nobody logged in.",
     ),
     (
         "live_refresh_ms",

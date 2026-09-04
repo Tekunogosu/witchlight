@@ -18,7 +18,7 @@ use std::time::SystemTime;
 
 use image::RgbImage;
 
-use crate::auth::Sessions;
+use crate::auth::{Keeping, Sessions};
 use crate::cache::{At, Cache};
 use crate::columns::{Chunk, World, columns_dir};
 use crate::events::Events;
@@ -159,6 +159,7 @@ impl State {
         let regions = store.region_times()?;
         let store = Arc::new(store);
         let memory = Arc::new(Memory::load(Arc::clone(&store)));
+        let sessions = Arc::new(Sessions::load(Arc::clone(&store), Keeping::from_rules(&rules))?);
         let preferences = Arc::new(Preferences::load(data));
         for (uid, person) in preferences.all() {
             memory.set_shares(&uid, person.share_map_with.iter().copied());
@@ -172,7 +173,7 @@ impl State {
             regions: Mutex::new(regions),
             painted: Mutex::new(files::modified(&crate::palette::path_in(data))),
             live: Arc::new(Live::load(data)),
-            sessions: Arc::new(Sessions::new()),
+            sessions,
             pending: Arc::new(Pending::new()),
             preferences,
             names: RwLock::new(crate::watch::block_names(data).unwrap_or_default()),
@@ -717,6 +718,8 @@ pub mod testing {
             anonymous_spawn: false,
             anonymous_spawn_radius_chunks: 8,
             sight_radius_chunks: 0,
+            session_hours: 0,
+            sessions_reset_on_restart: false,
         }
     }
 

@@ -9,6 +9,24 @@ which is where that rule is kept rather than in anybody's memory.
 A version that moved for the other half says so and lists nothing, which is not an
 omission: it is what "one release" looks like from the side that did not change.
 
+## 0.46.0
+
+**Deploy note:** both halves, upgraded together; nothing is cleared. The map's
+database moves to schema 2, which adds a table and keeps everything held.
+
+- Logins survive a restart. A browser that followed a login link is kept in the
+  map's database and is still logged in after the service comes back, which it
+  does on every restart of the game server.
+- `session_hours` says how long a browser stays logged in after it was last
+  seen. 0, the default, means for ever.
+- `sessions_reset_on_restart` logs every browser out on a start. Off by default.
+
+## 0.45.3
+
+**Deploy note:** both halves, upgraded together; nothing is cleared. Moved for
+the mod, which draws shared markers on its own map layer and words the date
+right — see its changelog.
+
 ## 0.45.2
 
 **Deploy note:** both halves, upgraded together; nothing is cleared or rebuilt.
