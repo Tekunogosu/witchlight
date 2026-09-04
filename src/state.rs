@@ -172,7 +172,7 @@ impl State {
             palette: RwLock::new(palette),
             regions: Mutex::new(regions),
             painted: Mutex::new(files::modified(&crate::palette::path_in(data))),
-            live: Arc::new(Live::load(data)),
+            live: Arc::new(Live::load(data, &rules.hidden_groups)),
             sessions,
             pending: Arc::new(Pending::new()),
             preferences,
@@ -720,6 +720,7 @@ pub mod testing {
             sight_radius_chunks: 0,
             session_hours: 0,
             sessions_reset_on_restart: false,
+            hidden_groups: vec!["xlib".to_owned()],
         }
     }
 

@@ -185,7 +185,8 @@ const settings = {
  * there was another panel holding the rest.
  *
  * The order is the order they are shown in: what is on the map first, then what
- * is drawn over it.
+ * is drawn over it. The marker icons in lists sit with the markers rather than
+ * with the windows they are in, being the same picture at a second size.
  *
  * The marker pair are multipliers rather than second sets of sizes, so where a
  * mark sits on its block and where its name sits above the mark are answered once
@@ -196,6 +197,9 @@ const settings = {
 const scales = {
   mark: { label: 'Markers', css: '--mark-scale', at: 1, least: 0.6, most: 3 },
   markName: { label: 'Marker names', css: '--mark-name-scale', at: 1, least: 0.6, most: 3 },
+  // Its own number rather than the map's: a marker the size of a house on the
+  // map is not a marker the size of a house in a list beside it.
+  listMark: { label: 'Marker icons in lists', css: '--list-mark-scale', at: 1, least: 0.6, most: 3 },
   people: { label: 'Players and clock', css: '--scale-people', at: 1, least: 0.7, most: 1.8 },
   panel: { label: 'Windows', css: '--scale-panel', at: 1, least: 0.7, most: 1.8 },
   tools: { label: 'Map buttons', css: '--scale-tools', at: 1, least: 0.7, most: 1.8 },
@@ -263,16 +267,16 @@ function sizeSliders() {
  * Takes a size, once the hand has let go of the slider.
  *
  * Kept as it is set rather than waiting for a Save, because the whole of what a
- * size slider is for is seeing the answer. Where the profile window sits is
- * worked out again straight after: it may have just changed size, and a window
- * grown against the edge of the screen has to be pulled back to stay reachable.
+ * size slider is for is seeing the answer. Where every window sits is worked
+ * out again straight after: each may have just changed size, and a window grown
+ * against the edge of the screen has to be pulled back to stay reachable — the
+ * one holding the slider first among them.
  */
 function takeScale(part, size) {
   scales[part].at = size;
   applyScales();
   remember();
-  const held = windowsAt.get(profile);
-  if (held) settleWindow(profile, held.x, held.y);
+  for (const [panel, held] of windowsAt) settleWindow(panel, held.x, held.y);
 }
 
 function layer(group, on) {
@@ -420,10 +424,31 @@ function switchFor(name, setting) {
   return label;
 }
 
+/** One titled part of the accessibility window. */
+function accessSection(title) {
+  const box = document.createElement('section');
+  const heading = document.createElement('h3');
+  heading.textContent = title;
+  box.append(heading);
+  return box;
+}
+
+/** One of a short list of answers, of which one is pressed at a time. */
+function choiceButton(kind, name, label, choose) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.dataset[kind] = name;
+  button.textContent = label;
+  button.setAttribute('aria-pressed', 'false');
+  button.addEventListener('click', choose);
+  return button;
+}
+
 function buildSettings() {
   const panel = document.getElementById('settings');
-  const access = document.createElement('div');
-  access.id = 'access-panel';
+  // Inside a window of its own — see the markup — rather than hung off the
+  // button that opens it: what is in here sizes that button.
+  const access = document.getElementById('access-panel');
 
   for (const [name, setting] of Object.entries(settings)) {
     (setting.panel === 'access' ? access : panel).append(switchFor(name, setting));
@@ -443,58 +468,48 @@ function buildSettings() {
   cogBar.append(panel);
 
   // What the map can be asked to do differently for one pair of eyes: the
-  // switches above, and then the colours, under a heading of their own so the
-  // two read as different kinds of answer to the same question.
-  const heading = document.createElement('h2');
-  heading.textContent = 'Map colours';
-  access.append(heading);
+  // switches above, then the two questions about colour side by side — they
+  // are the same length and answered the same way, one choice from a short
+  // list — and every size under the pair, since six sliders are a block of
+  // their own whatever is above them.
+  const colours = accessSection('Map colours');
   for (const [name, filter] of Object.entries(filters)) {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.dataset.filter = name;
-    button.textContent = filter.label;
-    button.setAttribute('aria-pressed', 'false');
-    button.addEventListener('click', () => chooseFilter(name));
-    access.append(button);
+    colours.append(choiceButton('filter', name, filter.label, () => chooseFilter(name)));
   }
-  const seeing = document.createElement('h2');
-  seeing.textContent = 'Colour vision';
-  access.append(seeing);
+  const seeing = accessSection('Colour vision');
   for (const [name, vision] of Object.entries(visions)) {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.dataset.vision = name;
-    button.textContent = vision.label;
-    button.setAttribute('aria-pressed', 'false');
-    button.addEventListener('click', () => chooseVision(name));
-    access.append(button);
+    seeing.append(choiceButton('vision', name, vision.label, () => chooseVision(name)));
   }
+  const pair = document.createElement('div');
+  pair.className = 'pair';
+  pair.append(colours, seeing);
+  access.append(pair);
 
   // Every size in one place. What is large enough is a judgement about one
   // person's eyes and one person's screen, and it is the same judgement about a
   // marker as about the panel beside it — so the markers come first, being what
   // is on the map, and the interface follows.
-  const sized = document.createElement('h2');
-  sized.textContent = 'Size';
+  const sized = accessSection('Size');
+  sized.classList.add('sizes');
+  sized.append(...sizeSliders());
   access.append(sized);
-  access.append(...sizeSliders());
 
-  accessBar.append(access);
   applyFilter();
   applyVision();
 
+  // The button opens the window, and shuts it if it is already in front: one
+  // control that answers "show me" and "enough" both, the way the settings
+  // button beside it does for its own panel.
   accessBar.querySelector('a').addEventListener('click', event => {
     event.stopPropagation();
-    access.classList.toggle('open');
     panel.classList.remove('open');
+    if (accessibility.classList.contains('open')) shutWindow(accessibility);
+    else openWindow(accessibility);
   });
-  addEventListener('click', () => access.classList.remove('open'));
-  access.addEventListener('click', event => event.stopPropagation());
 
   cogBar.querySelector('a').addEventListener('click', event => {
     event.stopPropagation();
     panel.classList.toggle('open');
-    access.classList.remove('open');
   });
   // Anywhere else closes it, including the map underneath.
   addEventListener('click', () => panel.classList.remove('open'));

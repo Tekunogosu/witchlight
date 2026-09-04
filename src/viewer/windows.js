@@ -22,6 +22,9 @@
 /** Where each window has been put, by the element it is. */
 const windowsAt = new Map();
 
+/** What one pair of eyes is shown — colours, sizes, what the map may do. */
+const accessibility = document.getElementById('accessibility');
+
 /** How small a window may be dragged before it stops being one. */
 const WINDOW_LEAST = { wide: 240, high: 140 };
 
@@ -64,8 +67,28 @@ function settleWindow(panel, left, top) {
   const y = Math.min(Math.max(top, 0), innerHeight - 30);
   panel.style.left = `${Math.round(x)}px`;
   panel.style.top = `${Math.round(y)}px`;
+  panel.style.maxHeight = `${Math.round(heightLeftUnder(y))}px`;
   windowsAt.set(panel, { x, y });
   followTheWindow(panel);
+}
+
+/**
+ * How tall a window may be from a given top before it runs off the screen, in
+ * its own pixels.
+ *
+ * A window scrolls its own contents, which keeps every control in it
+ * reachable — but only while the window's foot is on the screen. The stylesheet
+ * caps a window at the height of the page, which a window opened partway down
+ * runs past by however far down it is, and a window drawn through
+ * `--scale-panel` runs past by that factor again: the largest setting put the
+ * slider that shrinks the windows back below the bottom of the screen, with no
+ * way to scroll to it. So the cap is worked out where the position is, from
+ * the position, and divided by the scale because the stylesheet sizes the
+ * window before the transform draws it larger.
+ */
+function heightLeftUnder(top) {
+  const margin = 12;
+  return Math.max(WINDOW_LEAST.high, (innerHeight - top - margin) / scaleOf('panel'));
 }
 
 /**
@@ -227,9 +250,16 @@ function openWindow(panel, middle) {
   const held = windowsAt.get(panel);
   if (held) {
     settleWindow(panel, held.x, held.y);
-  } else if (middle) {
-    const box = panel.getBoundingClientRect();
+    return;
+  }
+  // Settled on its first opening too, and not only when it is moved: where
+  // the stylesheet put it is a position like any other, and the height a
+  // window may have follows from its position — see `settleWindow`.
+  const box = panel.getBoundingClientRect();
+  if (middle) {
     settleWindow(panel, (innerWidth - box.width) / 2, (innerHeight - box.height) / 2);
+  } else {
+    settleWindow(panel, box.left, box.top);
   }
 }
 
@@ -257,7 +287,7 @@ function shutWindow(panel) {
  * added without ever being made draggable. What a window is, is decided here.
  */
 function buildWindows() {
-  for (const panel of [composer, presetPanel, directory, profile, claimPanel, claimsPanel])
+  for (const panel of [composer, presetPanel, directory, profile, claimPanel, claimsPanel, accessibility])
     dragBy(panel);
   // Only the two that list things. A form is as big as its fields and a window
   // with a size nobody can use is a corner that does nothing when pulled.

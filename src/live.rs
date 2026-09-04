@@ -117,10 +117,6 @@ struct Seen {
     /// Players one particular person may see beyond that, by their uid. Empty
     /// where positions are everybody's, since then everyone is in `open`.
     owned: HashMap<String, String>,
-    /// Who shares a group with one particular person, by their uid, as a list of
-    /// uids. Not about who may be seen — it is what lets the page offer "my
-    /// group" as a way of reading a list it already has.
-    grouped: HashMap<String, String>,
     /// Where everyone the mod posted this beat is standing, in blocks — every
     /// player the mod knows about, independent of `open`/`owned`.
     positions: Vec<Whereabouts>,
@@ -136,7 +132,6 @@ impl Default for Seen {
             online: 0,
             open: "[]".to_owned(),
             owned: HashMap::new(),
-            grouped: HashMap::new(),
             positions: Vec::new(),
             groups: HashMap::new(),
         }
@@ -153,8 +148,6 @@ struct Watching {
     public: Option<Box<RawValue>>,
     #[serde(default)]
     private: HashMap<String, Box<RawValue>>,
-    #[serde(default)]
-    grouped: HashMap<String, Box<RawValue>>,
     /// Every group, by its id as a string — JSON has no other kind of key.
     #[serde(default)]
     groups: HashMap<String, GroupPosted>,
@@ -276,6 +269,10 @@ pub struct Live {
     claims: Mutex<Claims>,
     /// Where markers are kept so they survive both programs stopping.
     path: PathBuf,
+    /// Group names the operator has said are no group at all, lowercased once
+    /// here so a post is compared against them without lowercasing them again.
+    /// See `Config::hidden_groups`.
+    hidden: Vec<String>,
 }
 
 impl Live {
@@ -286,7 +283,7 @@ impl Live {
     /// about that, and showing it to everybody would be deciding on the owner's
     /// behalf; the mod replaces it within one share interval either way.
     #[must_use]
-    pub fn load(exports: &Path) -> Self {
+    pub fn load(exports: &Path, hidden_groups: &[String]) -> Self {
         let path = markers_path(exports);
         let markers = std::fs::read_to_string(&path)
             .ok()
@@ -299,13 +296,14 @@ impl Live {
             markers: Mutex::new(markers),
             claims: Mutex::new(Claims::default()),
             path,
+            hidden: hidden_groups.iter().map(|name| name.trim().to_lowercase()).collect(),
         }
     }
 
     /// Takes a report of who is online, sorted by who may see them. In memory
     /// only: a position is stale before a write of it would finish.
     pub fn set_players(&self, body: String) -> bool {
-        let Some(taken) = watching(&body) else {
+        let Some(taken) = watching(&body, &self.hidden) else {
             return false;
         };
         if let Ok(mut players) = self.players.lock() {
@@ -427,10 +425,10 @@ impl Live {
     /// not write.
     #[must_use]
     pub fn body(&self, uid: Option<&str>) -> String {
-        // Who is online, whom of them this person may see, and who of those is in
-        // a group with them. A report older than the patience is a game server
-        // that has gone, and a dot saying somebody is standing somewhere is worse
-        // than no dot at all.
+        // Who is online, whom of them this person may see, and who is in a group
+        // with them. A report older than the patience is a game server that has
+        // gone, and a dot saying somebody is standing somewhere is worse than no
+        // dot at all.
         let (players, online, grouped) = self
             .players
             .lock()
@@ -441,15 +439,10 @@ impl Live {
                     .map(|(seen, _)| {
                         (mine(&seen.open, seen.owned.get(uid.unwrap_or_default())),
                          seen.online,
-                         seen.grouped.get(uid.unwrap_or_default()).cloned())
+                         grouped_with(&seen.groups, uid))
                     })
             })
-            .map_or_else(
-                || ("[]".to_owned(), 0, "[]".to_owned()),
-                |(list, online, grouped)| {
-                    (list, online, grouped.unwrap_or_else(|| "[]".to_owned()))
-                },
-            );
+            .unwrap_or_else(|| ("[]".to_owned(), 0, "[]".to_owned()));
 
         // The markers this person may see, and which of them they keep in sight in
         // game. The pins go out only to whoever set them: what somebody has
@@ -541,14 +534,40 @@ fn sorted(body: &str) -> Option<Markers> {
     })
 }
 
+/// Everybody who shares a group with one person, as a JSON array of uids.
+///
+/// Worked out here rather than taken from the mod, so that a group the operator
+/// has hidden — see `Config::hidden_groups` — counts for nothing: the groups
+/// have already been sifted on the way in, and this reads only what is left.
+/// The person is in their own group, and a stranger is in nobody's. Offline
+/// members are included, since a group is who is in it and not who is on.
+fn grouped_with(groups: &HashMap<i32, Group>, uid: Option<&str>) -> String {
+    let Some(uid) = uid.filter(|uid| !uid.is_empty()) else {
+        return "[]".to_owned();
+    };
+    let mut together: Vec<&str> = groups
+        .values()
+        .filter(|group| group.members.contains(uid))
+        .flat_map(|group| group.members.iter().map(String::as_str))
+        .chain(std::iter::once(uid))
+        .collect();
+    together.sort_unstable();
+    together.dedup();
+    serde_json::to_string(&together).unwrap_or_else(|_| "[]".to_owned())
+}
+
 /// The mod's report of who is online, taken apart no further than it has to be.
+///
+/// A group whose name the operator has hidden is dropped here, which is the one
+/// door every group comes in through: nothing downstream has to know the list
+/// exists.
 ///
 /// An array rather than an object is a mod older than this build, which posted
 /// every player to everybody. Refused rather than read that way: the two halves
 /// ship as one release and carry one version, so this is a mis-deployment — and
 /// quietly showing every position to everybody would be exactly the thing an
 /// operator turned the setting off to prevent.
-fn watching(body: &str) -> Option<Seen> {
+fn watching(body: &str, hidden: &[String]) -> Option<Seen> {
     if !body.trim_start().starts_with('{') {
         return None;
     }
@@ -566,6 +585,7 @@ fn watching(body: &str) -> Option<Seen> {
     let groups = read
         .groups
         .into_iter()
+        .filter(|(_, group)| !hidden.contains(&group.name.trim().to_lowercase()))
         .filter_map(|(id, group)| {
             Some((id.parse::<i32>().ok()?, Group { name: group.name, members: group.members.into_iter().collect() }))
         })
@@ -575,7 +595,6 @@ fn watching(body: &str) -> Option<Seen> {
         online: read.online,
         open: array(read.public.as_deref()),
         owned: arrays(read.private),
-        grouped: arrays(read.grouped),
         positions,
         groups,
     })
@@ -668,7 +687,7 @@ mod tests {
     }"##;
 
     fn told() -> Live {
-        let live = Live::load(Path::new("/nonexistent"));
+        let live = Live::load(Path::new("/nonexistent"), &[]);
         assert!(live.set_markers(POSTED.to_owned()), "the envelope this build posts is taken");
         live
     }
@@ -686,7 +705,7 @@ mod tests {
 
     #[test]
     fn a_post_from_a_mod_that_knows_nothing_of_pins_has_none() {
-        let live = Live::load(Path::new("/nonexistent"));
+        let live = Live::load(Path::new("/nonexistent"), &[]);
         assert!(live.set_markers(
             r##"{"Colors":[],"Public":[{"Title":"trader","Key":"a"}],"Private":{}}"##.to_owned()));
         // An empty array rather than a hole, for the reason every other list
@@ -735,7 +754,7 @@ mod tests {
 
     #[test]
     fn a_post_this_build_cannot_read_is_refused() {
-        let live = Live::load(Path::new("/nonexistent"));
+        let live = Live::load(Path::new("/nonexistent"), &[]);
 
         // A bare array is what an older mod posted. It says nothing about who may
         // see what, and reading it as all-public would decide on owners' behalf.
@@ -746,7 +765,7 @@ mod tests {
 
     #[test]
     fn a_map_nobody_has_posted_to_still_answers() {
-        let live = Live::load(Path::new("/nonexistent"));
+        let live = Live::load(Path::new("/nonexistent"), &[]);
         let body: serde_json::Value =
             serde_json::from_str(&live.body(None)).expect("valid JSON");
         assert_eq!(body["Players"].as_array().expect("an array").len(), 0);
@@ -772,13 +791,16 @@ mod tests {
 
     /// Ada is on and everybody may see her; Bob is on and only his own group may.
     /// Cass is in that group and is not on, which is what the map is asked about.
+    /// Everybody is in the group a mod made for everybody, which the operator
+    /// has hidden.
     fn watched() -> Live {
-        let live = Live::load(Path::new("/nonexistent"));
+        let live = Live::load(Path::new("/nonexistent"), &["XLib".to_owned()]);
         assert!(live.set_players(
             r#"{"Online":2,
                 "Public":[{"Name":"ada","Uid":"a"}],
                 "Private":{"b":[{"Name":"bob","Uid":"b"}],"c":[{"Name":"bob","Uid":"b"}]},
-                "Grouped":{"b":["b","c"],"c":["b","c"]}}"#
+                "Groups":{"1":{"Name":"the guild","Members":["b","c"]},
+                          "2":{"Name":"xlib","Members":["a","b","c"]}}}"#
                 .to_owned()
         ));
         live
@@ -819,9 +841,9 @@ mod tests {
 
     #[test]
     fn the_groups_the_mod_posts_are_read_whole() {
-        let live = Live::load(Path::new("/nonexistent"));
+        let live = Live::load(Path::new("/nonexistent"), &[]);
         assert!(live.set_players(
-            r#"{"Online":0,"Public":[],"Private":{},"Grouped":{},
+            r#"{"Online":0,"Public":[],"Private":{},
                 "Groups":{"7":{"Name":"the guild","Members":["a","b","c"]},"x":{"Name":"nonsense"}}}"#
                 .to_owned()
         ));
@@ -846,7 +868,18 @@ mod tests {
         let live = watched();
         assert!(live.body(Some("b")).contains(r#""Grouped":["b","c"]"#));
         assert!(live.body(None).contains(r#""Grouped":[]"#), "a stranger is in no group");
-        assert!(live.body(Some("a")).contains(r#""Grouped":[]"#), "nor is somebody in none");
+        assert!(live.body(Some("a")).contains(r#""Grouped":["a"]"#), "somebody in none is with themselves");
+    }
+
+    #[test]
+    fn a_hidden_group_is_no_group_whatever_its_case() {
+        // `XLib` was hidden and `xlib` was posted: the group everybody is in
+        // neither puts ada in with bob nor is offered to anybody.
+        let live = watched();
+        assert!(!live.body(Some("a")).contains("\"b\""), "ada is not grouped with bob");
+        let groups = live.groups();
+        assert_eq!(groups.len(), 1, "only the guild is kept");
+        assert_eq!(groups[&1].name, "the guild");
     }
 
     /// Two claims, seen by Ada alone, and only Ada may draw one.
@@ -860,7 +893,7 @@ mod tests {
     }"##;
 
     fn claimed() -> Live {
-        let live = Live::load(Path::new("/nonexistent"));
+        let live = Live::load(Path::new("/nonexistent"), &[]);
         assert!(live.set_claims(CLAIMED.to_owned()), "the envelope this build posts is taken");
         live
     }
@@ -888,7 +921,7 @@ mod tests {
         // What a server that has not narrowed `[claims] view` looks like: the
         // game already sends every claim to every client, so the map saying less
         // would be telling players less than the game does.
-        let live = Live::load(Path::new("/nonexistent"));
+        let live = Live::load(Path::new("/nonexistent"), &[]);
         assert!(live.set_claims(
             r#"{"Everyones":true,"Claims":[{"Key":"a"}],"Seen":[],"Making":{}}"#.to_owned()
         ));
@@ -917,7 +950,7 @@ mod tests {
 
     #[test]
     fn a_claim_post_this_build_cannot_read_is_refused() {
-        let live = Live::load(Path::new("/nonexistent"));
+        let live = Live::load(Path::new("/nonexistent"), &[]);
         assert!(!live.set_claims(r#"[{"Key":"a"}]"#.to_owned()), "a bare array is not the envelope");
         assert!(!live.set_claims("not json".to_owned()));
         assert!(live.body(Some("uid-ada")).contains(r#""Claims":[]"#));
@@ -927,7 +960,7 @@ mod tests {
 fn a_report_in_the_shape_an_older_mod_posted_is_refused() {
         // A bare array was every player, to everybody. Read that way it would be
         // exactly what an operator turned the setting off to prevent.
-        let live = Live::load(Path::new("/nonexistent"));
+        let live = Live::load(Path::new("/nonexistent"), &[]);
         assert!(!live.set_players(r#"[{"Name":"ada"}]"#.to_owned()));
         assert!(!live.body(None).contains("ada"));
     }

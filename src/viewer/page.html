@@ -346,6 +346,21 @@
   <p id="claims-said" class="note"></p>
 </div>
 
+<!-- What one pair of eyes is shown: colours, sizes, and what the map may do.
+     A window rather than a list hung off its button, because the sizes in it
+     size the button it hung off — grow the map buttons enough and the list grew
+     past the screen with the slider to shrink it again out of reach. A window
+     is drawn at its own size, is clamped to the screen, and can be dragged. The
+     contents are built by script from one table, so a size is an entry there
+     and nothing here. -->
+<div id="accessibility" class="window">
+  <div class="bar">
+    <h2>Accessibility</h2>
+    <button class="shut" type="button" title="Close" aria-label="Close"><span class="chrome masked mark-x" aria-hidden="true"></span></button>
+  </div>
+  <div id="access-panel"></div>
+</div>
+
 <div id="profile" class="window">
   <div class="bar">
     <span id="profile-face" class="face"></span>

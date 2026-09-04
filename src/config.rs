@@ -27,7 +27,7 @@ use crate::error::{Error, Result};
 /// Nothing here is enforced here. The mod is the half that decides who is sent
 /// what; what these settle is which controls the page offers and how often it
 /// asks.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Rules {
     /// Whether a marker nobody has decided about is everyone's.
     pub markers_public: bool,
@@ -57,6 +57,9 @@ pub struct Rules {
     pub session_hours: u64,
     /// Whether a restart of the service logs every browser out.
     pub sessions_reset_on_restart: bool,
+    /// Player groups the map treats as no group at all, by name. Compared
+    /// case-insensitively — see [`Config::hidden_groups`].
+    pub hidden_groups: Vec<String>,
 }
 
 /// Which privilege each `wl` command asks of whoever types it.
@@ -304,6 +307,19 @@ pub struct Config {
     /// from sending them.
     pub players_public: bool,
 
+    /// Player groups the map treats as no group at all, by name.
+    ///
+    /// Some mods put every player on the server into a group of their own —
+    /// xlib makes one called `xlib` — and a group everybody is in is not a
+    /// group anybody chose. Left in, it would be offered as a group to share a
+    /// map with and would make the Group tab of the player list everybody, so a
+    /// group named here is dropped as it arrives from the mod: it is never
+    /// offered, never counted and never shared against.
+    ///
+    /// Matched by name, case-insensitively, so `XLib` and `xlib` name the same
+    /// group.
+    pub hidden_groups: Vec<String>,
+
     /// Whether each person is shown the map as they last saw it.
     ///
     /// On. A public server is not one map: it is a map per person, of what that
@@ -492,6 +508,7 @@ impl Default for Config {
             session_hours: 0,
             sessions_reset_on_restart: false,
             players_public: true,
+            hidden_groups: vec!["xlib".to_owned()],
             live_refresh_ms: 1000,
             export_interval_ms: 10_000,
             backfill_radius_chunks: 0,
@@ -602,6 +619,7 @@ impl Config {
             sight_radius_chunks: self.sight_radius_chunks,
             session_hours: self.session_hours,
             sessions_reset_on_restart: self.sessions_reset_on_restart,
+            hidden_groups: self.hidden_groups.clone(),
         }
     }
 
@@ -816,6 +834,13 @@ const NOTES: &[(&str, &str)] = &[
          and a player shows on the map to their own group and to nobody else. How\n\
          many are online is still said either way. Read and enforced by the mod,\n\
          which is the half that knows the groups.",
+    ),
+    (
+        "hidden_groups",
+        "Player groups the map treats as no group at all, by name. A mod that\n\
+         puts everybody into one group — xlib does — would otherwise offer that\n\
+         group for sharing a map with and make the Group tab of the player\n\
+         list everybody. Matched regardless of case.",
     ),
     (
         "private_map",

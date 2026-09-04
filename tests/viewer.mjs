@@ -121,12 +121,22 @@ const windows = new Function(`
   const composer = { other: true };
   const presetPick = { classList: { contains: () => false } };
   const placePresetPick = () => {};
+  // How large the windows are drawn, which the height a window may have is
+  // divided by: the stylesheet sizes it before the transform enlarges it.
+  let panelScale = 1;
+  const scaleOf = () => panelScale;
+  ${liftObject('WINDOW_LEAST')}
+  ${lift('heightLeftUnder')}
   ${lift('followTheWindow')}
   ${lift('settleWindow')}
-  return (left, top, wide, high) => {
-    innerWidth = wide; innerHeight = high;
+  return (left, top, wide, high, scale = 1) => {
+    innerWidth = wide; innerHeight = high; panelScale = scale;
     settleWindow(panel, left, top);
-    return { x: parseInt(panel.style.left, 10), y: parseInt(panel.style.top, 10) };
+    return {
+      x: parseInt(panel.style.left, 10),
+      y: parseInt(panel.style.top, 10),
+      cap: parseInt(panel.style.maxHeight, 10),
+    };
   };
 `)();
 
@@ -557,6 +567,12 @@ check('dragged past the bottom, the bar stays reachable',
 // asked again, so the same clamp has to answer it on a smaller screen.
 check('and a smaller browser pulls it back in',
   windows(940, 770, 400, 300).x <= 340 && windows(940, 770, 400, 300).y <= 270);
+// A window scrolls its own contents, so a control at its foot is reachable only
+// while its foot is on the screen. The cap is the room under the window's top,
+// in the window's own pixels: drawn at twice the size, it may be half as tall.
+check('a window is capped to the room under it', put(300, 200).cap === 588);
+check('and a window drawn larger is capped to less', windows(300, 200, ...SCREEN, 2).cap === 294);
+check('but never below the least a window can be', windows(300, 9000, ...SCREEN, 2).cap === 140);
 
 console.log('\na window is resized by the number a size is set to');
 // The corner divides the distance a hand moved by the scale the window is drawn

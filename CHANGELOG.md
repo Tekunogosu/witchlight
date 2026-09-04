@@ -9,6 +9,48 @@ which is where that rule is kept rather than in anybody's memory.
 A version that moved for the other half says so and lists nothing, which is not an
 omission: it is what "one release" looks like from the side that did not change.
 
+## 0.46.3
+
+**Deploy note:** both halves, upgraded together; nothing is cleared. Moved for
+the mod: claiming land from the map works for players again, and the in-game
+window on somebody else's marker can keep it as a preset — see its changelog.
+
+## 0.46.2
+
+**Deploy note:** both halves, upgraded together; nothing is cleared. The game
+server restarts before the new map service is live.
+
+- The accessibility window is laid out as a window rather than as the list it
+  grew out of: wider, with Map colours and Colour vision side by side under a
+  rule, the sizes in two columns under them, bold section titles, and smaller
+  controls. Its title bar stays put and only the body scrolls, and only when the
+  window has less room than it holds.
+
+## 0.46.1
+
+**Deploy note:** both halves, upgraded together; nothing is cleared. The game
+server restarts before the new map service is live.
+
+- `hidden_groups` names player groups the map treats as no group at all,
+  matched by name regardless of case. Default `["xlib"]`, the group xlib puts
+  every player in. A hidden group is dropped as it arrives from the mod: it is
+  not offered under "Share my map with", does not put everybody into the Group
+  tab of the player list, and sharing against it does nothing. Who is in the
+  Group tab is now worked out by the service from the groups, rather than taken
+  from a list the mod made without knowing which groups are hidden.
+- The accessibility panel is a window. It hung off the map button that opens
+  it, and the map-button size slider inside it grew the panel with the buttons
+  until the slider to shrink them back was off the screen. A window is drawn at
+  the windows' own size, dragged by its bar, shut by its mark or Escape, and
+  scrolls inside itself. Every window is now capped to the room under where it
+  sits, divided by the windows' size, so no size setting can put a window's foot
+  below the screen.
+- A "Marker icons in lists" size, separate from the markers on the map: the
+  pictures in the marker list, the presets, the picker in the marker form, and
+  every other list that draws one.
+- How many are on no longer counts a player whose client is still connecting.
+  See the mod's changelog.
+
 ## 0.46.0
 
 **Deploy note:** both halves, upgraded together; nothing is cleared. The map's

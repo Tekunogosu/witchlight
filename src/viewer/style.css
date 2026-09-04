@@ -91,13 +91,19 @@
      column rather than answering for a row. */
   --sort-mark: 11px;
 
-  /* The two panels that drop out of the tool column — the settings and the
-     accessibility panel. One number, because they hang off adjacent buttons and
-     a reader opening both in turn should not watch the column change width. It
-     is wide enough for the longest size label to sit on one line, which is what
-     decides it: a wrapped label puts its own slider half a row lower than the
-     four beside it. */
+  /* The panel that drops out of the tool column under the settings button. Wide
+     enough for the longest switch label to sit on one line. */
   --panel-drop: 216px;
+
+  /* How large a marker's picture is drawn in a list — the marker window, the
+     presets, the picker in the marker form — as a multiple of the size the row
+     was designed at. Its own number rather than the map's, because a marker
+     grown to read across a map is not a marker to grow across a list. The cell
+     and the picture in it are both stated through it, so the column a picture
+     sits in widens with the picture and never overlaps the name beside it. */
+  --list-mark-scale: 1;
+  --list-mark: calc(22px * var(--list-mark-scale));
+  --list-glyph: calc(16px * var(--list-mark-scale));
 
   --gap-1: 4px;
   --gap-2: 8px;
@@ -283,7 +289,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; color-scheme: dark;
    button goes it goes — including when the toolbar is scaled, which a distance
    measured from the top of the page does not survive. Its own scale comes from
    the tools for the same reason, rather than from the windows it is not one of. */
-#cog, #access { position: relative; }
+#cog { position: relative; }
 /* What the reader has chosen to see the ground as. Applied to the tile layer
    rather than to the map, so the markers, the grid and the player dots keep the
    colours they were given — a filter over the lot would recolour a marker
@@ -292,25 +298,34 @@ html, body { margin: 0; height: 100%; overflow: hidden; color-scheme: dark;
 .terrain { filter: var(--terrain-filter); }
 /* Named alternatives rather than sliders: this answers "which of these is
    easiest to read", and a reader who wanted to mix their own would still have
-   to look at five to find out. */
-#access-panel { position: absolute; left: 0; top: calc(100% + 6px); z-index: 900;
-           width: var(--panel-drop); padding: 10px 12px; background: var(--surface-veil);
-           border: 1px solid var(--line); border-radius: var(--round); display: none;
-           max-height: 70vh; overflow-y: auto;
-           box-shadow: 0 1px 5px rgba(0, 0, 0, .65); }
-#access-panel.open { display: block; }
+   to look at five to find out. The panel is the body of the accessibility
+   window — see the markup for why it is a window — so the window says where it
+   is and how large; this says only how its contents are laid out. */
+#accessibility { left: 250px; top: 100px; width: 440px; }
+/* The bar stays and the body scrolls: a column like the list windows, so that
+   the handle and the close mark are where they were however far down a reader
+   has gone. The body is the only part that scrolls, and only when the height
+   the window is allowed — see `settleWindow` — is less than it holds. */
+#accessibility.open { display: flex; flex-direction: column; overflow: hidden; }
+#accessibility > .bar { flex: none; }
+#access-panel { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 #access-panel label { display: flex; align-items: center; gap: var(--gap-2);
-                min-height: 24px; padding: var(--gap-1) 0;
-                font-size: var(--font-md); color: var(--text); cursor: pointer; }
+                min-height: 22px; padding: 2px 0;
+                font-size: var(--font-sm); color: var(--text); cursor: pointer; }
 #access-panel input { accent-color: var(--accent); margin: 0; }
-/* A rule above the colours, because the switches above it answer a different
-   question: what the map may do, against what it looks like. */
-#access-panel h2 { margin: var(--gap-2) 0 var(--gap-2); padding-top: var(--gap-2);
-             border-top: 1px solid var(--line-soft); font-size: var(--font-sm);
-             letter-spacing: .09em; text-transform: uppercase;
-             color: var(--text-dim); font-weight: normal; }
-#access-panel button { display: block; width: 100%; text-align: left; padding: 5px 8px;
-                  margin: 0; font: inherit; font-size: var(--font-md);
+/* The two questions about colour, side by side with a rule between them, and
+   a rule over the sizes under them. Each section says what it is the way the
+   settings panel says where the bars are: bold and green, so a reader finds
+   the part they came for without reading the rest. */
+#access-panel .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 0 var(--gap-3);
+                      margin-top: var(--gap-2); padding-top: var(--gap-2);
+                      border-top: 1px solid var(--line-soft); }
+#access-panel .pair > section + section { padding-left: var(--gap-3);
+                                          border-left: 1px solid var(--line-soft); }
+#access-panel h3 { margin: 0 0 var(--gap-1); font-size: var(--font-md);
+                   color: var(--section); font-weight: bold; }
+#access-panel button { display: block; width: 100%; text-align: left; padding: 3px 7px;
+                  margin: 0; font: inherit; font-size: var(--font-sm);
                   color: var(--text); background: none; border: 1px solid transparent;
                   border-radius: var(--round-sm); cursor: pointer; }
 /* One size to a row: its name on a line of its own, the track on the next and
@@ -324,8 +339,12 @@ html, body { margin: 0; height: 100%; overflow: hidden; color-scheme: dark;
    Stated against the panel rather than on `.slide`, because `#access-panel
    label` — which lays every label in this panel out as a row for the sake of
    the checkboxes — outranks a class on its own. */
-#access-panel .slide { display: block; padding: var(--gap-2) 0 var(--gap-1); }
-#access-panel .slide input { display: block; width: 100%; margin-top: var(--gap-1); }
+#access-panel .sizes { display: grid; grid-template-columns: 1fr 1fr;
+                       gap: 0 var(--gap-4); margin-top: var(--gap-3);
+                       padding-top: var(--gap-2); border-top: 1px solid var(--line-soft); }
+#access-panel .sizes h3 { grid-column: 1 / -1; }
+#access-panel .slide { display: block; padding: var(--gap-1) 0; min-height: 0; }
+#access-panel .slide input { display: block; width: 100%; margin-top: 2px; }
 #access-panel button:hover { background: var(--surface-bar); color: #fff; }
 #access-panel button[aria-pressed="true"] { background: var(--surface-on);
                                        border-color: var(--accent); color: var(--text-strong); }
@@ -596,13 +615,15 @@ html, body { margin: 0; height: 100%; overflow: hidden; color-scheme: dark;
    the grey the page draws its edges in, which a black silhouette clears 4:1
    against — see `TOO_DARK_TO_READ`. */
 #pictures.lit { background: var(--line-edge); }
-#pictures .swatch { width: 24px; height: 24px; display: grid; place-items: center;
+#pictures .swatch { width: calc(24px * var(--list-mark-scale)); height: calc(24px * var(--list-mark-scale));
+                    display: grid; place-items: center;
                     border-radius: var(--round-sm); cursor: pointer; background: none;
                     border: none; padding: 0; }
 /* Drawn the way the marker itself will be — the silhouette as a mask, filled
    with the colour chosen above it — so the picker shows markers rather than a
    menu of grey shapes, and the choice is made against what it produces. */
-#pictures .swatch i { display: block; width: 17px; height: 17px; }
+#pictures .swatch i { display: block; width: calc(17px * var(--list-mark-scale));
+                      height: calc(17px * var(--list-mark-scale)); }
 /* A list of blocks under the box that is being typed into. Positioned against
    the field rather than the window so it follows the box, and over everything
    in the window so a long list is not clipped by the field below it. */
@@ -795,10 +816,10 @@ html, body { margin: 0; height: 100%; overflow: hidden; color-scheme: dark;
    these because they are the same question — which of these do I mean — and a
    second set of rules would be a second answer to it. Changing either opens the
    marker window, which is where every one of those choices is already made. */
-.listed { display: grid; grid-template-columns: 22px 1fr auto; gap: 7px;
+.listed { display: grid; grid-template-columns: var(--list-mark) 1fr auto; gap: 7px;
           align-items: center; padding: 0 var(--gap-1); border-radius: var(--round-sm); }
-.listed .mark { width: 22px; height: 22px; display: grid; place-items: center; }
-.listed .mark i { display: block; width: 16px; height: 16px; }
+.listed .mark { width: var(--list-mark); height: var(--list-mark); display: grid; place-items: center; }
+.listed .mark i { display: block; width: var(--list-glyph); height: var(--list-glyph); }
 .listed .said { min-width: 0; text-align: left; background: none; border: none;
                 padding: 5px 0; font: inherit; color: var(--text); cursor: pointer; }
 .listed .said b { display: block; color: var(--text-strong); font-weight: normal;
@@ -811,15 +832,15 @@ html, body { margin: 0; height: 100%; overflow: hidden; color-scheme: dark;
    open on, both still say so over the top of it. */
 /* Two things a preset row can do rather than one, so the trailing column is a
    pair. Only this list: a marker row's columns are its own. */
-#preset-list .listed, .flyout .listed { grid-template-columns: 22px 1fr auto auto; }
+#preset-list .listed, .flyout .listed { grid-template-columns: var(--list-mark) 1fr auto auto; }
 /* A row here is picked and nothing more — no dropper, no bin — so it is the mark
    and the name and that is all. */
-#apply-list .listed { grid-template-columns: 22px 1fr; }
+#apply-list .listed { grid-template-columns: var(--list-mark) 1fr; }
 /* A claim row is a mark, what it is called, and a way in — the third column is
    there only for the claims this reader may change, so it is sized to what it
    holds rather than reserved on every row. */
-#claim-rows .listed { grid-template-columns: 22px 1fr auto; }
-.flyout .listed { grid-template-columns: 22px 1fr; }
+#claim-rows .listed { grid-template-columns: var(--list-mark) 1fr auto; }
+.flyout .listed { grid-template-columns: var(--list-mark) 1fr; }
 .listed .use { background: none; border: none; padding: 4px; cursor: pointer;
                color: var(--text-off); display: grid; place-items: center; }
 .listed .use:hover { color: var(--accent); }
@@ -841,7 +862,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; color-scheme: dark;
    twice without drifting. The name takes what is left; the rest are held to what
    they hold, and the mark a marker wears has no heading of its own, so the name
    is what stands over it. */
-#directory { --marker-cols: 22px minmax(0, 1fr) 112px 64px 58px var(--seen-box);
+#directory { --marker-cols: var(--list-mark) minmax(0, 1fr) 112px 64px 58px var(--seen-box);
              --marker-gap: 7px; }
 /* The gap is shared as well as the widths, and has to be: two grids of the same
    columns and different gaps cannot line up, whatever the columns say. The
@@ -855,7 +876,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; color-scheme: dark;
    bulk edit. One variable rather than a second template: the heading and the
    rows have to agree about every column, and two lists of widths is the one
    thing that guarantees they eventually will not. */
-#directory.bulk { --marker-cols: 20px 22px minmax(0, 1fr) 112px 64px 58px var(--seen-box); }
+#directory.bulk { --marker-cols: 20px var(--list-mark) minmax(0, 1fr) 112px 64px 58px var(--seen-box); }
 /* The box that ticks every row under it. Absent rather than hidden when the list
    is not in bulk edit: a grid item that is not displayed takes no column, which
    is what keeps the six-column heading over the six-column rows. */
