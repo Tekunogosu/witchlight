@@ -244,6 +244,13 @@ html, body { margin: 0; height: 100%; overflow: hidden; color-scheme: dark;
    against a corner, so growing one moves nothing else, and a transform keeps
    borders and text crisp at any size without a second set of dimensions. */
 :root { --scale-people: 1; --scale-panel: 1; --scale-tools: 1; }
+/* What a player is drawn in until they choose: one mark's own colour is set on
+   the mark, over this, by `colourMark`. */
+:root { --player-colour: var(--accent); }
+/* How large a player's mark is drawn, as a multiple of the size the mark was
+   designed at — the accessibility window's slider. Its own number: a mark
+   somebody needs larger to find is not a marker they need larger to read. */
+:root { --player-scale: 1; }
 /* How large a marker is drawn on its block, how large its name is drawn above it,
    and how much larger again a marker the list has found is drawn. The first two
    are somebody's answers about their own eyes and move on a slider; the third is
@@ -652,6 +659,23 @@ html, body { margin: 0; height: 100%; overflow: hidden; color-scheme: dark;
    corner of a rectangle on a north-up map has a compass direction, and "West" is
    what a reader calls it rather than `x1`. */
 #claim { width: 320px; }
+#claim-view { width: 300px; }
+#claim-view-may p { margin: var(--gap-1) 0; color: var(--text-strong); }
+/* Choosing a colour by pressing the mark it colours. A button in the shape
+   the window's other buttons take, so it reads as something to press, with the
+   mark inside it in the colour chosen. The picker is the browser's own, kept
+   in the button unseen and opened from it. */
+#colour-line { gap: var(--gap-3); }
+#colour-button { position: relative; display: grid; place-items: center;
+                 min-height: 26px; padding: var(--gap-1) var(--gap-3);
+                 cursor: pointer; background: var(--surface-bar);
+                 border: 1px solid var(--line-edge); border-radius: var(--round-sm); }
+#colour-button:hover { border-color: var(--accent-soft); background: var(--surface-on); }
+.colour-mark { position: relative; display: block; width: 22px; height: 30px; }
+.colour-mark .pin { position: absolute; left: 50%; top: 50%; margin: 0;
+                    transform: translate(-50%, -50%); width: 18px; height: 27px; }
+#want-colour { position: absolute; left: 0; top: 0; width: 1px; height: 1px;
+               opacity: 0; pointer-events: none; border: 0; padding: 0; }
 #claim > input[type="text"] { width: 100%; }
 /* The heading over one section. Small and spaced like the labels on the readout
    at the foot of the map, and bold, because it is the one thing in a column of
@@ -1050,10 +1074,12 @@ button.seen[disabled]:hover { background: none; }
    the way down the picture, which is where the mark hangs from and what it turns
    about. Centring the picture instead would put the player a few pixels behind
    themselves and swing them around a point they are not standing on. */
-.pin { display: block; width: 14px; height: 21px; margin: -14px 0 0 -7px;
+.pin { display: block; width: calc(14px * var(--player-scale));
+       height: calc(21px * var(--player-scale));
+       margin: calc(-14px * var(--player-scale)) 0 0 calc(-7px * var(--player-scale));
        transform-origin: 50% 66.3%; }
-.pin .shape { fill: var(--accent); stroke: var(--surface-veil); stroke-width: 4; }
-.pin .inner { fill: var(--accent); }
+.pin .shape { fill: var(--player-colour); stroke: var(--surface-veil); stroke-width: 4; }
+.pin .inner { fill: var(--player-colour); }
 /* Nobody has said which way they are looking, so the mark does not say either. */
 .pin.blind .cone { display: none; }
 /* The game's own marker pictures are single colour silhouettes, so they are
@@ -1091,7 +1117,7 @@ body.no-names .tag { display: none; }
                bottom: calc(2px + 9px * var(--mark-scale)); }
 /* Clear of the mark rather than across it: a player's mark stands taller than
    the dot it grew out of, because it has a direction to point in. */
-.player .tag { bottom: 15px; }
+.player .tag { bottom: calc(15px * var(--player-scale)); }
 body.show-marker-names .marker .tag { display: block; }
 .tag { position: absolute; left: 50%; transform: translateX(-50%);
        bottom: 9px; white-space: nowrap; font-size: 11px; color: var(--accent);
@@ -1136,6 +1162,11 @@ body.show-marker-names .marker .tag { display: block; }
              padding: var(--gap-2) var(--gap-3) var(--gap-3);
              border-top: 1px solid var(--line-soft);
              font-size: var(--font-sm); color: var(--text-dim); }
+/* What the reader may do on a claim, between its name and its footer: the
+   thing somebody hovers a claim to find out, said to them. */
+.said-may { display: block; padding: 0 var(--gap-3) var(--gap-2);
+            font-size: var(--font-sm); color: var(--text); }
+.said-may span { display: block; }
 .said-where { flex: none; letter-spacing: .02em; }
 .said-who { min-width: 0; overflow: hidden; text-overflow: ellipsis;
             white-space: nowrap; }

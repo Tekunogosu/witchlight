@@ -9,6 +9,37 @@ which is where that rule is kept rather than in anybody's memory.
 A version that moved for the other half says so and lists nothing, which is not an
 omission: it is what "one release" looks like from the side that did not change.
 
+## 0.46.5
+
+**Deploy note:** both halves, upgraded together; nothing is cleared. The game
+server restarts before the new map service is live.
+
+- A "Player icons" size in the accessibility window, its own number beside
+  the marker sizes: the mark, where it hangs from its position, and the name
+  over it all scale together.
+- "Choose player colour" is a button in the shape of the window's other
+  buttons, with your mark inside it, rather than a bare mark that happened to
+  open a picker.
+
+## 0.46.4
+
+**Deploy note:** both halves, upgraded together; nothing is cleared. The game
+server restarts before the new map service is live.
+
+- A claim on the map says what you may do there, from your side: build, open
+  chests and use blocks, walk through, or "You have no permissions on this
+  claim". In the popup between the name and the footer, and in the hover popup
+  where "Marker info on hover" is on, which now reaches claims as it does
+  markers.
+- A right click on a claim opens it: your own in the edit window the claim
+  list opens, anybody else's in a window that names it, says whose it is, and
+  says what you may do there.
+- "Choose player colour" in your settings, with your own map mark drawn in the
+  colour and the browser's full picker behind it. The colour is your mark on
+  the map and every land claim of yours, on every browser looking at this map;
+  left alone, you are drawn as everybody is. Kept with the rest of your
+  settings under Save.
+
 ## 0.46.3
 
 **Deploy note:** both halves, upgraded together; nothing is cleared. Moved for

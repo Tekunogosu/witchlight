@@ -34,13 +34,14 @@ function drawPlayers() {
       // looking, and what the popup says, which is written into the popup that
       // is already there rather than over the top of it.
       turn(drawn.marker, player);
+      colourMark(drawn.marker, uid);
       fillPopup(drawn.saying, player);
       continue;
     }
 
     const saying = popupFor(player);
     const marker = L.marker(at(player.X, player.Z), {
-      icon: pinned('player', `${PLAYER_MARK}<span class="tag">${escaped(player.Name)}</span>`),
+      icon: pinned('player', `${playerMark(uid)}<span class="tag">${escaped(player.Name)}</span>`),
       // Above markers: a player is the thing that is moving.
       zIndexOffset: 1000,
     })
@@ -90,6 +91,39 @@ const PLAYER_MARK = `<svg class="pin" viewBox="0 0 26 39">
   <path class="inner" d="M11.558594 34.703125C9.667969 34.386719 7.675781 33.269531 6.339844 31.769531C2.125 27.050781 4 19.707031 10 17.4375C11.214844 16.980469 13.53125 16.816406 14.878906 17.097656C17.867188 17.71875 20.46875 20.09375 21.511719 23.164063C21.960938 24.472656 22.015625 26.71875 21.636719 28.167969C20.519531 32.460938 15.929688 35.433594 11.558594 34.703125Z"/>
   <path class="inner cone" d="M17.296875 13.511719C17.160156 13.433594 16.519531 13.253906 15.871094 13.105469C13.867188 12.65625 11.019531 12.789063 8.785156 13.433594L8.386719 13.550781L8.492188 12.335938C8.722656 9.628906 9.820313 6.734375 11.15625 5.308594C12.140625 4.25 12.890625 3.988281 13.753906 4.398438C15.496094 5.226563 17.199219 8.871094 17.5625 12.554688C17.621094 13.164063 17.640625 13.660156 17.605469 13.65625C17.570313 13.652344 17.433594 13.589844 17.296875 13.511719Z"/>
 </svg>`;
+
+/**
+ * The colour one person is drawn in: what they chose, or nothing, which the
+ * stylesheet draws as the colour everybody starts with.
+ *
+ * One answer for everything that is one person's on the map — their mark and
+ * their land — so choosing a colour once changes both, and the two never
+ * disagree about whose they are.
+ */
+function personColour(uid) {
+  const colour = uid && playerColours[uid];
+  return typeof colour === 'string' ? colour : '';
+}
+
+/** The player mark, in one person's colour. */
+function playerMark(uid) {
+  const colour = personColour(uid);
+  return colour ? PLAYER_MARK.replace('<svg ', `<svg style="--player-colour: ${colour}" `) : PLAYER_MARK;
+}
+
+/**
+ * Gives a mark already on the map the colour its person now has. Asked on
+ * every post rather than only when a mark is made: a colour chosen in another
+ * browser reaches this one on the next beat, and a mark is not rebuilt for it.
+ */
+function colourMark(marker, uid) {
+  const mark = marker.getElement() && marker.getElement().querySelector('.pin');
+  if (!mark) return;
+  const colour = personColour(uid);
+  if (mark.style.getPropertyValue('--player-colour') !== colour) {
+    mark.style.setProperty('--player-colour', colour);
+  }
+}
 
 /**
  * Which way a player is looking, in degrees clockwise from north, or null where

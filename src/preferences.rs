@@ -86,6 +86,15 @@ pub struct Person {
     /// [`TileFormat`].
     #[serde(default)]
     pub tile_format: TileFormat,
+
+    /// The colour this person is drawn in on the map — their own mark, and
+    /// every claim of theirs — as `#rrggbb`. Empty is the colour everybody
+    /// starts with, which is what most people keep.
+    ///
+    /// Everybody's is sent to every browser, since the point of a colour is
+    /// that the same land is the same colour on every screen.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub color: String,
 }
 
 impl Person {
@@ -106,7 +115,22 @@ impl Person {
         // A preset that matches nothing can never be reached and would sit in
         // the window forever being scrolled past.
         self.presets.retain(|preset| !preset.pattern.is_empty());
+        self.color = hex_colour(&self.color);
         self
+    }
+}
+
+/// A colour as `#rrggbb` in lower case, or nothing where the text is not one.
+///
+/// What arrives is whatever a browser sent, and a colour written into every
+/// other browser's stylesheet is one place a stray word must not reach.
+fn hex_colour(said: &str) -> String {
+    let said = said.trim();
+    let digits = said.strip_prefix('#').unwrap_or("");
+    if digits.len() == 6 && digits.chars().all(|c| c.is_ascii_hexdigit()) {
+        said.to_ascii_lowercase()
+    } else {
+        String::new()
     }
 }
 
@@ -156,6 +180,23 @@ impl Preferences {
     #[must_use]
     pub fn of(&self, uid: &str) -> Person {
         self.held.lock().ok().and_then(|held| held.get(uid).cloned()).unwrap_or_default()
+    }
+
+    /// Everybody who chose a colour, by uid, as one JSON object for the live
+    /// feed to carry.
+    #[must_use]
+    pub fn colors(&self) -> String {
+        let chosen: std::collections::BTreeMap<String, String> = self
+            .held
+            .lock()
+            .map(|held| {
+                held.iter()
+                    .filter(|(_, person)| !person.color.is_empty())
+                    .map(|(uid, person)| (uid.clone(), person.color.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        serde_json::to_string(&chosen).unwrap_or_else(|_| "{}".to_owned())
     }
 
     /// How one person's tiles are encoded. Asked on every tile, so it is read
@@ -235,11 +276,27 @@ mod tests {
             follow_self: true,
             share_map_with: Vec::new(),
             tile_format: TileFormat::Png,
+            color: String::new(),
         }
     }
 
     fn store() -> Preferences {
         Preferences::load(Path::new("/nonexistent"))
+    }
+
+    #[test]
+    fn a_colour_is_kept_only_as_a_hex_triplet() {
+        for (said, kept) in [("#A1B2C3", "#a1b2c3"), (" #a1b2c3 ", "#a1b2c3"), ("red", ""), ("#abc", ""), ("#a1b2c3d4", ""), ("", "")] {
+            assert_eq!(hex_colour(said), kept, "{said:?}");
+        }
+    }
+
+    #[test]
+    fn everybody_who_chose_a_colour_is_listed_by_uid() {
+        let prefs = store();
+        assert!(prefs.set("ada", Person { color: "#A1B2C3".to_owned(), ..Person::default() }));
+        assert!(prefs.set("bob", Person::default()));
+        assert_eq!(prefs.colors(), r##"{"ada":"#a1b2c3"}"##, "bob chose nothing and is not listed");
     }
 
     #[test]

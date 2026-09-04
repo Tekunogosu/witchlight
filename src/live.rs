@@ -423,8 +423,11 @@ impl Live {
     /// had none — the map filled in from a stale file the moment the game server
     /// stopped and its players expired. Nothing here reads what this build does
     /// not write.
+    ///
+    /// `colors` is everybody's chosen colour by uid, as JSON — the preferences'
+    /// to say, carried here because this is the one body every browser polls.
     #[must_use]
-    pub fn body(&self, uid: Option<&str>) -> String {
+    pub fn body(&self, uid: Option<&str>, colors: &str) -> String {
         // Who is online, whom of them this person may see, and who is in a group
         // with them. A report older than the patience is a game server that has
         // gone, and a dot saying somebody is standing somewhere is worse than no
@@ -492,7 +495,7 @@ impl Live {
             .map_or_else(|| "null".to_owned(), |(body, _)| body);
 
         format!(
-            r#"{{"Players":{players},"Online":{online},"Grouped":{grouped},"Waypoints":{markers},"Pins":{pins},"Claims":{claims},"Claiming":{claiming},"Height":{height},"World":{world}}}"#
+            r#"{{"Players":{players},"Online":{online},"Grouped":{grouped},"Colors":{colors},"Waypoints":{markers},"Pins":{pins},"Claims":{claims},"Claiming":{claiming},"Height":{height},"World":{world}}}"#
         )
     }
 }
@@ -696,11 +699,11 @@ mod tests {
     fn a_pin_reaches_whoever_set_it_and_nobody_else() {
         let live = told();
 
-        assert!(live.body(Some("uid-ada")).contains(r#""Pins":["a"]"#), "Ada is sent her own");
+        assert!(live.body(Some("uid-ada"), "{}").contains(r#""Pins":["a"]"#), "Ada is sent her own");
         // Bob and a stranger are shown the marker Ada pinned and told nothing
         // about her keeping it: what somebody keeps on their own map is theirs.
-        assert!(live.body(Some("uid-bob")).contains(r#""Pins":[]"#));
-        assert!(live.body(None).contains(r#""Pins":[]"#));
+        assert!(live.body(Some("uid-bob"), "{}").contains(r#""Pins":[]"#));
+        assert!(live.body(None, "{}").contains(r#""Pins":[]"#));
     }
 
     #[test]
@@ -710,24 +713,24 @@ mod tests {
             r##"{"Colors":[],"Public":[{"Title":"trader","Key":"a"}],"Private":{}}"##.to_owned()));
         // An empty array rather than a hole, for the reason every other list
         // here is one: a page cannot parse what it was not sent.
-        assert!(live.body(Some("uid-ada")).contains(r#""Pins":[]"#));
+        assert!(live.body(Some("uid-ada"), "{}").contains(r#""Pins":[]"#));
     }
 
     #[test]
     fn a_private_marker_reaches_its_owner_and_nobody_else() {
         let live = told();
 
-        let ada = live.body(Some("uid-ada"));
+        let ada = live.body(Some("uid-ada"), "{}");
         assert!(ada.contains("ada's hoard"), "Ada is sent her own");
         assert!(!ada.contains("bob's hoard"), "and never Bob's");
 
-        let bob = live.body(Some("uid-bob"));
+        let bob = live.body(Some("uid-bob"), "{}");
         assert!(bob.contains("bob's hoard"));
         assert!(!bob.contains("ada's hoard"));
 
         // The map is public and stays public, so a stranger is still shown the
         // markers whose owners share them — and only those.
-        let stranger = live.body(None);
+        let stranger = live.body(None, "{}");
         assert!(stranger.contains("trader"));
         assert!(!stranger.contains("hoard"), "nobody's private markers reach a stranger");
     }
@@ -736,7 +739,7 @@ mod tests {
     fn everybody_is_shown_what_is_shared() {
         let live = told();
         for who in [None, Some("uid-ada"), Some("uid-bob"), Some("uid-nobody")] {
-            assert!(live.body(who).contains("trader"), "{who:?} is shown the shared marker");
+            assert!(live.body(who, "{}").contains("trader"), "{who:?} is shown the shared marker");
         }
     }
 
@@ -744,7 +747,7 @@ mod tests {
     fn an_owner_is_sent_one_list_a_browser_can_read() {
         let live = told();
         let body: serde_json::Value =
-            serde_json::from_str(&live.body(Some("uid-ada"))).expect("valid JSON");
+            serde_json::from_str(&live.body(Some("uid-ada"), "{}")).expect("valid JSON");
 
         let markers = body["Waypoints"].as_array().expect("an array of markers");
         assert_eq!(markers.len(), 2, "the shared one and her own, joined end to end");
@@ -760,14 +763,14 @@ mod tests {
         // see what, and reading it as all-public would decide on owners' behalf.
         assert!(!live.set_markers(r#"[{"Title":"trader"}]"#.to_owned()));
         assert!(!live.set_markers("not json".to_owned()));
-        assert!(!live.body(Some("uid-ada")).contains("trader"));
+        assert!(!live.body(Some("uid-ada"), "{}").contains("trader"));
     }
 
     #[test]
     fn a_map_nobody_has_posted_to_still_answers() {
         let live = Live::load(Path::new("/nonexistent"), &[]);
         let body: serde_json::Value =
-            serde_json::from_str(&live.body(None)).expect("valid JSON");
+            serde_json::from_str(&live.body(None, "{}")).expect("valid JSON");
         assert_eq!(body["Players"].as_array().expect("an array").len(), 0);
         assert_eq!(body["Waypoints"].as_array().expect("an array").len(), 0);
         assert_eq!(live.colors(), "[]");
@@ -809,7 +812,7 @@ mod tests {
     #[test]
     fn a_report_of_who_is_online_goes_stale() {
         let live = watched();
-        assert!(live.body(None).contains("ada"));
+        assert!(live.body(None, "{}").contains("ada"));
 
         // A game server that stopped must not leave a dot standing on the map.
         // Reaching in is the only way to age it without waiting out the clock.
@@ -818,7 +821,7 @@ mod tests {
         {
             *at = Instant::now() - PLAYERS_GOOD_FOR - Duration::from_secs(1);
         }
-        let gone = live.body(None);
+        let gone = live.body(None, "{}");
         assert!(!gone.contains("ada"), "the players go");
         assert!(gone.contains(r#""Online":0"#), "and so does the count of them");
     }
@@ -827,13 +830,13 @@ mod tests {
     fn a_position_only_a_group_may_see_reaches_that_group_and_nobody_else() {
         let live = watched();
 
-        let stranger = live.body(None);
+        let stranger = live.body(None, "{}");
         assert!(stranger.contains("ada"), "what is public is everybody's");
         assert!(!stranger.contains("bob"), "and what is not, is not");
 
         // Bob's own browser, and Cass, who is in his group and is not even on.
         for uid in ["b", "c"] {
-            let theirs = live.body(Some(uid));
+            let theirs = live.body(Some(uid), "{}");
             assert!(theirs.contains("bob"), "{uid} shares a group with bob");
             assert!(theirs.contains("ada"), "and still sees what is public");
         }
@@ -859,16 +862,16 @@ mod tests {
         // is: that is a fact about the server rather than about anybody on it.
         let live = watched();
         for uid in [None, Some("a"), Some("b")] {
-            assert!(live.body(uid).contains(r#""Online":2"#), "{uid:?} is told the count");
+            assert!(live.body(uid, "{}").contains(r#""Online":2"#), "{uid:?} is told the count");
         }
     }
 
     #[test]
     fn who_shares_a_group_is_said_only_to_them() {
         let live = watched();
-        assert!(live.body(Some("b")).contains(r#""Grouped":["b","c"]"#));
-        assert!(live.body(None).contains(r#""Grouped":[]"#), "a stranger is in no group");
-        assert!(live.body(Some("a")).contains(r#""Grouped":["a"]"#), "somebody in none is with themselves");
+        assert!(live.body(Some("b"), "{}").contains(r#""Grouped":["b","c"]"#));
+        assert!(live.body(None, "{}").contains(r#""Grouped":[]"#), "a stranger is in no group");
+        assert!(live.body(Some("a"), "{}").contains(r#""Grouped":["a"]"#), "somebody in none is with themselves");
     }
 
     #[test]
@@ -876,7 +879,7 @@ mod tests {
         // `XLib` was hidden and `xlib` was posted: the group everybody is in
         // neither puts ada in with bob nor is offered to anybody.
         let live = watched();
-        assert!(!live.body(Some("a")).contains("\"b\""), "ada is not grouped with bob");
+        assert!(!live.body(Some("a"), "{}").contains("\"b\""), "ada is not grouped with bob");
         let groups = live.groups();
         assert_eq!(groups.len(), 1, "only the guild is kept");
         assert_eq!(groups[&1].name, "the guild");
@@ -902,7 +905,7 @@ mod tests {
     fn a_claim_reaches_whoever_the_mod_named_and_nobody_else() {
         let live = claimed();
 
-        let ada = live.body(Some("uid-ada"));
+        let ada = live.body(Some("uid-ada"), "{}");
         assert!(ada.contains(r#""Key":"a""#), "Ada was named, so Ada is sent them");
 
         // The whole point of the gate. A reader the mod did not name is sent an
@@ -910,7 +913,7 @@ mod tests {
         // browser cannot be asked to hide what it has already been handed.
         for who in [None, Some("uid-bob")] {
             assert!(
-                live.body(who).contains(r#""Claims":[]"#),
+                live.body(who, "{}").contains(r#""Claims":[]"#),
                 "{who:?} was not named and is sent no claims"
             );
         }
@@ -926,7 +929,7 @@ mod tests {
             r#"{"Everyones":true,"Claims":[{"Key":"a"}],"Seen":[],"Making":{}}"#.to_owned()
         ));
         for who in [None, Some("uid-bob")] {
-            assert!(live.body(who).contains(r#""Key":"a""#), "{who:?} is shown an open claim");
+            assert!(live.body(who, "{}").contains(r#""Key":"a""#), "{who:?} is shown an open claim");
         }
     }
 
@@ -934,7 +937,7 @@ mod tests {
     fn what_somebody_may_claim_is_said_to_them_alone() {
         let live = claimed();
 
-        let ada = live.body(Some("uid-ada"));
+        let ada = live.body(Some("uid-ada"), "{}");
         assert!(ada.contains(r#""Allowance":262144"#), "Ada is told her own allowance");
         assert!(ada.contains(r#""Height":256"#), "and how tall the world is");
 
@@ -942,7 +945,7 @@ mod tests {
         // reader who may not claim at all is told nothing rather than zero.
         for who in [None, Some("uid-bob")] {
             assert!(
-                live.body(who).contains(r#""Claiming":null"#),
+                live.body(who, "{}").contains(r#""Claiming":null"#),
                 "{who:?} may not claim, so there is nothing to tell them"
             );
         }
@@ -953,7 +956,7 @@ mod tests {
         let live = Live::load(Path::new("/nonexistent"), &[]);
         assert!(!live.set_claims(r#"[{"Key":"a"}]"#.to_owned()), "a bare array is not the envelope");
         assert!(!live.set_claims("not json".to_owned()));
-        assert!(live.body(Some("uid-ada")).contains(r#""Claims":[]"#));
+        assert!(live.body(Some("uid-ada"), "{}").contains(r#""Claims":[]"#));
     }
 
     #[test]
@@ -962,6 +965,6 @@ fn a_report_in_the_shape_an_older_mod_posted_is_refused() {
         // exactly what an operator turned the setting off to prevent.
         let live = Live::load(Path::new("/nonexistent"), &[]);
         assert!(!live.set_players(r#"[{"Name":"ada"}]"#.to_owned()));
-        assert!(!live.body(None).contains("ada"));
+        assert!(!live.body(None, "{}").contains("ada"));
     }
 }

@@ -71,6 +71,7 @@ async function takeLive(live) {
     // browser cannot be asked to hide what it has already been handed.
     online = Number.isFinite(live.Online) ? live.Online : players.length;
     grouped = new Set(live.Grouped || []);
+    playerColours = (live.Colors && typeof live.Colors === 'object') ? live.Colors : {};
     // Both from the same post: the claims this reader may be sent, and whether
     // the mod says they may draw one. The second rides the live poll rather than
     // `/me.json` because it is the mod's answer and arrives when the mod does —

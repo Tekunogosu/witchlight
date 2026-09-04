@@ -74,6 +74,8 @@ const CLAIM_UNOWNED = '#f0b429';
  */
 function claimColour(uid) {
   if (!uid) return CLAIM_UNOWNED;
+  const chosen = personColour(uid);
+  if (chosen) return chosen;
 
   // FNV-1a, which is the hash the mod names a claim with and is here for the
   // same reason: four lines, and it spreads a run of uids that differ in one
@@ -135,7 +137,9 @@ function claimOnTheMap(area) {
  * reached, so the world growing under it is a redraw exactly as a claim moving is.
  */
 function drawClaims(sent) {
-  const shape = JSON.stringify([sent, bounds]);
+  // Whose colour is whose is part of the picture, and who is looking decides
+  // what each claim says they may do — so either changing is a redraw.
+  const shape = JSON.stringify([sent, bounds, playerColours, viewer && viewer.Uid]);
   if (shape === drawnClaims) return;
   drawnClaims = shape;
 
@@ -145,11 +149,83 @@ function drawClaims(sent) {
     for (const area of claim.Areas || []) {
       const ground = claimOnTheMap(area);
       if (!ground) continue;
-      L.rectangle(ground, style)
+      const drawn = L.rectangle(ground, style)
         .bindPopup(claimSays(claim, area))
         .addTo(claimed);
+      answerFor(drawn, claim);
     }
   }
+}
+
+/**
+ * What a claim on the map does when it is pointed at, beyond the click that
+ * opens its popup.
+ *
+ * A right click opens the claim: the edit window for one of this reader's own,
+ * the same one the claim list opens, and for anybody else's a window that says
+ * what this reader may do there. Hovering, for somebody who asked for it,
+ * shows the popup the way it does for a marker, through the same waits — so a
+ * pointer crossing from a marker to a claim closes one and opens the other.
+ */
+function answerFor(drawn, claim) {
+  drawn.on('contextmenu', event => {
+    L.DomEvent.stop(event);
+    if (mineToChange(claim)) editClaim(claim);
+    else viewClaim(claim);
+  });
+  drawn.on('mouseover', () => {
+    if (!settings.hover.on) return;
+    keepHovered();
+    hovered = drawn;
+    drawn.openPopup();
+    linger(drawn);
+  });
+  drawn.on('mouseout', () => {
+    if (hovered === drawn) closeHovered();
+  });
+  drawn.on('click', forgetHovered);
+}
+
+/**
+ * What the reader may do on a claim, as sentences addressed to them.
+ *
+ * Read off what the game said about the claim — who its guests are and what
+ * everybody may do — against who is looking. An owner may do everything and is
+ * told so once; a guest who may build may also use and walk; a guest who may
+ * not build may open chests and walk through; and everybody else has whatever
+ * the claim leaves open to everybody. Nothing open is said outright, because an
+ * empty list reads as a question the map did not answer.
+ */
+function claimMay(claim) {
+  const uid = viewer && viewer.Uid;
+  if (uid && claim.OwnerUid === uid) return ['This claim is yours.'];
+
+  const guest = uid && (claim.Guests || []).find(named => named.Uid === uid);
+  const may = [];
+  if (guest && guest.Builds) may.push('You can build and break blocks here.');
+  if (guest || claim.EveryoneUses) may.push('You can open chests and use blocks here.');
+  if (guest || claim.EveryoneWalks || claim.EveryoneUses) may.push('You can walk through here.');
+  return may.length ? may : ['You have no permissions on this claim.'];
+}
+
+/** The permissions as a block of lines for a popup or a window. */
+function claimMaySaid(claim) {
+  return claimMay(claim).map(line => `<span>${escaped(line)}</span>`).join('');
+}
+
+/** The window for somebody else's claim: what it is, whose, and what you may do. */
+const claimView = document.getElementById('claim-view');
+function viewClaim(claim) {
+  document.getElementById('claim-view-title').textContent = claim.Description || 'claimed land';
+  document.getElementById('claim-view-owner').textContent = claim.Owner ? `${claim.Owner}'s land` : 'Unowned land';
+  const may = document.getElementById('claim-view-may');
+  may.textContent = '';
+  for (const line of claimMay(claim)) {
+    const sentence = document.createElement('p');
+    sentence.textContent = line;
+    may.append(sentence);
+  }
+  openWindow(claimView, true);
 }
 
 /**
@@ -174,6 +250,7 @@ function claimSays(claim, area) {
   const [x2, z2] = said(area.X2, area.Z2);
   const name = escaped(claim.Description || 'claimed land');
   return `<b class="said-name">${name}</b>`
+    + `<span class="said-may">${claimMaySaid(claim)}</span>`
     + `<span class="said-foot">`
     + `<span class="said-where">${x1}, ${z1} to ${x2}, ${z2}</span>${owner}</span>`;
 }

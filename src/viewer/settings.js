@@ -200,6 +200,7 @@ const scales = {
   // Its own number rather than the map's: a marker the size of a house on the
   // map is not a marker the size of a house in a list beside it.
   listMark: { label: 'Marker icons in lists', css: '--list-mark-scale', at: 1, least: 0.6, most: 3 },
+  playerMark: { label: 'Player icons', css: '--player-scale', at: 1, least: 0.6, most: 3 },
   people: { label: 'Players and clock', css: '--scale-people', at: 1, least: 0.7, most: 1.8 },
   panel: { label: 'Windows', css: '--scale-panel', at: 1, least: 0.7, most: 1.8 },
   tools: { label: 'Map buttons', css: '--scale-tools', at: 1, least: 0.7, most: 1.8 },

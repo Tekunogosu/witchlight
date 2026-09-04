@@ -43,7 +43,7 @@ pub fn route(request: &mut Request, state: &State) -> Reply {
         // cannot be asked to hide what it has already been handed.
         "/live.json" => {
             let who = state.sessions.who(&http::cookies(request));
-            http::json(&state.live.body(who.as_ref().map(|who| who.uid.as_str())))
+            http::json(&state.live.body(who.as_ref().map(|who| who.uid.as_str()), &state.preferences.colors()))
         }
         "/colors.json" => http::json(&state.live.colors()),
         "/icons.json" => http::json(&state.icons()),

@@ -882,6 +882,8 @@ console.log('\nwhose land it is, is what colour it is drawn in');
 const claims = new Function(`
   let bounds = { minX: 0, minZ: 0, maxX: 0, maxZ: 0 };
   const at = (x, z) => [z, x];
+  // Nobody has chosen a colour, so every claim is dealt its hue.
+  const personColour = () => "";
   ${liftConst('CLAIM_UNOWNED')}
   ${lift('claimColour')}
   ${lift('claimOnTheMap')}

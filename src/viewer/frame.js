@@ -116,6 +116,10 @@ let chunks = 0;
 let chunkEdge = 0;
 let players = [];
 
+/** The colour each person chose to be drawn in, by uid, as the service holds
+ *  it. Whoever is not here is drawn in the colour everybody starts with. */
+let playerColours = {};
+
 /**
  * How many are on the server, which is not how many the map may draw.
  *

@@ -283,7 +283,7 @@ fn wait_for_events(request: tiny_http::Request, state: &State) {
             // map moved forty times a second must not be sent forty copies of
             // where everybody is standing.
             let info = if generation > since { state.info(&scope, Some(since)) } else { "null".to_owned() };
-            let feed = if live_now > live { state.live.body(uid.as_deref()) } else { "null".to_owned() };
+            let feed = if live_now > live { state.live.body(uid.as_deref(), &state.preferences.colors()) } else { "null".to_owned() };
             crate::http::json(&format!(
                 r#"{{"generation":{generation},"liveSeq":{live_now},"info":{info},"live":{feed}}}"#
             ))

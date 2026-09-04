@@ -361,6 +361,19 @@
   <div id="access-panel"></div>
 </div>
 
+<!-- Somebody else's claim, opened from the map: what it is, whose it is, and
+     what this reader may do on it. A window of its own rather than the edit
+     window with its fields greyed, because a form somebody cannot submit is a
+     form that looks broken. -->
+<div id="claim-view" class="window">
+  <div class="bar">
+    <h2 id="claim-view-title">Land claim</h2>
+    <button class="shut" type="button" title="Close" aria-label="Close"><span class="chrome masked mark-x" aria-hidden="true"></span></button>
+  </div>
+  <p id="claim-view-owner" class="note"></p>
+  <div id="claim-view-may"></div>
+</div>
+
 <div id="profile" class="window">
   <div class="bar">
     <span id="profile-face" class="face"></span>
@@ -374,6 +387,17 @@
        standing wants that wherever they open it. -->
   <label class="line"><input id="want-follow" type="checkbox">Follow my player when I sign in</label>
   <p id="want-said" class="note"></p>
+  <!-- The colour this person is drawn in. The mark is the one every player
+       wears on the map, in the colour chosen, and is the button: what is
+       being chosen is shown rather than described. -->
+  <div class="line" id="colour-line">
+    <span>Choose player colour</span>
+    <button id="colour-button" type="button" aria-label="Choose player colour" title="Choose player colour">
+      <span id="colour-mark" class="colour-mark" aria-hidden="true"></span>
+      <input id="want-colour" type="color" aria-label="Player colour" tabindex="-1">
+    </button>
+  </div>
+  <p class="note">The colour is your player icon on the map, and every land claim of yours.</p>
   <!-- How the tiles reach this person. Exact is what a map for finding one
        block wants; compact is a fifth of the bytes for everybody else. -->
   <h3>Map pictures</h3>

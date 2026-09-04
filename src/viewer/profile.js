@@ -22,6 +22,7 @@ const profile = document.getElementById('profile');
 const wantPresets = document.getElementById('want-presets');
 const wantPrivate = document.getElementById('want-private');
 const wantFollow = document.getElementById('want-follow');
+const wantColour = document.getElementById('want-colour');
 const wantSaid = document.getElementById('want-said');
 
 /** What was last read, so a beat that says nothing new redraws nothing. */
@@ -139,6 +140,8 @@ function drawProfile() {
   wantPresets.checked = Boolean(mine.PresetsByDefault);
   wantPrivate.checked = privateByDefault();
   wantFollow.checked = Boolean(mine.FollowSelf);
+  wantColour.value = /^#[0-9a-f]{6}$/i.test(String(mine.Color || '')) ? mine.Color : startingColour();
+  showColourMark();
   for (const box of document.querySelectorAll('input[name="want-format"]')) {
     box.checked = box.value === tileFormat();
     box.disabled = !named;
@@ -176,12 +179,31 @@ function tileFormat() {
 }
 
 /** Reads the switches into a draft, so what is shown is what Save will keep. */
+/**
+ * The colour everybody starts with, which is what the stylesheet draws a mark
+ * in when nobody chose: read off the page, so the picker opens on the colour
+ * the mark actually has rather than on black.
+ */
+function startingColour() {
+  return getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#4dd2ff';
+}
+
+/** Draws the mark beside the picker in the colour the picker holds. */
+function showColourMark() {
+  const mark = document.getElementById('colour-mark');
+  if (!mark.firstChild) mark.innerHTML = PLAYER_MARK;
+  mark.style.setProperty('--player-colour', wantColour.value);
+}
+
 function draftProfile() {
   const format = document.querySelector('input[name="want-format"]:checked');
   draft = {
     presets: wantPresets.checked,
     private: wantPrivate.checked,
     follow: wantFollow.checked,
+    // The starting colour chosen on purpose is no choice at all, so it is not
+    // kept as one: a person drawn in it is drawn like everybody else.
+    colour: wantColour.value === startingColour() ? '' : wantColour.value,
     format: format ? format.value : tileFormat(),
     shares: [...document.querySelectorAll('#share-groups input:checked')]
       .map(box => Number(box.value))
@@ -254,6 +276,7 @@ async function keepProfile() {
     PresetsByDefault: draft.presets,
     PrivateByDefault: draft.private,
     FollowSelf: draft.follow,
+    Color: draft.colour,
     ShareMapWith: draft.shares,
     TileFormat: draft.format,
   });
@@ -287,13 +310,20 @@ function buildProfile() {
     .addEventListener('click', () => started(keepProfile(), 'keeping your settings'));
   document.getElementById('profile-revert').addEventListener('click', revertProfile);
 
-  const switches = [wantPresets, wantPrivate, wantFollow, ...document.querySelectorAll('input[name="want-format"]')];
+  const switches = [wantPresets, wantPrivate, wantFollow, wantColour, ...document.querySelectorAll('input[name="want-format"]')];
   for (const box of switches) {
     box.addEventListener('change', () => {
       draftProfile();
       sayProfile('Not kept yet.');
     });
   }
+  // The mark follows the picker as it is dragged, so the colour is seen on the
+  // thing it is for before it is chosen. The button is what is pressed; the
+  // picker is the browser's own and opens from it.
+  wantColour.addEventListener('input', showColourMark);
+  document.getElementById('colour-button').addEventListener('click', event => {
+    if (event.target !== wantColour) wantColour.click();
+  });
 
 }
 
