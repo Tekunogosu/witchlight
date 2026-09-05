@@ -138,8 +138,7 @@
     <h2>Presets</h2>
     <button class="shut" type="button" title="Close" aria-label="Close"><span class="chrome masked mark-x" aria-hidden="true"></span></button>
   </div>
-  <p class="note">What a marker starts as, by what you clicked. Pick one to change
-     it.</p>
+  <p class="note">Marker presets based on block types.</p>
   <div class="find">
     <span class="chrome masked mark-magnifying-glass" aria-hidden="true"></span>
     <input id="preset-find" type="search" autocomplete="off" placeholder="find a preset"
@@ -380,37 +379,53 @@
     <h2 id="profile-name">Not signed in</h2>
     <button class="shut" type="button" title="Close" aria-label="Close"><span class="chrome masked mark-x" aria-hidden="true"></span></button>
   </div>
-  <label class="line"><input id="want-presets" type="checkbox">New markers become presets by default</label>
-  <label class="line"><input id="want-private" type="checkbox">New markers are private by default</label>
-  <!-- About the person rather than the screen, which is why it is kept with the
-       two above it: somebody who wants the map to open on where they are
-       standing wants that wherever they open it. -->
-  <label class="line"><input id="want-follow" type="checkbox">Follow my player when I sign in</label>
-  <p id="want-said" class="note"></p>
-  <!-- The colour this person is drawn in. The mark is the one every player
-       wears on the map, in the colour chosen, and is the button: what is
-       being chosen is shown rather than described. -->
-  <div class="line" id="colour-line">
-    <span>Choose player colour</span>
-    <button id="colour-button" type="button" aria-label="Choose player colour" title="Choose player colour">
-      <span id="colour-mark" class="colour-mark" aria-hidden="true"></span>
-      <input id="want-colour" type="color" aria-label="Player colour" tabindex="-1">
-    </button>
+  <!-- Two questions to a row, the way the accessibility window is laid out:
+       what markers start as beside what colour this person is, then how the
+       tiles arrive beside who else sees them. -->
+  <div class="pair">
+    <section>
+      <h3>Markers</h3>
+      <label class="line"><input id="want-presets" type="checkbox">New markers become presets by default</label>
+      <label class="line"><input id="want-private" type="checkbox">New markers are private by default</label>
+      <!-- About the person rather than the screen, which is why it is kept with
+           the two above it: somebody who wants the map to open on where they are
+           standing wants that wherever they open it. -->
+      <label class="line"><input id="want-follow" type="checkbox">Follow my player when I sign in</label>
+      <p id="want-said" class="note"></p>
+    </section>
+    <!-- The colour this person is drawn in. The mark is the one every player
+         wears on the map, in the colour chosen: what is being chosen is shown
+         rather than described. Under it the game's own palette, and past that
+         the browser's picker for a colour the game does not offer. -->
+    <section>
+      <h3>Player colour</h3>
+      <div id="colour-line">
+        <span id="colour-mark" class="colour-mark" aria-hidden="true"></span>
+        <div id="player-colours" class="swatches" aria-label="Game colours"></div>
+        <button id="colour-custom" class="word" type="button" title="Choose any colour">Custom
+          <input id="want-colour" type="color" aria-label="Player colour" tabindex="-1">
+        </button>
+      </div>
+      <p class="note">Set a custom colour for your player icon and your claim colour.</p>
+    </section>
   </div>
-  <p class="note">The colour is your player icon on the map, and every land claim of yours.</p>
-  <!-- How the tiles reach this person. Exact is what a map for finding one
-       block wants; compact is a fifth of the bytes for everybody else. -->
-  <h3>Map pictures</h3>
-  <label class="line"><input type="radio" name="want-format" value="png">Exact: every block keeps its own colour</label>
-  <label class="line"><input type="radio" name="want-format" value="jpeg">Compact: about a fifth of the data, and a lone block such as an ore may blur</label>
-  <!-- Whose map yours is. Under a private map what you have explored is yours
-       alone until you hand it to a group, one box per group the game has you
-       in. Drawn from what the service says about who is looking; a player in
-       no group is told how to be in one. -->
-  <div id="share-map" hidden>
-    <h3>Share my map with</h3>
-    <div id="share-groups"></div>
-    <p class="note">Everyone in a ticked group sees what you have explored, as you last saw it. Sharing is one way: tick a group to give, not to get.</p>
+  <div class="pair">
+    <!-- How the tiles reach this person. Exact is what a map for finding one
+         block wants; compact is a fifth of the bytes for everybody else. -->
+    <section>
+      <h3>Map Render Detail</h3>
+      <label class="line"><input type="radio" name="want-format" value="png">Exact: every block keeps its own colour</label>
+      <label class="line"><input type="radio" name="want-format" value="jpeg">Compact: about a fifth of the data, and a lone block such as an ore may blur</label>
+    </section>
+    <!-- Whose map yours is. Under a private map what you have explored is yours
+         alone until you hand it to a group, one box per group the game has you
+         in. Drawn from what the service says about who is looking; a player in
+         no group is told how to be in one. -->
+    <section id="share-map" hidden>
+      <h3>Share my map with</h3>
+      <div id="share-groups"></div>
+      <p class="note">Share my map exploration with these groups. Deselect to unshare.</p>
+    </section>
   </div>
   <p id="profile-said"></p>
   <div class="deed">

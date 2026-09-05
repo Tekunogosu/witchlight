@@ -364,12 +364,46 @@ function setDrawing(on) {
 /** Moves the outline as the drag stretches it. */
 function stretchClaim(latlng) {
   if (!drawing || !firstCorner || !latlng) return;
-  const far = blockUnder(latlng);
+  outlineGround(firstCorner, blockUnder(latlng));
+}
+
+/**
+ * Shows the outline over the ground between two corner blocks, either way round.
+ *
+ * The far corners are one past the last block, which is what a rectangle
+ * covering whole blocks means — the same rule `claimOnTheMap` draws by.
+ */
+function outlineGround(one, other) {
   drawnRectangle.setBounds([
-    at(Math.min(firstCorner.x, far.x), Math.min(firstCorner.z, far.z)),
-    at(Math.max(firstCorner.x, far.x) + 1, Math.max(firstCorner.z, far.z) + 1),
+    at(Math.min(one.x, other.x), Math.min(one.z, other.z)),
+    at(Math.max(one.x, other.x) + 1, Math.max(one.z, other.z) + 1),
   ]);
   layer(drawnRectangle, true);
+}
+
+/**
+ * Draws the outline of the ground the form is asking for.
+ *
+ * What was dragged out stays on the map while the form is open, and follows the
+ * corners as they are typed over: the boxes say what would be claimed, so the
+ * map shows the boxes rather than the drag. Only for new ground — a claim that
+ * exists is already drawn in its own colour, and its corners cannot be typed.
+ */
+function traceClaim() {
+  const corners = ['x1', 'z1', 'x2', 'z2'].map(part => claimFields[part].value.trim());
+  const numbers = corners.map(Number);
+  if (editingClaim || corners.some(typed => typed === '') || !numbers.every(Number.isFinite)) {
+    forgetClaimOutline();
+    return;
+  }
+  const [westX, northZ] = meant(numbers[0], numbers[1]);
+  const [eastX, southZ] = meant(numbers[2], numbers[3]);
+  outlineGround({ x: westX, z: northZ }, { x: eastX, z: southZ });
+}
+
+/** Takes the outline off the map. Called when the form shuts, however it shuts. */
+function forgetClaimOutline() {
+  layer(drawnRectangle, false);
 }
 
 /** The block a point on the map is over, which is what a corner is placed on. */
@@ -444,6 +478,7 @@ function openClaim(x1, z1, x2, z2) {
   dressClaimForm();
   sayClaim('');
   measureClaim();
+  traceClaim();
   openWindow(claimPanel, true);
   started(settleDepth(Math.round((x1 + x2) / 2), Math.round((z1 + z2) / 2)),
     'reading the ground the claim is on');
@@ -477,6 +512,7 @@ function editClaim(claim) {
   claimEveryoneUses.checked = claim.EveryoneUses === true;
 
   dressClaimForm();
+  traceClaim();
   sayClaim((claim.Areas || []).length > 1
     ? 'This claim is several areas. The map can rename it and say who may use it; '
       + 'its shape is changed in game.'
@@ -1092,5 +1128,8 @@ function buildClaims() {
   });
   for (const field of Object.values(claimFields)) {
     field.addEventListener('input', measureClaim);
+  }
+  for (const part of ['x1', 'z1', 'x2', 'z2']) {
+    claimFields[part].addEventListener('input', traceClaim);
   }
 }

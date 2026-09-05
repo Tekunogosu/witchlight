@@ -320,17 +320,26 @@ html, body { margin: 0; height: 100%; overflow: hidden; color-scheme: dark;
                 min-height: 22px; padding: 2px 0;
                 font-size: var(--font-sm); color: var(--text); cursor: pointer; }
 #access-panel input { accent-color: var(--accent); margin: 0; }
-/* The two questions about colour, side by side with a rule between them, and
-   a rule over the sizes under them. Each section says what it is the way the
-   settings panel says where the bars are: bold and green, so a reader finds
-   the part they came for without reading the rest. */
-#access-panel .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 0 var(--gap-3);
-                      margin-top: var(--gap-2); padding-top: var(--gap-2);
-                      border-top: 1px solid var(--line-soft); }
-#access-panel .pair > section + section { padding-left: var(--gap-3);
-                                          border-left: 1px solid var(--line-soft); }
-#access-panel h3 { margin: 0 0 var(--gap-1); font-size: var(--font-md);
-                   color: var(--section); font-weight: bold; }
+/* Two sections of a settings window side by side, with a rule between them
+   and a rule over the pair. Each section says what it is the way the settings
+   panel says where the bars are: bold and green, so a reader finds the part
+   they came for without reading the rest. Shared by the accessibility and the
+   profile windows, which are the same kind of thing — a screenful of short
+   questions — and read better as two columns than as one long list. */
+.window .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 0 var(--gap-3);
+                margin-top: var(--gap-2); padding-top: var(--gap-2);
+                border-top: 1px solid var(--line-soft); }
+.window .pair > section + section { padding-left: var(--gap-3);
+                                    border-left: 1px solid var(--line-soft); }
+.window .pair > section { min-width: 0; }
+/* One section left alone in a pair takes the whole row, so a window whose
+   second question is hidden — the map sharing under a public map — does not
+   leave half of itself empty. */
+.window .pair > section:only-child, .window .pair > section:has(+ section[hidden]) { grid-column: 1 / -1; }
+.window .pair h3, #access-panel h3 { margin: 0 0 var(--gap-1); font-size: var(--font-md);
+                                     color: var(--section); font-weight: bold; }
+/* The first pair in a window needs no rule over it: the bar is the gap. */
+.window > .bar + .pair { margin-top: 0; padding-top: 0; border-top: 0; }
 #access-panel button { display: block; width: 100%; text-align: left; padding: 3px 7px;
                   margin: 0; font: inherit; font-size: var(--font-sm);
                   color: var(--text); background: none; border: 1px solid transparent;
@@ -434,7 +443,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; color-scheme: dark;
    from script, so the list it is about is still readable behind it. */
 #apply { left: 380px; top: 190px; width: 374px; }
 #directory { left: 340px; top: 150px; width: 490px; }
-#profile { left: 50%; top: 90px; width: 334px; }
+#profile { left: 50%; top: 90px; width: 480px; }
 /* The two windows that list things somebody may have a great many of. Their own
    height goes to the list rather than to the window, so the heading, the search
    and the buttons stay put while the rows scroll under them — which is what
@@ -558,7 +567,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; color-scheme: dark;
 #claim input[type=number]::-webkit-inner-spin-button {
     -webkit-appearance: none; margin: 0; }
 .swatches { display: flex; flex-wrap: wrap; gap: 4px; }
-#colours .swatch { width: 18px; height: 18px; border-radius: var(--round-sm);
+#colours .swatch, #player-colours .swatch { width: 18px; height: 18px; border-radius: var(--round-sm);
                    border: 1px solid #ffffff2e; cursor: pointer; padding: 0; }
 .swatch.chosen { box-shadow: 0 0 0 2px var(--accent); }
 /* A silhouette filled with a colour, which is how every picture on this map is
@@ -665,12 +674,14 @@ html, body { margin: 0; height: 100%; overflow: hidden; color-scheme: dark;
    the window's other buttons take, so it reads as something to press, with the
    mark inside it in the colour chosen. The picker is the browser's own, kept
    in the button unseen and opened from it. */
-#colour-line { gap: var(--gap-3); }
-#colour-button { position: relative; display: grid; place-items: center;
-                 min-height: 26px; padding: var(--gap-1) var(--gap-3);
-                 cursor: pointer; background: var(--surface-bar);
-                 border: 1px solid var(--line-edge); border-radius: var(--round-sm); }
-#colour-button:hover { border-color: var(--accent-soft); background: var(--surface-on); }
+/* The mark with the game's palette under it and, under that, the way to a
+   colour the game does not offer. The mark is what is being coloured, so it is
+   shown at the top in the colour chosen rather than described; the swatches
+   are the same squares the marker form offers, drawn by the same code. */
+#colour-line { display: flex; flex-direction: column; align-items: flex-start;
+               gap: var(--gap-2); cursor: default; }
+#player-colours { position: relative; }
+#colour-custom { position: relative; }
 .colour-mark { position: relative; display: block; width: 22px; height: 30px; }
 .colour-mark .pin { position: absolute; left: 50%; top: 50%; margin: 0;
                     transform: translate(-50%, -50%); width: 18px; height: 27px; }
@@ -802,14 +813,17 @@ html, body { margin: 0; height: 100%; overflow: hidden; color-scheme: dark;
    than reached for as every button in the row: the two that wear a mark instead
    are the shape they are wherever they are drawn — see `.seen` — and this padding
    and border laid over that shape is what made them boxes twice the size. */
-.deed .word { min-height: 26px; padding: var(--gap-1) var(--gap-2);
-              font: inherit; font-size: var(--font-md); color: var(--text);
-              cursor: pointer; background: var(--surface-bar);
-              border: 1px solid var(--line-edge); border-radius: var(--round-sm); }
-.deed .word:hover { border-color: var(--accent-soft); color: #fff; }
-.deed .word.go { color: var(--text-strong); background: var(--surface-on); border-color: var(--accent); }
-.deed .word[disabled] { color: var(--line); cursor: default; border-color: var(--line-soft); }
-.deed .word[disabled]:hover { color: var(--line); border-color: var(--line-soft); }
+/* `.word` on its own is the same button anywhere in a window — the "Custom"
+   under the player colours is one — so the shape is stated once, on the class,
+   and the row only says where its buttons go. */
+.word { min-height: 26px; padding: var(--gap-1) var(--gap-2);
+        font: inherit; font-size: var(--font-md); color: var(--text);
+        cursor: pointer; background: var(--surface-bar);
+        border: 1px solid var(--line-edge); border-radius: var(--round-sm); }
+.word:hover { border-color: var(--accent-soft); color: #fff; }
+.word.go { color: var(--text-strong); background: var(--surface-on); border-color: var(--accent); }
+.word[disabled] { color: var(--line); cursor: default; border-color: var(--line-soft); }
+.word[disabled]:hover { color: var(--line); border-color: var(--line-soft); }
 /* A checkbox with a sentence after it, which is what most of a settings body
    is. Its own class rather than a bare label, so the marker form and the
    profile agree about what one looks like. */
@@ -829,6 +843,8 @@ html, body { margin: 0; height: 100%; overflow: hidden; color-scheme: dark;
 /* Standing in for a portrait nobody has sent. Quiet, because it says only that
    there is no picture — the name beside it is what identifies anybody. */
 #profile .face .chrome { width: 17px; height: 17px; }
+#profile .line { min-height: 22px; padding: 2px 0; font-size: var(--font-sm); }
+#profile .note { margin-bottom: var(--gap-2); font-size: var(--font-sm); }
 #profile h2 { font-size: 12px; letter-spacing: 0; text-transform: none;
               color: var(--text-strong); overflow: hidden; text-overflow: ellipsis;
               white-space: nowrap; }

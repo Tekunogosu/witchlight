@@ -71,15 +71,16 @@ pub struct Rules {
 ///
 /// The split is between commands that change what the server is doing and
 /// commands that answer a question about the person typing them. Exporting the
-/// world, reading the map's whole state and starting or stopping the service are
-/// an operator's; a link to your own page, a marker where you are standing, and
-/// asking a client for the pictures the map draws with are anybody's.
+/// world, reading the map's whole state, starting or stopping the service and
+/// asking for the palette every block is coloured by are an operator's; a link
+/// to your own page, a marker where you are standing, and asking a client for a
+/// portrait or the marker pictures are anybody's.
 ///
-/// Loosening one of the last three costs less than it looks: what a client sends
-/// back is taken on the same terms whoever asked for it, and only an admin's
-/// palette or icon may replace one already chosen — see the mod's
-/// `PaletteExchange` and `IconExchange`. So these decide who may ask, not who
-/// may repaint the map.
+/// Each decides who may start the request and nothing about whom it may be sent
+/// to: the mod asks whichever client can answer, and what comes back is taken on
+/// the same terms whoever asked for it — only an admin's palette or icon may
+/// replace one already chosen. See the mod's `PaletteExchange` and
+/// `IconExchange`.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Commands {
@@ -208,7 +209,7 @@ impl Default for Commands {
             login: PLAYER.to_owned(),
             mark: PLAYER.to_owned(),
             portrait: PLAYER.to_owned(),
-            palette: PLAYER.to_owned(),
+            palette: ADMIN.to_owned(),
             icons: PLAYER.to_owned(),
             export: ADMIN.to_owned(),
             status: ADMIN.to_owned(),
@@ -234,11 +235,12 @@ pub struct Config {
 
     /// Whether each world gets a directory of its own inside `map_data`.
     ///
-    /// Off for a dedicated server, which runs one world and wants its map where
-    /// it has always been. On for singleplayer, where every save shares one data
-    /// path: without this the second world writes its terrain into the first
-    /// world's map at the same coordinates, and every palette and block-name file
-    /// is rewritten on each switch because the mod sets differ.
+    /// On unless an operator turns it off. Every singleplayer save shares one
+    /// data path: without this the second world writes its terrain into the
+    /// first world's map at the same coordinates, and every palette and
+    /// block-name file is rewritten on each switch because the mod sets differ.
+    /// A dedicated server runs one world and loses nothing by filing it the same
+    /// way; one that wants its map directly in the folder turns this off.
     ///
     /// Read by the mod, which is the only half that knows which world is running.
     /// This half is told the answer with `--exports`, and reads this only to know
@@ -495,7 +497,7 @@ impl Default for Config {
         Self {
             vs_data: default_vs_data(),
             map_data: PathBuf::new(),
-            per_world: false,
+            per_world: true,
             bind: "0.0.0.0:8080".to_owned(),
             api_bind: String::new(),
             api_token: String::new(),
@@ -786,12 +788,12 @@ const NOTES: &[(&str, &str)] = &[
     ),
     (
         "per_world",
-        "Files each world's map in a directory of its own inside that folder. Off\n\
-         for a dedicated server, which runs one world and wants its map where it\n\
-         has always been. On for singleplayer, where every save shares one data\n\
-         path and the second world would otherwise write its terrain into the\n\
-         first world's map. Turning it on moves the map already there down into\n\
-         its own directory rather than leaving it to be written over. Read by the\n\
+        "Files each world's map in a directory of its own inside that folder. On\n\
+         unless turned off: every singleplayer save shares one data path, and the\n\
+         second world would otherwise write its terrain into the first world's\n\
+         map. A dedicated server that wants its one map directly in the folder\n\
+         turns it off. Turning it on moves the map already there down into its\n\
+         own directory rather than leaving it to be written over. Read by the\n\
          mod, which is the only half that knows which world is running.",
     ),
     (
@@ -1037,7 +1039,7 @@ mod tests {
         assert_eq!(held.service, ADMIN, "so is starting and stopping the map");
         assert_eq!(held.login, PLAYER, "a link to your own page is your own");
         assert_eq!(held.mark, PLAYER);
-        assert_eq!(held.palette, PLAYER);
+        assert_eq!(held.palette, ADMIN, "repainting every block on the map is an operator's to start");
         assert_eq!(held.icons, PLAYER);
         assert_eq!(held.portrait, PLAYER);
     }

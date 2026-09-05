@@ -277,6 +277,7 @@ function followTheWindow(panel) {
 function shutWindow(panel) {
   panel.classList.remove('open');
   if (panel === composer) forgetCompose();
+  if (panel === claimPanel) forgetClaimOutline();
 }
 
 /**

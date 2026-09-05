@@ -473,7 +473,7 @@ function buildSettings() {
   // are the same length and answered the same way, one choice from a short
   // list — and every size under the pair, since six sliders are a block of
   // their own whatever is above them.
-  const colours = accessSection('Map colours');
+  const colours = accessSection('Map Colour Filter');
   for (const [name, filter] of Object.entries(filters)) {
     colours.append(choiceButton('filter', name, filter.label, () => chooseFilter(name)));
   }

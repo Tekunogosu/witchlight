@@ -23,6 +23,35 @@
 /** The colours the game offers, in the order its own picker shows them. */
 let palette = [];
 
+/**
+ * Draws colours as a row of squares to pick from, with the chosen one ringed.
+ *
+ * One drawer for every place the game's palette is offered — the marker form
+ * and the player colour — so a swatch looks and is addressed the same wherever
+ * it is: thirty-odd identical squares, told apart by the colour in their name.
+ * A colour chosen from outside the palette is offered first, so what is chosen
+ * is always among what is shown. `choose` is what choosing one does; `frozen`
+ * shows the colours and takes no press, for a form that may only be read.
+ */
+function drawSwatches(box, offered, chosen, choose, frozen = false) {
+  box.textContent = '';
+  const shown = offered.length > 0 ? [...offered] : ['#ffffff'];
+  if (!shown.includes(chosen)) shown.unshift(chosen);
+
+  for (const colour of shown) {
+    const swatch = document.createElement('button');
+    swatch.type = 'button';
+    swatch.className = 'swatch' + (colour === chosen ? ' chosen' : '');
+    swatch.disabled = frozen;
+    swatch.style.background = colour;
+    swatch.title = colour;
+    swatch.setAttribute('aria-label', `Colour ${colour}`);
+    swatch.setAttribute('aria-pressed', String(colour === chosen));
+    swatch.addEventListener('click', () => choose(colour));
+    box.append(swatch);
+  }
+}
+
 /** Which colour and picture the form is on. */
 let chosenColour = '#ffffff';
 let chosenPicture = 'circle';

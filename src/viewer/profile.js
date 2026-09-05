@@ -141,7 +141,7 @@ function drawProfile() {
   wantPrivate.checked = privateByDefault();
   wantFollow.checked = Boolean(mine.FollowSelf);
   wantColour.value = /^#[0-9a-f]{6}$/i.test(String(mine.Color || '')) ? mine.Color : startingColour();
-  showColourMark();
+  showColour();
   for (const box of document.querySelectorAll('input[name="want-format"]')) {
     box.checked = box.value === tileFormat();
     box.disabled = !named;
@@ -150,16 +150,12 @@ function drawProfile() {
   wantPresets.disabled = !named;
   wantPrivate.disabled = !named;
   wantFollow.disabled = !named;
+  document.getElementById('colour-custom').disabled = !named;
   wantSaid.textContent = named
     ? (mine.PrivateByDefault === true || mine.PrivateByDefault === false
       ? 'Your own choice, over the server default.'
       : `Following the server default, which is ${viewer && viewer.MarkersPublic ? 'public' : 'private'}.`)
     : 'Run /witchlight login in the game to keep settings.';
-
-  for (const [part, scale] of Object.entries(scales)) {
-    const slider = document.getElementById(`scale-${part}`);
-    if (slider) slider.value = String(scale.at);
-  }
   draftProfile();
 }
 
@@ -188,11 +184,25 @@ function startingColour() {
   return getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#4dd2ff';
 }
 
-/** Draws the mark beside the picker in the colour the picker holds. */
-function showColourMark() {
+/**
+ * Shows the colour the picker holds: on the mark, and ringed among the swatches.
+ *
+ * The palette is the game's own, the same squares the marker form offers, so a
+ * colour picked here is one the game would have offered in its picker. One that
+ * is not — chosen with the browser's own — is shown first among them, so what
+ * the mark wears is always a square that can be seen to be pressed.
+ */
+function showColour() {
   const mark = document.getElementById('colour-mark');
   if (!mark.firstChild) mark.innerHTML = PLAYER_MARK;
   mark.style.setProperty('--player-colour', wantColour.value);
+  drawSwatches(document.getElementById('player-colours'), palette, wantColour.value,
+    colour => {
+      wantColour.value = colour;
+      // What a press on a swatch means is what the picker's own change means,
+      // said the same way so the draft has one listener for both.
+      wantColour.dispatchEvent(new Event('change'));
+    }, !(viewer && viewer.Name));
 }
 
 function draftProfile() {
@@ -318,10 +328,11 @@ function buildProfile() {
     });
   }
   // The mark follows the picker as it is dragged, so the colour is seen on the
-  // thing it is for before it is chosen. The button is what is pressed; the
-  // picker is the browser's own and opens from it.
-  wantColour.addEventListener('input', showColourMark);
-  document.getElementById('colour-button').addEventListener('click', event => {
+  // thing it is for before it is chosen. "Custom" is what is pressed; the
+  // picker is the browser's own, kept in the button unseen and opened from it.
+  wantColour.addEventListener('input', showColour);
+  wantColour.addEventListener('change', showColour);
+  document.getElementById('colour-custom').addEventListener('click', event => {
     if (event.target !== wantColour) wantColour.click();
   });
 

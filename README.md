@@ -55,7 +55,7 @@ own `ModConfig/witchlight.conf`:
 ```toml
 vs_data = "/home/vintagestory/data"   # the server's --dataPath
 map_data = ""                         # where maps are kept; empty means <vs_data>/witchlight
-per_world = false                     # a directory per world inside it
+per_world = true                      # a directory per world inside it
 bind = "0.0.0.0:8080"                 # every interface; 127.0.0.1 for this machine only
 api_bind = ""                         # where the mod posts; empty means loopback on a free port
 api_token = ""                        # what it must present; empty means a fresh one each start
@@ -74,7 +74,7 @@ announce_url = ""                     # and what to tell them; empty means work 
 login = "player"                      # a link to your own page of the map
 mark = "player"                       # a marker where you are standing
 portrait = "player"                   # ask a client for a picture of its player
-palette = "player"                    # ask a client for the map's block colours
+palette = "admin"                     # ask a client for the map's block colours
 icons = "player"                      # ask a client for the marker pictures
 export = "admin"                      # write the surface of every loaded chunk
 status = "admin"                      # the whole of what state the map is in
@@ -159,10 +159,10 @@ locks a command rather than opening it. The defaults split the commands that cha
 what the server is doing from the ones that answer a question about the person
 typing them.
 
-Loosening the last three costs less than it looks. What a client sends back is
-taken on the same terms whoever asked for it: only an admin's palette or marker
-picture may replace one already chosen, and anybody else's fills gaps. So these
-decide who may ask, not who may repaint the map. `wl status` prints the table in
+Each decides who may start the request, not whom it may be sent to: the mod asks
+whichever client can answer, and what comes back is taken on the same terms
+whoever asked for it — only an admin's palette or marker picture may replace one
+already chosen, and anybody else's fills gaps. `wl status` prints the table in
 force, which is the only place a server upgrading into this can see it — a settings
 file written before `[commands]` existed says nothing about it, and nothing here
 rewrites a file an operator owns just to add a section of defaults it is already
@@ -207,9 +207,10 @@ folder inside it, unless `map_data` names somewhere else. A directory holding
 need no second flag. Whichever it picks is printed on start.
 
 `per_world` files each world's map in a directory of its own inside that folder,
-named after the world. A dedicated server runs one world and leaves this off; the
-mod turns it on for singleplayer, where every save shares one data path and would
-otherwise write its terrain into the last world's map. Nothing is shared between
+named after the world. It is on unless turned off: every singleplayer save shares
+one data path and would otherwise write its terrain into the last world's map, and
+a dedicated server that wants its one map directly in the folder turns it off.
+Nothing is shared between
 those directories, not even the files that would be identical — one written once
 and left alone costs nothing to keep, while one rewritten every time you switch
 between a world with no mods and a world with fifty costs a disk.

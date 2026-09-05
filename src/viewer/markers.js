@@ -13,33 +13,15 @@
  * that it is still a form.
  */
 function drawColours() {
-  const box = document.getElementById('colours');
-  box.textContent = '';
-  const offered = palette.length > 0 ? palette : ['#ffffff'];
-  if (!offered.includes(chosenColour)) offered.unshift(chosenColour);
-
-  for (const colour of offered) {
-    const swatch = document.createElement('button');
-    swatch.type = 'button';
-    swatch.className = 'swatch' + (colour === chosenColour ? ' chosen' : '');
-    // Nothing to choose on a marker nobody here may change: the picker shows
-    // what the marker is, and a swatch that took a press would be the window
-    // pretending to an edit it cannot send.
-    swatch.disabled = mode === 'seen';
-    swatch.style.background = colour;
-    swatch.title = colour;
-    // One of thirty-odd identical squares, so the colour is the only thing that
-    // tells a reader — or a test — which one this is.
-    swatch.setAttribute('aria-label', `Colour ${colour}`);
-    swatch.setAttribute('aria-pressed', String(colour === chosenColour));
-    swatch.addEventListener('click', () => {
-      chosenColour = colour;
-      drawColours();
-      // The pictures are drawn in it, so they are drawn again.
-      drawPictures();
-    });
-    box.append(swatch);
-  }
+  // Nothing to choose on a marker nobody here may change: the picker shows
+  // what the marker is, and a swatch that took a press would be the window
+  // pretending to an edit it cannot send.
+  drawSwatches(document.getElementById('colours'), palette, chosenColour, colour => {
+    chosenColour = colour;
+    drawColours();
+    // The pictures are drawn in it, so they are drawn again.
+    drawPictures();
+  }, mode === 'seen');
 }
 
 /**

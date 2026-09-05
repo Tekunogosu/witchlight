@@ -9,6 +9,43 @@ which is where that rule is kept rather than in anybody's memory.
 A version that moved for the other half says so and lists nothing, which is not an
 omission: it is what "one release" looks like from the side that did not change.
 
+## 0.46.8
+
+**Deploy note:** both halves, upgraded together; nothing is cleared. The game
+server restarts before the new map service is live. `commands.palette` now
+defaults to `admin`; a settings file that names it keeps what it says.
+
+- A reader signed in to the map sees the players in their groups whether or
+  not their own player is in the game.
+- Wording: the profile window's sharing and colour notes, "Map Render Detail",
+  "Map Colour Filter" in the accessibility window, and the presets note.
+
+## 0.46.7
+
+**Deploy note:** both halves, upgraded together; nothing is cleared. The game
+server restarts before the new map service is live.
+
+- The profile window is laid out like the accessibility window: wider, two
+  sections to a row. Markers beside player colour, map pictures beside map
+  sharing.
+- The player colour is chosen from the game's own palette, drawn under the
+  mark in the same squares the marker form offers, with a "Custom" button for
+  the browser's picker. A colour from the picker joins the row so it can be
+  seen to be the one chosen.
+
+## 0.46.6
+
+**Deploy note:** both halves, upgraded together; nothing is cleared. The game
+server restarts before the new map service is live. A settings file already
+written keeps whatever `per_world` it says; the new default reaches only a file
+written fresh.
+
+- The rectangle dragged out for a land claim stays on the map while the claim
+  window is open, and follows the corners as they are typed over. It goes when
+  the window does, however it is shut.
+- `per_world` defaults to on for both halves. A dedicated server that wants its
+  one map directly in the folder turns it off.
+
 ## 0.46.5
 
 **Deploy note:** both halves, upgraded together; nothing is cleared. The game
