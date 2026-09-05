@@ -278,6 +278,9 @@ function shutWindow(panel) {
   panel.classList.remove('open');
   if (panel === composer) forgetCompose();
   if (panel === claimPanel) forgetClaimOutline();
+  // A window shut with a row still waiting for a key is a page whose next
+  // press vanishes into it.
+  if (panel === profile) stopListening();
 }
 
 /**

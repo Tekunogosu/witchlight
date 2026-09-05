@@ -234,26 +234,9 @@ function buildCompose() {
   });
   buildBlockSearch();
 
-  // A right click names the spot, and what is on it names the marker. Both come
-  // from the one lookup the block picker already uses.
-  map.on('contextmenu', event => {
-    const block = { x: Math.floor(event.latlng.lng), z: Math.floor(event.latlng.lat) };
-    openCompose(block, null);
-    // What the form opened with, so that what the lookup does next can tell a
-    // field nobody has touched from one somebody is halfway through.
-    const opened = markerName.value;
-    started(lookUp(block.x, block.z).then(ground => {
-      if (!ground || !composer.classList.contains('open') || editing) return;
-      // Opened again rather than patched: the block decides which preset applies,
-      // and a preset is a colour, a picture and who sees it as well as a name.
-      // Anything typed in the meantime is put back over the top of it, because
-      // the form is only slower than the person filling it in, not righter.
-      const typed = markerName.value === opened ? null : markerName.value;
-      if (ground.code) openCompose(block, { code: ground.code, name: ground.name });
-      if (typed !== null) markerName.value = typed;
-      if (typeof ground.y === 'number' && markerY.value === '') markerY.value = ground.y;
-    }), 'naming the block that was right-clicked');
-  });
+  // A right click names the spot, and what is on it names the marker. The
+  // marker hotkey does the same for the block under the pointer.
+  map.on('contextmenu', event => composeAt(event.latlng));
 
   map.on('click', event => {
     if (placing) started(settle(event.latlng), 'taking the spot that was clicked');
@@ -263,6 +246,29 @@ function buildCompose() {
     if (composer.classList.contains('open')) closeCompose();
     else openCompose(null, null);
   });
+}
+
+/**
+ * Opens the form on the block at a point on the map, and names it after what is
+ * on it. Both come from the one lookup the block picker already uses.
+ */
+function composeAt(latlng) {
+  const block = { x: Math.floor(latlng.lng), z: Math.floor(latlng.lat) };
+  openCompose(block, null);
+  // What the form opened with, so that what the lookup does next can tell a
+  // field nobody has touched from one somebody is halfway through.
+  const opened = markerName.value;
+  started(lookUp(block.x, block.z).then(ground => {
+    if (!ground || !composer.classList.contains('open') || editing) return;
+    // Opened again rather than patched: the block decides which preset applies,
+    // and a preset is a colour, a picture and who sees it as well as a name.
+    // Anything typed in the meantime is put back over the top of it, because
+    // the form is only slower than the person filling it in, not righter.
+    const typed = markerName.value === opened ? null : markerName.value;
+    if (ground.code) openCompose(block, { code: ground.code, name: ground.name });
+    if (typed !== null) markerName.value = typed;
+    if (typeof ground.y === 'number' && markerY.value === '') markerY.value = ground.y;
+  }), 'naming the block under the pointer');
 }
 
 /**
@@ -360,6 +366,48 @@ function editCompose(place) {
   // there would give, and the best there is for a marker whose own record of it
   // was never written.
   if (!clicked) started(guessBlock(place), 'looking up what a marker was put on');
+  // A marker that carries its code and not its name: the name is what a reader
+  // knows the block by, and the block list has it.
+  else started(nameBlock(place), 'looking up what a block is called');
+}
+
+/**
+ * Fills in what the marker's block is called, from the block list.
+ *
+ * The code shows until the name arrives, which is the honest order: a code is
+ * always right and a name is the same block said better. Nothing is changed
+ * where the window has moved on to another marker in the meantime.
+ */
+async function nameBlock(place) {
+  const code = place.Block;
+  let found = [];
+  try {
+    found = await (await fetch(`/blocks.json?q=${encodeURIComponent(code)}`)).json();
+  } catch (error) {
+    return;
+  }
+  if (editing !== place || !clicked || clicked.code !== code) return;
+  const exact = Array.isArray(found) ? found.find(block => block.Code === code) : null;
+  if (!exact || !exact.Name) return;
+  clicked = { code, name: exact.Name };
+  showBoundBlock();
+}
+
+/**
+ * Says what block the marker was put on, in the words a reader knows it by.
+ *
+ * Only for a marker that exists: a new marker's block is the field it can be
+ * typed into, and a preset is about a pattern rather than a block. "None" for
+ * a marker with no record and nothing under it the map could read.
+ */
+function showBoundBlock() {
+  const onAMarker = mode === 'marker' || mode === 'seen';
+  document.getElementById('block-field').style.display = onAMarker ? '' : 'none';
+  const line = document.getElementById('block-said');
+  line.textContent = clicked && clicked.code
+    ? (clicked.name || shortCode(clicked.code))
+    : 'None';
+  line.title = clicked && clicked.code ? clicked.code : '';
 }
 
 /**
@@ -378,6 +426,7 @@ async function guessBlock(place) {
   clicked = { code: ground.code, name: ground.name || '' };
   markerPattern.value = widened(ground.code);
   showKeepsake();
+  showBoundBlock();
 }
 
 /**
@@ -626,6 +675,7 @@ function showFields() {
   showKeepsake();
   showPin();
   showDrop();
+  showBoundBlock();
 }
 
 /**

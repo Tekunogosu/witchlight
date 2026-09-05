@@ -442,7 +442,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; color-scheme: dark;
    own width, because it lists the same rows — and opened beside the marker list
    from script, so the list it is about is still readable behind it. */
 #apply { left: 380px; top: 190px; width: 374px; }
-#directory { left: 340px; top: 150px; width: 490px; }
+#directory { left: 340px; top: 150px; width: 580px; }
 #profile { left: 50%; top: 90px; width: 480px; }
 /* The two windows that list things somebody may have a great many of. Their own
    height goes to the list rather than to the window, so the heading, the search
@@ -505,6 +505,15 @@ html, body { margin: 0; height: 100%; overflow: hidden; color-scheme: dark;
               background: var(--surface-sunk); border: 1px solid var(--line-edge);
               border-radius: var(--round-sm); }
 .find input:focus { outline: none; border-color: var(--accent); }
+/* The cross that empties the box, at its far end and inside it like the glass
+   at the near end. Only while there is something to empty — see `findingIn`. */
+.find .clear { position: absolute; right: 3px; display: grid; place-items: center;
+               width: 22px; height: 22px; padding: 0; margin: 0; border: 0;
+               border-radius: var(--round-sm); background: none; color: var(--text-dim);
+               cursor: pointer; }
+.find .clear .chrome { position: static; width: 11px; height: 11px; pointer-events: none; }
+.find .clear:hover { color: var(--text-strong); background: var(--surface-on); }
+.find:has(.clear:not([hidden])) input { padding-right: 28px; }
 /* The browser draws its own clear button as a dark cross, which on a field this
    dark is a smudge. Escape empties the box, and the mark says so nowhere. */
 .find input::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; }
@@ -545,6 +554,9 @@ html, body { margin: 0; height: 100%; overflow: hidden; color-scheme: dark;
 #compose .field > span { display: block; font-size: var(--font-sm);
                          letter-spacing: .07em; text-transform: uppercase;
                          color: var(--text-dim); margin-bottom: var(--gap-1); }
+/* The block a marker was put on: read, not typed, so it is set quiet. */
+#block-said { margin: 0; font-size: var(--font-md); color: var(--text-dim);
+              overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* A box somebody types into, in either of the two forms that have any. One rule
    rather than one per window: the claim form had none of its own and so wore
    whatever the browser draws an input as, which on this page is a white box in a
@@ -902,7 +914,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; color-scheme: dark;
    twice without drifting. The name takes what is left; the rest are held to what
    they hold, and the mark a marker wears has no heading of its own, so the name
    is what stands over it. */
-#directory { --marker-cols: var(--list-mark) minmax(0, 1fr) 112px 64px 58px var(--seen-box);
+#directory { --marker-cols: var(--list-mark) minmax(0, 1fr) 84px 112px 64px 58px var(--seen-box);
              --marker-gap: 7px; }
 /* The gap is shared as well as the widths, and has to be: two grids of the same
    columns and different gaps cannot line up, whatever the columns say. The
@@ -916,13 +928,26 @@ html, body { margin: 0; height: 100%; overflow: hidden; color-scheme: dark;
    bulk edit. One variable rather than a second template: the heading and the
    rows have to agree about every column, and two lists of widths is the one
    thing that guarantees they eventually will not. */
-#directory.bulk { --marker-cols: 20px var(--list-mark) minmax(0, 1fr) 112px 64px 58px var(--seen-box); }
+#directory.bulk { --marker-cols: 20px var(--list-mark) minmax(0, 1fr) 84px 112px 64px 58px var(--seen-box); }
 /* The box that ticks every row under it. Absent rather than hidden when the list
    is not in bulk edit: a grid item that is not displayed takes no column, which
    is what keeps the six-column heading over the six-column rows. */
 .tick { display: none; }
 #directory.bulk .tick { display: grid; place-items: center; }
 .tick input { accent-color: var(--accent); margin: 0; cursor: pointer; }
+/* Whether this reader sees the marker on their map: a box per row under a
+   heading that is a box over the lot, and a word beside that one. A marker
+   hidden this way is still listed, quieter, so it can be found and shown
+   again — a row that vanished with its marker would be a marker nobody could
+   get back. */
+.shown { display: flex; align-items: center; justify-content: flex-start; gap: 5px;
+         padding-left: var(--gap-1); font-size: var(--font-sm); color: var(--text-dim);
+         cursor: pointer; }
+/* The heading's word is set the way the sort headings beside it are. */
+#marker-head .shown { letter-spacing: .07em; text-transform: uppercase; }
+.shown input { accent-color: var(--accent); margin: 0; cursor: pointer; }
+#marker-list .listed.unseen .said, #marker-list .listed.unseen .where,
+#marker-list .listed.unseen .away, #marker-list .listed.unseen .owner { opacity: .45; }
 /* The heading is not inside the list it heads, so it has to be told about the
    list's scrollbar: both hold the gutter, and the columns stay under their own
    names whether the list scrolls or not. A gutter is only reserved on something
@@ -1032,6 +1057,22 @@ button.seen[disabled]:hover { background: none; }
    and nothing matching what was typed — and they need different words. */
 .nothing { margin: 0; padding: 6px var(--gap-1) 10px;
            font-size: var(--font-sm); color: var(--text-dim); }
+/* The keys, two rows to a line: nine questions the same shape as the switches
+   above them, and a column of nine would be most of the window. Each row is a
+   name and the key beside it, which is a button because pressing it is how the
+   key is changed. */
+#hotkey-panel { margin-top: var(--gap-2); padding-top: var(--gap-2);
+                border-top: 1px solid var(--line-soft); }
+#hotkey-panel h3 { margin: 0 0 var(--gap-1); font-size: var(--font-md);
+                   color: var(--section); font-weight: bold; }
+#hotkey-rows { display: grid; grid-template-columns: 1fr 1fr; gap: 0 var(--gap-3); }
+#hotkey-rows .line { justify-content: space-between; cursor: default; }
+.key { min-width: 5.5em; padding: 2px var(--gap-2); font: inherit; font-size: var(--font-sm);
+       color: var(--text-strong); cursor: pointer; background: var(--surface-bar);
+       border: 1px solid var(--line-edge); border-radius: var(--round-sm); }
+.key:hover { border-color: var(--accent-soft); }
+.key.listening { color: var(--accent); border-color: var(--accent); }
+.key[disabled] { color: var(--line); cursor: default; border-color: var(--line-soft); }
 #profile-said { margin: var(--gap-2) 0 var(--gap-3); font-size: var(--font-md);
                 color: var(--text-dim); min-height: 17px; }
 #profile-said.wrong { color: var(--warn); }
@@ -1081,6 +1122,15 @@ button.seen[disabled]:hover { background: none; }
 #what { color: var(--text-dim); margin-bottom: 7px; padding-bottom: 6px;
         border-bottom: 1px solid var(--line-soft); white-space: pre; }
 #what:empty { display: none; }
+/* Which key does what, as words: a key in the strong colour and its action in
+   the quiet one, wrapped at the panel's width rather than widening it into a
+   line the eye has to travel. Nothing to say — the hints switched off, or nobody
+   signed in — is no line at all, the way the picker's line is. */
+#keys { display: flex; flex-wrap: wrap; column-gap: 10px; row-gap: 2px; max-width: 320px;
+        margin-bottom: 7px; padding-bottom: 6px; border-bottom: 1px solid var(--line-soft);
+        font-size: var(--font-sm); color: var(--text-dim); white-space: nowrap; }
+#keys:empty { display: none; }
+#keys b { font-weight: normal; color: var(--text-strong); }
 .player, .marker { background: none; border: none; }
 /* A player, drawn the way the game's own map draws one: a dot with a cone over
    it for the way they are looking, turned by the bearing the mod sends.

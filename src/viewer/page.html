@@ -103,6 +103,12 @@
               aria-hidden="true"></span></button>
     </div>
   </div>
+  <!-- What the marker was put on, read at the moment it was made. Said and not
+       asked: a marker's block is the game's record, and the field above is
+       for what a preset should answer to. Only for a marker that exists. -->
+  <div class="field" id="block-field"><span>Block type</span>
+    <p id="block-said">None</p>
+  </div>
   <p id="said"></p>
   <div class="deed">
     <button id="marker-private" class="seen" type="button" aria-pressed="false"></button>
@@ -184,6 +190,11 @@
           aria-label="Tick every marker listed"></span>
     <button class="sort" type="button" data-sort="name" aria-sort="ascending"
             title="Sort by name">Name<span class="caret chrome masked mark-caret-up" aria-hidden="true"></span></button>
+    <!-- Whether this reader sees each marker on their own map. A box over a
+         column of boxes, as the tick column's heading is, and a word because
+         a box with nothing beside it in a heading row reads as another tick. -->
+    <label class="shown" title="Show or hide every marker listed"><input id="marker-shown-all" type="checkbox"
+          aria-label="Show every marker listed">Visible</label>
     <button class="sort" type="button" data-sort="spawn" aria-sort="none"
             title="Sort by how far it is from spawn">Coords<span class="caret chrome masked mark-caret-up" aria-hidden="true"></span></button>
     <button class="sort" type="button" data-sort="away" aria-sort="none"
@@ -427,6 +438,16 @@
       <p class="note">Share my map exploration with these groups. Deselect to unshare.</p>
     </section>
   </div>
+  <!-- Which key does what, one row per action, built by script from the one
+       table that also answers the presses. A keyboard's question is about the
+       person rather than the screen: the same hand reaches for the same key on
+       every machine, so these follow the account like the switches above. -->
+  <section id="hotkey-panel">
+    <h3>Hotkeys</h3>
+    <div id="hotkey-rows"></div>
+    <p class="note">Press a key's button, then the key you want. Escape keeps what was there; Backspace unbinds it.</p>
+    <button id="hotkey-reset" class="word" type="button">Reset hotkeys</button>
+  </section>
   <p id="profile-said"></p>
   <div class="deed">
     <a id="sign-out" href="/logout">Sign out</a>
@@ -447,6 +468,10 @@
        time it appeared — so the row somebody is reading moved out from under
        them. The panel is anchored to the bottom, so growing upward leaves it
        exactly where it was. -->
+  <!-- Which key does what, above everything else in the panel: a reminder is
+       read before the readout it sits over, and it is the one line here that
+       can be switched off. Written from `hotkeys.js`. -->
+  <div id="keys"></div>
   <div id="what"></div>
   <div id="waiting">loading…</div>
   <div id="where">

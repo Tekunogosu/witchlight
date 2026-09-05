@@ -234,6 +234,7 @@ function drawDirectory() {
 
   showSort();
   showFooter();
+  showShownAll();
   showFound(found);
 
   if (drawn > 0) return;
@@ -261,6 +262,7 @@ function markerRow(place, shaded) {
 
   const { line, open } = listedRow(place.Icon, place.Color, title, '', shaded);
   if (editing && editing.Key === place.Key) line.classList.add('chosen');
+  if (!markerShown(place)) line.classList.add('unseen');
   // The box that chooses this row, while the list is in bulk edit — and nothing
   // at all the rest of the time, because the heading and the rows share one grid
   // template and a cell nobody draws would still take a column. See `tickCell`.
@@ -295,8 +297,97 @@ function markerRow(place, shaded) {
     drawDirectory();
   });
 
-  line.append(where, away, owner, seen);
+  line.append(shownCell(place), where, away, owner, seen);
   return line;
+}
+
+/**
+ * Which markers this reader has chosen not to see on their map, by key.
+ *
+ * Theirs alone: it changes nothing anybody else is sent and nothing in the
+ * game. Kept with the rest of what they have set — see `Person` on the service
+ * — so it is the same on the next login and on another screen; somebody not
+ * signed in keeps it for as long as the page is open.
+ */
+const hiddenMarkers = new Set();
+
+/** Whether this reader sees a marker on their map. Everything is, until hidden. */
+function markerShown(place) {
+  return !hiddenMarkers.has(place.Key);
+}
+
+/**
+ * Takes the hidden markers this person kept, when their settings arrive.
+ *
+ * What the service holds replaces what the page held: the page's own set is a
+ * copy of that record, and a login is the moment the record is read.
+ */
+function takeHiddenMarkers() {
+  hiddenMarkers.clear();
+  for (const key of Array.isArray(mine.HiddenMarkers) ? mine.HiddenMarkers : []) {
+    hiddenMarkers.add(key);
+  }
+  redrawPlaces();
+}
+
+/**
+ * Shows or hides some markers, redraws, and keeps the choice.
+ *
+ * One function for the row's box and the heading's, so both mean the same
+ * thing about the same set. Kept a moment after the last change rather than on
+ * each one: ticking ten rows is one decision, and the service is asked once.
+ */
+function setMarkersShown(keys, on) {
+  for (const key of keys) {
+    if (!key) continue;
+    if (on) hiddenMarkers.delete(key);
+    else hiddenMarkers.add(key);
+  }
+  redrawPlaces();
+  keepHiddenSoon();
+}
+
+/** How long after the last box is pressed the choice is kept. */
+const KEEP_HIDDEN_AFTER = 800;
+let keepHiddenTimer = null;
+
+function keepHiddenSoon() {
+  clearTimeout(keepHiddenTimer);
+  keepHiddenTimer = setTimeout(() => {
+    keepHiddenTimer = null;
+    if (!(viewer && viewer.Name)) return;
+    started(keepMine({ ...mine, HiddenMarkers: [...hiddenMarkers].sort() }),
+      'keeping which markers are hidden');
+  }, KEEP_HIDDEN_AFTER);
+}
+
+/** The box in a row that shows or hides that one marker. */
+function shownCell(place) {
+  const column = document.createElement('label');
+  column.className = 'shown';
+  const box = document.createElement('input');
+  box.type = 'checkbox';
+  box.checked = markerShown(place);
+  // One of a column of identical boxes, so the marker it stands for is the only
+  // thing telling a reader — or a test — which one this is.
+  box.setAttribute('aria-label', `Show ${place.Title || 'marker'} on the map`);
+  box.addEventListener('click', event => event.stopPropagation());
+  box.addEventListener('change', () => setMarkersShown([place.Key], box.checked));
+  column.append(box);
+  return column;
+}
+
+/**
+ * The heading box, which says what the column under it adds up to: all shown,
+ * none, or some — the same three answers the tick column's heading gives.
+ */
+function showShownAll() {
+  const all = document.getElementById('marker-shown-all');
+  const shown = listedNow();
+  const seen = shown.filter(markerShown).length;
+  all.disabled = shown.length === 0;
+  all.checked = seen > 0 && seen === shown.length;
+  all.indeterminate = seen > 0 && seen < shown.length;
 }
 
 /** One cell of a row, said plainly. Its class is what the column is, so the
@@ -460,6 +551,9 @@ function buildDirectory() {
   // Typing narrows what a bulk button would touch, so a confirmation given for
   // one list must not be spent on another.
   findingIn(markerFind, () => { armed = null; drawDirectory(); });
+  // Every marker the tab and the search have left, shown or hidden at once.
+  document.getElementById('marker-shown-all').addEventListener('change', event =>
+    setMarkersShown(listedNow().map(place => place.Key), event.target.checked));
   buildBulk();
   chooseTab(listing);
 }

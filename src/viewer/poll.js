@@ -234,6 +234,7 @@ buildPresets();
 buildDirectory();
 buildProfile();
 buildClaims();
+buildHotkeys();
 // After every bar that hangs in the tool column exists, including the map's own
 // zoom and the block picker — which are Leaflet's and are moved into it.
 gatherCorner();

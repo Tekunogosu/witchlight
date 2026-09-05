@@ -13,7 +13,7 @@
 //! owns that nothing else could give it back, which is what earns the write. A
 //! run that changes nothing writes nothing.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 
 use crate::log::warn;
@@ -23,7 +23,14 @@ pub use crate::pyramid::TileFormat;
 
 /// The most presets one person may keep. Far past a working set, and there so
 /// that a page in a loop cannot grow this file without end.
+/// How many markers one person may hide. More than a server has markers.
+const MOST_HIDDEN: usize = 5000;
+
 const MOST_PRESETS: usize = 200;
+
+/// The most hotkeys one person may rebind. The page offers under a dozen
+/// actions; the rest of the room is for actions a later build adds.
+const MOST_HOTKEYS: usize = 64;
 
 /// The most a stored word may be. Names, patterns and icon names all pass
 /// through here from a browser, and none of them is a paragraph.
@@ -97,6 +104,20 @@ pub struct Person {
     /// that the same land is the same colour on every screen.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub color: String,
+
+    /// Markers this person has chosen not to see on their own map, by key.
+    /// Theirs alone: nothing anybody else is sent changes with it. Empty is
+    /// every marker shown, which is where everybody starts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden_markers: Vec<String>,
+
+    /// The keys this person has rebound, by the action's name, where the key is
+    /// what the browser reports for the press — `c`, `P`, `F2`. An empty key is
+    /// an action unbound on purpose; an action absent here keeps the page's
+    /// default. Theirs on every machine, which is what puts a keyboard's
+    /// question here rather than in the browser with the sizes.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub hotkeys: BTreeMap<String, String>,
 }
 
 impl Person {
@@ -118,6 +139,22 @@ impl Person {
         // the window forever being scrolled past.
         self.presets.retain(|preset| !preset.pattern.is_empty());
         self.color = hex_colour(&self.color);
+        // A key is a guid; anything longer is not one, and a list past what a
+        // map could hold is a browser sending something other than choices.
+        self.hidden_markers.truncate(MOST_HIDDEN);
+        self.hidden_markers.retain(|key| !key.is_empty() && key.len() <= LONGEST_WORD);
+        self.hidden_markers.sort();
+        self.hidden_markers.dedup();
+        // An action's name is a short word the page chose, and a key is what one
+        // press reports; neither is a paragraph, and a map past a page's actions
+        // is a browser sending something other than choices.
+        self.hotkeys.retain(|action, _| !action.is_empty() && action.len() <= LONGEST_WORD);
+        for key in self.hotkeys.values_mut() {
+            clip(key);
+        }
+        while self.hotkeys.len() > MOST_HOTKEYS {
+            self.hotkeys.pop_last();
+        }
         self
     }
 }
@@ -284,6 +321,8 @@ mod tests {
             share_map_with: Vec::new(),
             tile_format: TileFormat::Png,
             color: String::new(),
+            hidden_markers: Vec::new(),
+            hotkeys: BTreeMap::new(),
         }
     }
 
@@ -361,6 +400,21 @@ mod tests {
     }
 
     #[test]
+    fn a_rebound_key_follows_the_person_and_an_unbound_one_stays_unbound() {
+        let preferences = store();
+        let mut asked = ferns();
+        asked.hotkeys.insert("marker".to_owned(), "x".to_owned());
+        asked.hotkeys.insert("inspect".to_owned(), String::new());
+        asked.hotkeys.insert(String::new(), "q".to_owned());
+        preferences.set("uid-ada", asked);
+
+        let held = preferences.of("uid-ada").hotkeys;
+        assert_eq!(held.get("marker").map(String::as_str), Some("x"));
+        assert_eq!(held.get("inspect").map(String::as_str), Some(""), "unbound is a choice, not an absence");
+        assert_eq!(held.len(), 2, "an action with no name is nothing to rebind");
+    }
+
+    #[test]
     fn a_page_cannot_grow_this_without_end() {
         let preferences = store();
         let many = Person {
@@ -378,6 +432,17 @@ mod tests {
         };
         preferences.set("uid-bob", long);
         assert_eq!(preferences.of("uid-bob").presets[0].pattern.len(), LONGEST_WORD);
+    }
+
+    #[test]
+    fn hidden_markers_are_kept_and_tidied() {
+        let preferences = Preferences::load(Arc::new(Store::in_memory()));
+        let mut person = Person::default();
+        person.hidden_markers = vec!["b".to_owned(), "a".to_owned(), "".to_owned(), "a".to_owned()];
+        assert!(preferences.set("uid-ada", person));
+        assert_eq!(preferences.of("uid-ada").hidden_markers, vec!["a", "b"], "sorted, deduplicated, nothing empty");
+        assert!(!serde_json::to_string(&Person::default()).unwrap().contains("HiddenMarkers"),
+            "nothing hidden is nothing written");
     }
 
     #[test]

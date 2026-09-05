@@ -50,6 +50,7 @@ pub const SCRIPT: &str = concat!(
     include_str!("viewer/directory.js"),
     include_str!("viewer/bulk.js"),
     include_str!("viewer/profile.js"),
+    include_str!("viewer/hotkeys.js"),
     include_str!("viewer/poll.js"),
 );
 

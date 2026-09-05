@@ -34,12 +34,34 @@ function looksLike(typed, ...words) {
  * press.
  */
 function findingIn(box, redraw) {
-  box.addEventListener('input', redraw);
+  // A cross at the far end of the box, for a pointer: it is there while there
+  // is something to clear and gone otherwise, so an empty box is not wearing a
+  // button that does nothing. Made here rather than in the markup, because
+  // every search box gets one and a box that forgot it would be the odd one.
+  const clear = document.createElement('button');
+  clear.type = 'button';
+  clear.className = 'clear';
+  clear.title = 'Clear';
+  clear.setAttribute('aria-label', `Clear ${box.getAttribute('aria-label') || 'the search'}`);
+  clear.append(chromeMark('x'));
+  clear.hidden = box.value === '';
+  box.parentElement.append(clear);
+
+  const empty = () => {
+    box.value = '';
+    clear.hidden = true;
+    redraw();
+    box.focus();
+  };
+  clear.addEventListener('click', empty);
+  box.addEventListener('input', () => {
+    clear.hidden = box.value === '';
+    redraw();
+  });
   box.addEventListener('keydown', event => {
     if (event.key !== 'Escape' || box.value === '') return;
     event.stopPropagation();
-    box.value = '';
-    redraw();
+    empty();
   });
 }
 

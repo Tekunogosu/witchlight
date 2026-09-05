@@ -250,6 +250,7 @@ function showAccount(me) {
   button.setAttribute('aria-label', named ? `Account: ${me.Name}` : 'Not signed in');
   mineBar.classList.toggle('on', Boolean(named));
   drawProfile();
+  showHotkeys();
 }
 
 /** Who the service says is looking. Asked at load, which is when it changes:

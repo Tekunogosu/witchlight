@@ -9,6 +9,55 @@ which is where that rule is kept rather than in anybody's memory.
 A version that moved for the other half says so and lists nothing, which is not an
 omission: it is what "one release" looks like from the side that did not change.
 
+## 0.49.0
+
+**Deploy note:** both halves, upgraded together; nothing is cleared.
+
+- Hotkeys. One key per control in the corner: `c` opens the marker form on the
+  block under the pointer, `m` the marker list, `k` arms claim drawing, `l` the
+  claim list, `p` the presets, `P` a new preset, `A` accessibility, `i` the
+  inspector and `o` the account window. A press while typing in a field is the
+  field's, and a chord with Control, Alt or Meta is the browser's.
+- Which key does what is written under the map, above the readout. "Hotkey
+  hints" in the settings flyout hides the line; the keys keep working.
+- The keys can be changed in the account window, one row per action: press the
+  key's button, then the key. Escape keeps what was there, Backspace unbinds,
+  and a key another row already has is refused by name. Bindings follow the
+  account, so they are the same on every machine; "Reset hotkeys" puts the
+  defaults back.
+
+## 0.48.2
+
+**Deploy note:** both halves, upgraded together; nothing is cleared.
+
+- The marker window says what block a marker was put on, under "Block type":
+  the block's name where the map knows it, its code otherwise, and "None" for
+  a marker with no record. Shown for a marker that exists, not for a new one
+  or a preset.
+
+## 0.48.1
+
+**Deploy note:** both halves, upgraded together; nothing is cleared.
+
+- The Visible column is wide enough for its heading, with a gap before
+  Coords, and its boxes sit at the column's left edge under the heading's.
+  The marker window opens wider by the column's width, so the name column is
+  what it was.
+
+## 0.48.0
+
+**Deploy note:** both halves, upgraded together; nothing is cleared. The game
+server restarts before the new map service is live.
+
+- A "Visible" column in the marker list, left of Coords: a box per row that
+  shows or hides that marker on your own map, and a box in the heading that
+  does the same for every marker the tab and the search have left. A hidden
+  marker stays listed, quieter, so it can be found and shown again. Kept with
+  your settings, so it is the same on the next login; not signed in, it lasts
+  as long as the page.
+- Every search box has a cross at its far end that empties it, shown while
+  there is something to empty.
+
 ## 0.47.3
 
 **Deploy note:** both halves, upgraded together; nothing is cleared. Moved for

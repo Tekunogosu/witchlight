@@ -189,6 +189,8 @@ function drawPlaces(waypoints) {
   places.clearLayers();
   drawnMarks.clear();
   for (const place of waypoints) {
+    // Hidden by this reader, for this reader: still listed, not drawn.
+    if (!markerShown(place)) continue;
     const picture = markFor(place.Icon, colourOf(place.Color)).outerHTML;
     // Every death marker is titled "You died here", so the owner is the only
     // thing that says whose it is. A marker only its owner is sent says so as
@@ -244,6 +246,18 @@ function drawPlaces(waypoints) {
   // the map draws larger.
   listed = waypoints;
   drawDirectory();
+}
+
+/**
+ * Draws the markers again from scratch, whatever they last were.
+ *
+ * For a change to which of them this reader sees rather than to what they are:
+ * `drawPlaces` leaves the map alone when the markers have not changed, which
+ * is right on the poll and wrong the moment a box in the list is pressed.
+ */
+function redrawPlaces() {
+  drawnPlaces = null;
+  drawPlaces(listed);
 }
 
 /**

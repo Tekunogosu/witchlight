@@ -939,6 +939,7 @@ function showClaims() {
   claimBar.classList.toggle('may-claim', may);
   if (!may && drawing) setDrawing(false);
   drawClaimsList();
+  showHotkeys();
   // The window may be open on a rectangle while the numbers behind it change:
   // somebody else's claim landing changes nothing here, but their own does, and
   // so does an operator raising their allowance.
@@ -1062,7 +1063,7 @@ function buildClaimsList() {
       drawClaimsList();
     });
   }
-  claimFind.addEventListener('input', drawClaimsList);
+  findingIn(claimFind, drawClaimsList);
 
   claimList.addEventListener('click', () => {
     if (claimsPanel.classList.contains('open')) {

@@ -149,6 +149,9 @@ const settings = {
   // button beside it. Somebody who names markers rather than picking them turns
   // it off and the box is only a box again.
   presetSearch: { label: 'Preset name search', on: true, apply: () => {} },
+  // The line under the map that says which key does what. The keys work either
+  // way: what is switched off is the reminder, for a hand that no longer needs it.
+  hotkeys: { label: 'Hotkey hints', on: true, apply: () => showHotkeys() },
   // Not about what is on the map but about what a reader can do with it, so it
   // is switched in the other panel. Still an entry here, because what a reader
   // has chosen is one table however many panels show it.

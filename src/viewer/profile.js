@@ -53,6 +53,7 @@ async function watchMine() {
   // each of these draws nothing where its own window is not up.
   drawProfile();
   drawPresets();
+  showHotkeys();
   if (applyPanel.classList.contains('open')) drawApplyList();
 }
 
@@ -81,6 +82,7 @@ async function pollMine() {
   try {
     const held = await (await fetch('/me/preferences.json', { cache: 'no-store' })).json();
     mine = held && typeof held === 'object' ? held : mine;
+    takeHiddenMarkers();
   } catch (error) {
     /* the service may be restarting; what is held stands until it answers */
   }
@@ -147,6 +149,7 @@ function drawProfile() {
     box.disabled = !named;
   }
   drawShares(named);
+  drawHotkeyRows(named);
   wantPresets.disabled = !named;
   wantPrivate.disabled = !named;
   wantFollow.disabled = !named;
@@ -218,6 +221,7 @@ function draftProfile() {
     shares: [...document.querySelectorAll('#share-groups input:checked')]
       .map(box => Number(box.value))
       .filter(Number.isFinite),
+    hotkeys: hotkeysDrafted(),
   };
 }
 
@@ -289,11 +293,13 @@ async function keepProfile() {
     Color: draft.colour,
     ShareMapWith: draft.shares,
     TileFormat: draft.format,
+    Hotkeys: draft.hotkeys,
   });
   // A new encoding is a new address for every tile — see `tileUrl` — so what
   // is on screen is asked for again, once.
   if (kept && tileFormat() !== wasFormat) terrain?.refreshAll();
   drawProfile();
+  showHotkeys();
   sayProfile(kept ? 'Kept.' : 'The map service is not answering.', !kept);
   if (kept) shutWindow(profile);
 }
