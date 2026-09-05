@@ -43,7 +43,7 @@ use crate::error::{Error, Result};
 /// The schema this build writes. A file at another number is a file another
 /// build wrote, and refusing it is the honest answer until there is a migration
 /// to run.
-const SCHEMA: i64 = 2;
+const SCHEMA: i64 = 3;
 
 /// Chunks in a region, which is how many bits a `discovered` row holds.
 const BITS: usize = (REGION_CHUNKS * REGION_CHUNKS) as usize;
@@ -118,6 +118,28 @@ const SESSIONS_TABLE: &str = "CREATE TABLE sessions (
                              uid TEXT NOT NULL,
                              name TEXT NOT NULL,
                              seen INTEGER NOT NULL
+                         ) WITHOUT ROWID;";
+
+/// What the service must still have when the mod is off, said once for the
+/// fresh schema and the upgrade to it: the last markers posted, as one row
+/// that is replaced when a post differs; everybody's choices, one row each,
+/// replaced only for the person who changed theirs; and the chunks players
+/// stood in lately, one row each, so a visit costs the rows it moved rather
+/// than a file.
+const KEPT_TABLES: &str = "CREATE TABLE markers (
+                             one INTEGER PRIMARY KEY CHECK (one = 1),
+                             body TEXT NOT NULL
+                         ) WITHOUT ROWID;
+                         CREATE TABLE preferences (
+                             uid TEXT PRIMARY KEY,
+                             body TEXT NOT NULL
+                         ) WITHOUT ROWID;
+                         CREATE TABLE visited (
+                             cx INTEGER NOT NULL,
+                             cz INTEGER NOT NULL,
+                             radius INTEGER NOT NULL,
+                             at INTEGER NOT NULL,
+                             PRIMARY KEY (cx, cz)
                          ) WITHOUT ROWID;";
 
 pub struct Discovered {
@@ -228,17 +250,27 @@ impl Store {
                              value INTEGER NOT NULL
                          ) WITHOUT ROWID;
                          {SESSIONS_TABLE}
+                         {KEPT_TABLES}
                          PRAGMA user_version = {SCHEMA};"
                     ))
                     .map_err(|error| Error::database("creating the schema", error))?;
                 Ok(())
             }
-            // Schema 1 is schema 2 without the sessions: a map from before
-            // logins were kept is carried forward with everything it holds.
+            // Schema 1 is schema 2 without the sessions, and schema 2 is schema
+            // 3 without what used to be three files beside the map: each is
+            // carried forward with everything it holds.
             1 => {
                 connection
-                    .execute_batch(&format!("{SESSIONS_TABLE} PRAGMA user_version = {SCHEMA};"))
-                    .map_err(|error| Error::database("adding the sessions table", error))?;
+                    .execute_batch(&format!(
+                        "{SESSIONS_TABLE} {KEPT_TABLES} PRAGMA user_version = {SCHEMA};"
+                    ))
+                    .map_err(|error| Error::database("adding the sessions and kept tables", error))?;
+                Ok(())
+            }
+            2 => {
+                connection
+                    .execute_batch(&format!("{KEPT_TABLES} PRAGMA user_version = {SCHEMA};"))
+                    .map_err(|error| Error::database("adding the kept tables", error))?;
                 Ok(())
             }
             SCHEMA => Ok(()),
@@ -309,6 +341,94 @@ impl Store {
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Connection> {
         self.connection.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// The last markers the mod posted, as the text that arrived, or nothing
+    /// where no post has been kept.
+    pub fn markers(&self) -> Result<Option<String>> {
+        self.lock()
+            .query_row("SELECT body FROM markers WHERE one = 1", [], |row| row.get(0))
+            .optional()
+            .map_err(|error| Error::database("reading the kept markers", error))
+    }
+
+    /// Keeps a marker post, whole, in place of the last one.
+    pub fn put_markers(&self, body: &str) -> Result<()> {
+        self.lock()
+            .execute(
+                "INSERT INTO markers (one, body) VALUES (1, ?1)
+                 ON CONFLICT (one) DO UPDATE SET body = excluded.body",
+                params![body],
+            )
+            .map_err(|error| Error::database("keeping the markers", error))?;
+        Ok(())
+    }
+
+    /// Everybody's choices, as the text each was kept as, by uid.
+    pub fn preferences(&self) -> Result<Vec<(String, String)>> {
+        let connection = self.lock();
+        let mut statement = connection
+            .prepare("SELECT uid, body FROM preferences")
+            .map_err(|error| Error::database("reading the preferences", error))?;
+        let rows = statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .map_err(|error| Error::database("reading the preferences", error))?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|error| Error::database("reading somebody's preferences", error))
+    }
+
+    /// Keeps one person's choices, whole, in place of what they had.
+    pub fn put_preferences(&self, uid: &str, body: &str) -> Result<()> {
+        self.lock()
+            .execute(
+                "INSERT INTO preferences (uid, body) VALUES (?1, ?2)
+                 ON CONFLICT (uid) DO UPDATE SET body = excluded.body",
+                params![uid, body],
+            )
+            .map_err(|error| Error::database("keeping somebody's preferences", error))?;
+        Ok(())
+    }
+
+    /// Every chunk somebody stood in lately: the chunk, how far was seen from
+    /// it, and when, in seconds since the epoch.
+    pub fn visited(&self) -> Result<Vec<(i32, i32, i32, u64)>> {
+        let connection = self.lock();
+        let mut statement = connection
+            .prepare("SELECT cx, cz, radius, at FROM visited")
+            .map_err(|error| Error::database("reading the visited chunks", error))?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get::<_, i64>(3)?.max(0) as u64))
+            })
+            .map_err(|error| Error::database("reading the visited chunks", error))?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|error| Error::database("reading a visited chunk", error))
+    }
+
+    /// Records the places that moved and forgets the ones let go, in one
+    /// transaction, so a visit costs the rows it touched and nothing else.
+    pub fn put_visited(&self, stood: &[(i32, i32, i32, u64)], gone: &[(i32, i32)]) -> Result<()> {
+        let mut connection = self.lock();
+        let transaction = connection
+            .transaction()
+            .map_err(|error| Error::database("recording where players stood", error))?;
+        for &(cx, cz, radius, at) in stood {
+            transaction
+                .execute(
+                    "INSERT INTO visited (cx, cz, radius, at) VALUES (?1, ?2, ?3, ?4)
+                     ON CONFLICT (cx, cz) DO UPDATE SET radius = excluded.radius, at = excluded.at",
+                    params![cx, cz, radius, at as i64],
+                )
+                .map_err(|error| Error::database("recording where a player stood", error))?;
+        }
+        for &(cx, cz) in gone {
+            transaction
+                .execute("DELETE FROM visited WHERE cx = ?1 AND cz = ?2", params![cx, cz])
+                .map_err(|error| Error::database("forgetting where a player stood", error))?;
+        }
+        transaction
+            .commit()
+            .map_err(|error| Error::database("recording where players stood", error))
     }
 
     /// Blocks along a chunk's edge, or zero where nothing has been stored yet.
@@ -715,6 +835,44 @@ pub fn set_bit(bits: &mut [u8; BITSET_BYTES], slot: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn what_the_service_must_still_have_is_kept_by_row() {
+        let store = Store::in_memory();
+
+        assert_eq!(store.markers().unwrap(), None, "nothing posted yet");
+        store.put_markers("{\"Public\":[]}").unwrap();
+        store.put_markers("{\"Public\":[1]}").unwrap();
+        assert_eq!(store.markers().unwrap().as_deref(), Some("{\"Public\":[1]}"), "one row, the last post");
+
+        store.put_preferences("ada", "{\"a\":1}").unwrap();
+        store.put_preferences("bob", "{\"b\":1}").unwrap();
+        store.put_preferences("ada", "{\"a\":2}").unwrap();
+        let mut people = store.preferences().unwrap();
+        people.sort();
+        assert_eq!(
+            people,
+            vec![("ada".to_owned(), "{\"a\":2}".to_owned()), ("bob".to_owned(), "{\"b\":1}".to_owned())],
+            "one row per person, replaced in place"
+        );
+
+        store.put_visited(&[(1, 2, 8, 100), (3, 4, 8, 100)], &[]).unwrap();
+        store.put_visited(&[(1, 2, 12, 200)], &[(3, 4)]).unwrap();
+        assert_eq!(store.visited().unwrap(), vec![(1, 2, 12, 200)], "moved rows replaced, gone rows deleted");
+    }
+
+    #[test]
+    fn a_schema_two_database_gains_the_kept_tables() {
+        let connection = Connection::open_in_memory().expect("an in-memory database");
+        connection
+            .execute_batch(&format!("{SESSIONS_TABLE} PRAGMA user_version = 2;"))
+            .expect("a schema 2 database");
+        let store = Store { connection: Mutex::new(connection) };
+        store.migrate(Path::new(":memory:")).expect("carried forward");
+        store.put_markers("[]").unwrap();
+        let version: i64 = store.lock().query_row("PRAGMA user_version", [], |row| row.get(0)).unwrap();
+        assert_eq!(version, SCHEMA);
+    }
 
     fn record(edge: usize, block: u16) -> Vec<u8> {
         let mut record = Vec::with_capacity(edge * edge * 6);

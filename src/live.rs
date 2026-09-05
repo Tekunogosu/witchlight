@@ -34,13 +34,15 @@
 //! times over.
 
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use serde_json::value::RawValue;
 
+use crate::log::warn;
 use crate::memory::Group;
+use crate::store::Store;
 
 /// How long a report of who is online stays believable.
 ///
@@ -268,7 +270,7 @@ pub struct Live {
     /// the reason [`Claims`] gives.
     claims: Mutex<Claims>,
     /// Where markers are kept so they survive both programs stopping.
-    path: PathBuf,
+    store: Arc<Store>,
     /// Group names the operator has said are no group at all, lowercased once
     /// here so a post is compared against them without lowercasing them again.
     /// See `Config::hidden_groups`.
@@ -278,15 +280,16 @@ pub struct Live {
 impl Live {
     /// Reads back whatever markers a previous run was told about.
     ///
-    /// A file this build cannot read is no markers rather than a guess at what it
-    /// meant. One written before markers carried who may see them says nothing
-    /// about that, and showing it to everybody would be deciding on the owner's
-    /// behalf; the mod replaces it within one share interval either way.
+    /// A post this build cannot read is no markers rather than a guess at what
+    /// it meant; the mod replaces it within one share interval either way.
     #[must_use]
-    pub fn load(exports: &Path, hidden_groups: &[String]) -> Self {
-        let path = markers_path(exports);
-        let markers = std::fs::read_to_string(&path)
-            .ok()
+    pub fn load(store: Arc<Store>, hidden_groups: &[String]) -> Self {
+        let markers = store
+            .markers()
+            .unwrap_or_else(|error| {
+                warn!("{error}");
+                None
+            })
             .and_then(|body| sorted(&body))
             .unwrap_or_default();
 
@@ -295,7 +298,7 @@ impl Live {
             world: Mutex::new(None),
             markers: Mutex::new(markers),
             claims: Mutex::new(Claims::default()),
-            path,
+            store,
             hidden: hidden_groups.iter().map(|name| name.trim().to_lowercase()).collect(),
         }
     }
@@ -363,7 +366,8 @@ impl Live {
         true
     }
 
-    /// Takes the markers, and writes them if they are not what is already held.
+    /// Takes the markers, and keeps them if they are not what is already held.
+    /// A post that says nothing new costs no write.
     pub fn set_markers(&self, body: String) -> bool {
         let Some(taken) = sorted(&body) else {
             return false;
@@ -376,7 +380,9 @@ impl Live {
             return true;
         }
 
-        crate::files::publish(&self.path, body.as_bytes());
+        if let Err(error) = self.store.put_markers(&body) {
+            warn!("{error}");
+        }
 
         *markers = taken;
         true
@@ -668,10 +674,6 @@ fn within(array: &str) -> &str {
         .trim()
 }
 
-#[must_use]
-pub fn markers_path(exports: &Path) -> PathBuf {
-    exports.join("markers.json")
-}
 
 #[cfg(test)]
 mod tests {
@@ -690,9 +692,20 @@ mod tests {
     }"##;
 
     fn told() -> Live {
-        let live = Live::load(Path::new("/nonexistent"), &[]);
+        let live = Live::load(Arc::new(Store::in_memory()), &[]);
         assert!(live.set_markers(POSTED.to_owned()), "the envelope this build posts is taken");
         live
+    }
+
+    #[test]
+    fn markers_survive_a_restart_through_the_database() {
+        let store = Arc::new(Store::in_memory());
+        let first = Live::load(Arc::clone(&store), &[]);
+        assert!(first.set_markers(POSTED.to_owned()));
+        assert!(first.set_markers(POSTED.to_owned()), "the same post again is taken and costs no write");
+
+        let again = Live::load(Arc::clone(&store), &[]);
+        assert!(again.body(Some("uid-ada"), "{}").contains("ada's hoard"), "read back from the database");
     }
 
     #[test]
@@ -708,7 +721,7 @@ mod tests {
 
     #[test]
     fn a_post_from_a_mod_that_knows_nothing_of_pins_has_none() {
-        let live = Live::load(Path::new("/nonexistent"), &[]);
+        let live = Live::load(Arc::new(Store::in_memory()), &[]);
         assert!(live.set_markers(
             r##"{"Colors":[],"Public":[{"Title":"trader","Key":"a"}],"Private":{}}"##.to_owned()));
         // An empty array rather than a hole, for the reason every other list
@@ -757,7 +770,7 @@ mod tests {
 
     #[test]
     fn a_post_this_build_cannot_read_is_refused() {
-        let live = Live::load(Path::new("/nonexistent"), &[]);
+        let live = Live::load(Arc::new(Store::in_memory()), &[]);
 
         // A bare array is what an older mod posted. It says nothing about who may
         // see what, and reading it as all-public would decide on owners' behalf.
@@ -768,7 +781,7 @@ mod tests {
 
     #[test]
     fn a_map_nobody_has_posted_to_still_answers() {
-        let live = Live::load(Path::new("/nonexistent"), &[]);
+        let live = Live::load(Arc::new(Store::in_memory()), &[]);
         let body: serde_json::Value =
             serde_json::from_str(&live.body(None, "{}")).expect("valid JSON");
         assert_eq!(body["Players"].as_array().expect("an array").len(), 0);
@@ -797,7 +810,7 @@ mod tests {
     /// Everybody is in the group a mod made for everybody, which the operator
     /// has hidden.
     fn watched() -> Live {
-        let live = Live::load(Path::new("/nonexistent"), &["XLib".to_owned()]);
+        let live = Live::load(Arc::new(Store::in_memory()), &["XLib".to_owned()]);
         assert!(live.set_players(
             r#"{"Online":2,
                 "Public":[{"Name":"ada","Uid":"a"}],
@@ -844,7 +857,7 @@ mod tests {
 
     #[test]
     fn the_groups_the_mod_posts_are_read_whole() {
-        let live = Live::load(Path::new("/nonexistent"), &[]);
+        let live = Live::load(Arc::new(Store::in_memory()), &[]);
         assert!(live.set_players(
             r#"{"Online":0,"Public":[],"Private":{},
                 "Groups":{"7":{"Name":"the guild","Members":["a","b","c"]},"x":{"Name":"nonsense"}}}"#
@@ -896,7 +909,7 @@ mod tests {
     }"##;
 
     fn claimed() -> Live {
-        let live = Live::load(Path::new("/nonexistent"), &[]);
+        let live = Live::load(Arc::new(Store::in_memory()), &[]);
         assert!(live.set_claims(CLAIMED.to_owned()), "the envelope this build posts is taken");
         live
     }
@@ -924,7 +937,7 @@ mod tests {
         // What a server that has not narrowed `[claims] view` looks like: the
         // game already sends every claim to every client, so the map saying less
         // would be telling players less than the game does.
-        let live = Live::load(Path::new("/nonexistent"), &[]);
+        let live = Live::load(Arc::new(Store::in_memory()), &[]);
         assert!(live.set_claims(
             r#"{"Everyones":true,"Claims":[{"Key":"a"}],"Seen":[],"Making":{}}"#.to_owned()
         ));
@@ -953,7 +966,7 @@ mod tests {
 
     #[test]
     fn a_claim_post_this_build_cannot_read_is_refused() {
-        let live = Live::load(Path::new("/nonexistent"), &[]);
+        let live = Live::load(Arc::new(Store::in_memory()), &[]);
         assert!(!live.set_claims(r#"[{"Key":"a"}]"#.to_owned()), "a bare array is not the envelope");
         assert!(!live.set_claims("not json".to_owned()));
         assert!(live.body(Some("uid-ada"), "{}").contains(r#""Claims":[]"#));
@@ -963,7 +976,7 @@ mod tests {
 fn a_report_in_the_shape_an_older_mod_posted_is_refused() {
         // A bare array was every player, to everybody. Read that way it would be
         // exactly what an operator turned the setting off to prevent.
-        let live = Live::load(Path::new("/nonexistent"), &[]);
+        let live = Live::load(Arc::new(Store::in_memory()), &[]);
         assert!(!live.set_players(r#"[{"Name":"ada"}]"#.to_owned()));
         assert!(!live.body(None, "{}").contains("ada"));
     }

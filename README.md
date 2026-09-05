@@ -287,7 +287,7 @@ witchlight: surface 96% painted, 4% nothing to draw, 0% waiting on a colour, 0% 
 |---|---|
 | `palette.json` | every block: its id in this world, an average colour or which kind of colourless it is, and which colour maps tint it |
 | `colormaps/*.png` | the game's lookup images, sampled by climate and by season |
-| `map.sqlite` | **written here**: every chunk the map holds, every version of one somebody still remembers, and what each person has seen |
+| `map.sqlite` | **written here**: every chunk the map holds, every version of one somebody still remembers, what each person has seen, who is logged in, the last markers posted, everybody's presets and settings, and where players stood lately |
 | `tiles/{level}/…` | **written here**, the zoom levels above one block per pixel |
 
 The terrain is the service's own. The mod reads the surface of a chunk whose
@@ -334,9 +334,9 @@ Players and markers do not come from a file. The mod posts them on the **API
 channel** — a second listener on loopback, on whatever port the machine had free,
 whose port and token are written to `api.json` beside the map so the mod finds it
 without being told. They are held in memory, because a position is worthless by
-the time a disk has finished with it. Markers are the exception and are written to
-`markers.json` when they arrive, so the map still has something to show when the
-game server is off. That channel takes writes, which is why it is not on the map
+the time a disk has finished with it. Markers are the exception and are kept in
+the database when a post differs from the last, so the map still has something to
+show when the game server is off. That channel takes writes, which is why it is not on the map
 port. Nothing here reads a file this build does not write, so an empty map means
 nothing was posted rather than nothing was found. Every interface is written up in
 [API.md](../../witchlight-csharp/API.md).

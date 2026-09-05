@@ -14,8 +14,10 @@
 //! run that changes nothing writes nothing.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+
+use crate::log::warn;
+use crate::store::Store;
 
 pub use crate::pyramid::TileFormat;
 
@@ -146,23 +148,27 @@ fn clip(word: &mut String) {
 /// Everyone's choices, by uid.
 pub struct Preferences {
     held: Mutex<HashMap<String, Person>>,
-    path: PathBuf,
+    store: Arc<Store>,
 }
 
 impl Preferences {
     /// Reads back whatever a previous run stored.
     ///
-    /// An unreadable file is nobody having set anything, which is where every
-    /// person starts anyway: the form still works, on the operator's defaults.
+    /// A row this build cannot read is that person having set nothing, which is
+    /// where everybody starts anyway: the form still works, on the operator's
+    /// defaults.
     #[must_use]
-    pub fn load(exports: &Path) -> Self {
-        let path = path_in(exports);
-        let held = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|body| serde_json::from_str::<HashMap<String, Person>>(&body).ok())
-            .unwrap_or_default();
-
-        Self { held: Mutex::new(held), path }
+    pub fn load(store: Arc<Store>) -> Self {
+        let held = store
+            .preferences()
+            .unwrap_or_else(|error| {
+                warn!("{error}");
+                Vec::new()
+            })
+            .into_iter()
+            .filter_map(|(uid, body)| serde_json::from_str::<Person>(&body).ok().map(|person| (uid, person)))
+            .collect();
+        Self { held: Mutex::new(held), store }
     }
 
     /// Everybody who has set anything, for a start that has to know who shares
@@ -221,15 +227,20 @@ impl Preferences {
             if held.get(uid) == Some(&person) {
                 return true;
             }
+            let body = serde_json::to_string(&person).unwrap_or_default();
             held.insert(uid.to_owned(), person);
-            serde_json::to_string(&*held).unwrap_or_default()
+            body
         };
 
         if body.is_empty() {
             return false;
         }
 
-        crate::files::publish(&self.path, body.as_bytes());
+        // One person's row, and only when theirs changed: the compare above is
+        // what keeps a settings window pressed twice from costing a write.
+        if let Err(error) = self.store.put_preferences(uid, &body) {
+            warn!("{error}");
+        }
         true
     }
 
@@ -253,10 +264,6 @@ impl Preferences {
     }
 }
 
-#[must_use]
-pub fn path_in(exports: &Path) -> PathBuf {
-    exports.join("preferences.json")
-}
 
 #[cfg(test)]
 mod tests {
@@ -281,7 +288,7 @@ mod tests {
     }
 
     fn store() -> Preferences {
-        Preferences::load(Path::new("/nonexistent"))
+        Preferences::load(Arc::new(Store::in_memory()))
     }
 
     #[test]
@@ -375,15 +382,14 @@ mod tests {
 
     #[test]
     fn what_is_written_is_read_back() {
-        let exports = std::env::temp_dir().join(format!("witchlight-{}", crate::random::word(8)));
-        std::fs::create_dir_all(&exports).expect("a directory to write into");
+        let store = Arc::new(Store::in_memory());
 
-        let first = Preferences::load(&exports);
+        let first = Preferences::load(Arc::clone(&store));
         assert!(first.set("uid-ada", ferns()));
+        assert!(first.set("uid-bob", Person::default()));
 
-        let again = Preferences::load(&exports);
+        let again = Preferences::load(Arc::clone(&store));
         assert_eq!(again.of("uid-ada"), ferns(), "a restart keeps what somebody set");
-
-        std::fs::remove_dir_all(&exports).ok();
+        assert_eq!(again.all().len(), 2, "one row per person");
     }
 }

@@ -28,6 +28,7 @@ use serde::Deserialize;
 
 use crate::columns::Chunk;
 use crate::log::warn;
+use crate::store::Store;
 use crate::state::State;
 
 /// How many columns may sit in either queue before new offers are dropped —
@@ -107,7 +108,7 @@ fn path_in(exports: &Path) -> PathBuf {
 /// that player, which is theirs to say and not one number for everybody.
 pub struct Visited {
     inner: Mutex<VisitedInner>,
-    path: PathBuf,
+    store: Arc<Store>,
 }
 
 /// How long a place somebody stood keeps the ground around it worth asking
@@ -136,12 +137,19 @@ impl VisitedInner {
         }
     }
 
-    /// Drops what was stood in longer ago than is kept. Says whether anything went.
-    fn expire(&mut self, now: u64) -> bool {
+    /// Drops what was stood in longer ago than is kept. Says which places went.
+    fn expire(&mut self, now: u64) -> Vec<(i32, i32)> {
         let horizon = now.saturating_sub(VISITED_FOR.as_secs());
-        let before = self.stood.len();
-        self.stood.retain(|_, &mut (_, when)| when >= horizon);
-        self.stood.len() != before
+        let gone: Vec<(i32, i32)> = self
+            .stood
+            .iter()
+            .filter(|(_, (_, when))| *when < horizon)
+            .map(|(&at, _)| at)
+            .collect();
+        for at in &gone {
+            self.stood.remove(at);
+        }
+        gone
     }
 }
 
@@ -150,44 +158,48 @@ fn now_secs() -> u64 {
 }
 
 impl Visited {
-    /// Reads back what a previous run recorded, or starts empty — an unreadable
-    /// or missing file is answered the same way a fresh world is, since a
+    /// Reads back what a previous run recorded, or starts empty — a table that
+    /// cannot be read is answered the same way a fresh world is, since a
     /// bounded reach found empty is the honest starting shape and not a fault.
-    /// A file an older build wrote, with no reach or time per place, reads as
-    /// empty for the same reason.
     #[must_use]
-    pub fn load(exports: &Path) -> Self {
-        let path = visited_path_in(exports);
+    pub fn load(store: Arc<Store>) -> Self {
         let mut inner = VisitedInner::default();
-        if let Some(places) = std::fs::read(&path)
-            .ok()
-            .and_then(|body| serde_json::from_slice::<Vec<(i32, i32, i32, u64)>>(&body).ok())
-        {
-            for (cx, cz, radius, when) in places {
-                inner.stood.insert((cx, cz), (radius, when));
+        match store.visited() {
+            Ok(places) => {
+                for (cx, cz, radius, when) in places {
+                    inner.stood.insert((cx, cz), (radius, when));
+                }
             }
+            Err(error) => warn!("{error}"),
         }
-        inner.expire(now_secs());
+        let gone = inner.expire(now_secs());
         inner.rebuild();
-        Self { inner: Mutex::new(inner), path }
+        let visited = Self { inner: Mutex::new(inner), store };
+        visited.save(&[], &gone);
+        visited
     }
 
     /// Records that players are standing in these chunks right now, each
-    /// seeing `radius` chunks around them. Returns whether the set of places
-    /// or a reach changed, so a caller only bothers writing the file back when
-    /// there is something the next start would want to know.
-    pub fn visit(&self, at: impl IntoIterator<Item = ((i32, i32), i32)>) -> bool {
-        let Ok(mut inner) = self.inner.lock() else { return false };
+    /// seeing `radius` chunks around them, and writes down exactly what that
+    /// changed: the places entered or seen further from, and the places let go.
+    /// A tick that moved nothing writes nothing.
+    pub fn visit(&self, at: impl IntoIterator<Item = ((i32, i32), i32)>) {
+        let Ok(mut inner) = self.inner.lock() else { return };
         let now = now_secs();
-        let mut changed = inner.expire(now);
+        let gone = inner.expire(now);
+        let mut moved = Vec::new();
         for (chunk, radius) in at {
             let was = inner.stood.insert(chunk, (radius, now));
-            changed |= was.is_none_or(|(had, _)| had != radius);
+            if was.is_none_or(|(had, _)| had != radius) {
+                moved.push((chunk.0, chunk.1, radius, now));
+            }
         }
-        if changed {
-            inner.rebuild();
+        if moved.is_empty() && gone.is_empty() {
+            return;
         }
-        changed
+        inner.rebuild();
+        drop(inner);
+        self.save(&moved, &gone);
     }
 
     /// Whether a candidate column is within sight of somewhere a player has
@@ -197,25 +209,15 @@ impl Visited {
         self.inner.lock().is_ok_and(|inner| inner.within.contains(&at))
     }
 
-    /// Writes what is held, when there is something worth keeping.
-    pub fn save(&self) {
-        let Ok(inner) = self.inner.lock() else { return };
-        let places: Vec<(i32, i32, i32, u64)> =
-            inner.stood.iter().map(|(&(cx, cz), &(radius, when))| (cx, cz, radius, when)).collect();
-        drop(inner);
-
-        let Ok(body) = serde_json::to_vec(&places) else { return };
-        if let Err(error) = crate::files::replace(&self.path, &body) {
-            warn!("could not write {}: {error}", self.path.display());
+    /// Writes down the rows that moved and the ones that went, and nothing else.
+    fn save(&self, moved: &[(i32, i32, i32, u64)], gone: &[(i32, i32)]) {
+        if moved.is_empty() && gone.is_empty() {
+            return;
+        }
+        if let Err(error) = self.store.put_visited(moved, gone) {
+            warn!("{error}");
         }
     }
-}
-
-/// Where visited chunks are kept, beside the map like everything else this
-/// service writes for its own use.
-#[must_use]
-fn visited_path_in(exports: &Path) -> PathBuf {
-    exports.join("visited-chunks.json")
 }
 
 /// The frontier, and the pacing over it.
@@ -239,13 +241,13 @@ pub struct Puller {
 
 impl Puller {
     #[must_use]
-    pub fn new(exports: &Path, configured_radius: i32) -> Self {
+    pub fn new(store: Arc<Store>, exports: &Path, configured_radius: i32) -> Self {
         Self {
             exports: exports.to_path_buf(),
             near: Mutex::new(VecDeque::new()),
             far: Mutex::new(VecDeque::new()),
             tried: Mutex::new(HashSet::new()),
-            visited: Visited::load(exports),
+            visited: Visited::load(store),
             configured_radius,
             radius: std::sync::atomic::AtomicI32::new(configured_radius),
             agent: ureq::Agent::config_builder()
@@ -256,12 +258,9 @@ impl Puller {
     }
 
     /// Records that players are standing in these chunks, each seeing `radius`
-    /// chunks around them, and writes it down when that changed anything the
-    /// next restart would want to know.
+    /// chunks around them; what that changed is written down, and nothing else.
     pub fn visit(&self, at: impl IntoIterator<Item = ((i32, i32), i32)>) {
-        if self.visited.visit(at) {
-            self.visited.save();
-        }
+        self.visited.visit(at);
     }
 
     /// Offers columns beside wherever a player is standing — worth asking about
@@ -488,6 +487,19 @@ pub fn start(puller: Arc<Puller>, state: Arc<State>) {
 mod tests {
     use super::*;
 
+    #[test]
+    fn where_players_stood_survives_a_restart_and_a_still_tick_writes_nothing() {
+        let store = Arc::new(Store::in_memory());
+        let first = Visited::load(Arc::clone(&store));
+        first.visit([((5, 5), 4)]);
+        first.visit([((5, 5), 4)]);
+        assert_eq!(store.visited().unwrap().len(), 1, "one place, one row");
+
+        let again = Visited::load(Arc::clone(&store));
+        assert!(again.reaches((6, 6)), "a place read back is still in reach");
+        assert!(!again.reaches((50, 50)));
+    }
+
     fn nothing_held(_: (i32, i32)) -> bool {
         false
     }
@@ -497,7 +509,7 @@ mod tests {
         // A generous reach and every candidate visited by hand: this test is
         // about queue ordering, not about the reach gate, so the gate is held
         // wide open rather than exercised.
-        let puller = Puller::new(Path::new("/nonexistent"), 0);
+        let puller = Puller::new(Arc::new(Store::in_memory()), Path::new("/nonexistent"), 0);
         puller.visit([((0, 0), 100), ((10, 10), 100), ((5, 5), 100)]);
         puller.seed_edge([(0, 0)], &nothing_held);
         puller.seed_edge([(10, 10)], &nothing_held);
@@ -510,7 +522,7 @@ mod tests {
 
     #[test]
     fn a_column_already_held_is_never_queued() {
-        let puller = Puller::new(Path::new("/nonexistent"), 0);
+        let puller = Puller::new(Arc::new(Store::in_memory()), Path::new("/nonexistent"), 0);
         puller.visit([((0, 0), 100)]);
         let held = |at: (i32, i32)| [(1, 0), (-1, 0), (0, 1), (0, -1)].contains(&at);
         puller.seed_near([(0, 0)], &held);
@@ -521,7 +533,7 @@ mod tests {
 
     #[test]
     fn nothing_is_queued_past_the_reach_of_anywhere_stood_in() {
-        let puller = Puller::new(Path::new("/nonexistent"), 0);
+        let puller = Puller::new(Arc::new(Store::in_memory()), Path::new("/nonexistent"), 0);
         puller.visit([((0, 0), 2)]);
 
         // Six chunks out is past a reach of two from (0, 0).
@@ -535,7 +547,7 @@ mod tests {
 
     #[test]
     fn reach_is_a_disc_and_not_the_square_around_it() {
-        let puller = Puller::new(Path::new("/nonexistent"), 0);
+        let puller = Puller::new(Arc::new(Store::in_memory()), Path::new("/nonexistent"), 0);
         puller.visit([((0, 0), 2)]);
 
         // (2, 0) is two chunks out along an axis and inside; (2, 2) is two out
@@ -549,14 +561,14 @@ mod tests {
 
     #[test]
     fn nothing_is_queued_where_nobody_has_stood() {
-        let puller = Puller::new(Path::new("/nonexistent"), 12);
+        let puller = Puller::new(Arc::new(Store::in_memory()), Path::new("/nonexistent"), 12);
         puller.seed_near([(0, 0)], &nothing_held);
         assert_eq!(puller.waiting(), 0);
     }
 
     #[test]
     fn each_place_carries_its_own_reach() {
-        let puller = Puller::new(Path::new("/nonexistent"), 0);
+        let puller = Puller::new(Arc::new(Store::in_memory()), Path::new("/nonexistent"), 0);
         puller.visit([((0, 0), 1), ((100, 100), 3)]);
         puller.seed_edge([(1, 0)], &|at| at != (2, 0));
         assert_eq!(puller.waiting(), 0, "two out from a place seen one around is out of reach");

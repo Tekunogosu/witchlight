@@ -9,6 +9,25 @@ which is where that rule is kept rather than in anybody's memory.
 A version that moved for the other half says so and lists nothing, which is not an
 omission: it is what "one release" looks like from the side that did not change.
 
+## 0.47.1
+
+**Deploy note:** both halves, upgraded together; nothing is cleared. The
+database moves to schema 3 on first start. `markers.json`, `preferences.json`
+and `visited-chunks.json` are no longer read or written: presets and settings
+have to be carried into the database by hand before this build first starts,
+or they start empty. The mod re-posts the markers within fifteen seconds.
+
+- The database is the one owner of what the service must still have after a
+  restart. The last marker post is one row, replaced only when a post differs;
+  each person's presets and settings are one row, replaced only for the person
+  who changed theirs; where players stood lately is one row per chunk, with
+  only the rows that moved written. Nothing rewrites a whole file any more.
+
+## 0.47.0
+
+**Deploy note:** both halves, upgraded together; nothing is cleared. Moved for
+the server mod: a preset list in the in-game marker window — see its changelog.
+
 ## 0.46.8
 
 **Deploy note:** both halves, upgraded together; nothing is cleared. The game

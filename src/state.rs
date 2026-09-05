@@ -160,7 +160,8 @@ impl State {
         let store = Arc::new(store);
         let memory = Arc::new(Memory::load(Arc::clone(&store)));
         let sessions = Arc::new(Sessions::load(Arc::clone(&store), Keeping::from_rules(&rules))?);
-        let preferences = Arc::new(Preferences::load(data));
+        let preferences = Arc::new(Preferences::load(Arc::clone(&store)));
+        let live = Arc::new(Live::load(Arc::clone(&store), &rules.hidden_groups));
         for (uid, person) in preferences.all() {
             memory.set_shares(&uid, person.share_map_with.iter().copied());
         }
@@ -172,7 +173,7 @@ impl State {
             palette: RwLock::new(palette),
             regions: Mutex::new(regions),
             painted: Mutex::new(files::modified(&crate::palette::path_in(data))),
-            live: Arc::new(Live::load(data, &rules.hidden_groups)),
+            live,
             sessions,
             pending: Arc::new(Pending::new()),
             preferences,

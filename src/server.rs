@@ -38,7 +38,7 @@ pub fn serve(
     backfill_radius_chunks: i32,
 ) -> Result<()> {
     let data = state.data.as_path();
-    let puller = Arc::new(crate::pull::Puller::new(data, backfill_radius_chunks));
+    let puller = Arc::new(crate::pull::Puller::new(Arc::clone(&state.store), data, backfill_radius_chunks));
 
     // The map is the product and live data is a garnish, so an API channel that
     // will not bind is said out loud and stepped over rather than taken as fatal.
