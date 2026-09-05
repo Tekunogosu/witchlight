@@ -9,6 +9,17 @@ which is where that rule is kept rather than in anybody's memory.
 A version that moved for the other half says so and lists nothing, which is not an
 omission: it is what "one release" looks like from the side that did not change.
 
+## 0.47.3
+
+**Deploy note:** both halves, upgraded together; nothing is cleared. Moved for
+the server mod: the preset table's layout — see its changelog.
+
+## 0.47.2
+
+**Deploy note:** both halves, upgraded together; nothing is cleared. Moved for
+the server mod: the in-game preset panel is a searchable table — see its
+changelog.
+
 ## 0.47.1
 
 **Deploy note:** both halves, upgraded together; nothing is cleared. The
