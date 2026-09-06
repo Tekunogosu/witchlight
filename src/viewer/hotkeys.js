@@ -21,6 +21,8 @@
  * the controls are built after this table is read.
  */
 const hotkeys = {
+  // Three sections of three, in the order the account window shows them: making
+  // something, the lists of what there is, and the page's own tools.
   marker: {
     label: 'Marker at pointer',
     key: 'c',
@@ -29,20 +31,20 @@ const hotkeys = {
     // hand is off the map — the same answer the button gives.
     act: () => { if (pointer) composeAt(pointer); else markerButton.click(); },
   },
-  markers: { label: 'Markers', key: 'm', offered: () => directoryButton, act: () => directoryButton.click() },
   drawClaim: { label: 'Draw claim', key: 'k', offered: () => claimDraw, act: () => claimDraw.click() },
-  claims: { label: 'Claims', key: 'l', offered: () => claimList, act: () => claimList.click() },
-  presets: { label: 'Presets', key: 'p', offered: () => presetButton, act: () => presetButton.click() },
   // Offered with the presets rather than with the Create button, which is in a
   // window that is usually shut: what gates making one is being signed in.
   newPreset: { label: 'New preset', key: 'P', offered: () => presetButton, act: () => newPreset() },
+  markers: { label: 'Markers', key: 'm', offered: () => directoryButton, act: () => directoryButton.click() },
+  claims: { label: 'Land claims', key: 'l', offered: () => claimList, act: () => claimList.click() },
+  presets: { label: 'Presets', key: 'p', offered: () => presetButton, act: () => presetButton.click() },
+  inspect: { label: 'Inspect', key: 'i', offered: () => picker._button, act: () => setPicking(!picking) },
   accessibility: {
     label: 'Accessibility',
     key: 'A',
     offered: () => accessBar.querySelector('a'),
     act: () => accessBar.querySelector('a').click(),
   },
-  inspect: { label: 'Inspect', key: 'i', offered: () => picker._button, act: () => setPicking(!picking) },
   settings: {
     label: 'Account',
     key: 'o',
@@ -162,7 +164,7 @@ function bindHotkey(name, key) {
   if (key === hotkeys[name].key) delete hotkeyDraft[name];
   else hotkeyDraft[name] = key;
   draftProfile();
-  sayProfile('Not kept yet.');
+  sayProfile('Not saved yet.');
   drawHotkeyRows(Boolean(viewer && viewer.Name), true);
 }
 
@@ -226,14 +228,23 @@ function drawHotkeyRows(named, keepDraft) {
   }
   const rows = document.getElementById('hotkey-rows');
   rows.textContent = '';
-  for (const [name, action] of Object.entries(hotkeys)) {
+  // Three sections of three, the way the table is written: the key first and
+  // its action after it, so every key in a section stands in one column and
+  // each row reads the way the reminder under the map does.
+  let section = null;
+  Object.entries(hotkeys).forEach(([name, action], index) => {
+    if (index % 3 === 0) {
+      section = document.createElement('div');
+      section.className = 'keys-section';
+      rows.append(section);
+    }
     const line = document.createElement('div');
     line.className = 'line';
     const label = document.createElement('span');
     label.textContent = action.label;
     const button = document.createElement('button');
     button.type = 'button';
-    button.className = 'key';
+    button.className = 'hotkey';
     button.dataset.hotkey = name;
     button.disabled = !named;
     // One of nine identical buttons, so what it binds is the only thing that
@@ -248,9 +259,9 @@ function drawHotkeyRows(named, keepDraft) {
       button.textContent = 'press a key';
       sayProfile('');
     });
-    line.append(label, button);
-    rows.append(line);
-  }
+    line.append(button, label);
+    section.append(line);
+  });
   document.getElementById('hotkey-reset').disabled = !named;
 }
 
@@ -261,7 +272,7 @@ function buildHotkeys() {
     stopListening();
     hotkeyDraft = {};
     draftProfile();
-    sayProfile('Not kept yet.');
+    sayProfile('Not saved yet.');
     drawHotkeyRows(Boolean(viewer && viewer.Name), true);
   });
   showHotkeys();

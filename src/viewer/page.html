@@ -72,8 +72,8 @@
     <input id="marker-name" type="text" maxlength="128" placeholder="Name"
            aria-label="Marker name">
     <button id="marker-preset-pick" class="aside" type="button"
-            title="Select from an existing preset"
-            aria-label="Select from an existing preset"
+            title="Choose a preset"
+            aria-label="Choose a preset"
             aria-haspopup="listbox" aria-expanded="false" aria-controls="preset-pick">
       <span class="chrome masked mark-bookmarks" aria-hidden="true"></span>
     </button>
@@ -84,21 +84,21 @@
   <div class="field">
     <div id="pictures" class="swatches"></div>
   </div>
-  <div class="field finding" id="pattern-field"><span>Block it starts from</span>
+  <div class="field finding" id="pattern-field"><span>Block pattern</span>
     <input id="marker-pattern" type="text" autocomplete="off"
            placeholder="type to find a block, or a pattern with *"
            role="combobox" aria-expanded="false" aria-autocomplete="list"
            aria-controls="block-found">
     <div id="block-found" role="listbox" aria-label="Blocks found"></div>
   </div>
-  <div class="field" id="place-field"><span id="place-said">Coords</span>
+  <div class="field" id="place-field"><span id="place-said">Coordinates</span>
     <div class="place">
       <input id="marker-x" type="number" aria-label="Marker x" placeholder="x">
       <input id="marker-y" type="number" aria-label="Marker y" placeholder="y">
       <input id="marker-z" type="number" aria-label="Marker z" placeholder="z">
       <button id="marker-pick" class="tool" type="button"
-              title="Select a map location to mark"
-              aria-label="Select a map location to mark"
+              title="Pick a spot on the map"
+              aria-label="Pick a spot on the map"
               aria-pressed="false"><span class="chrome masked mark-crosshair"
               aria-hidden="true"></span></button>
     </div>
@@ -219,7 +219,7 @@
   <div class="deed">
     <button id="marker-bulk" class="word" type="button" aria-pressed="false">Bulk edit</button>
     <span class="gap"></span>
-    <button id="marker-from-preset" class="word" type="button">From preset</button>
+    <button id="marker-from-preset" class="word" type="button">Apply preset</button>
     <button id="marker-bulk-drop" class="drop" type="button"
             title="Delete the ticked markers" aria-label="Delete the ticked markers"><span
             class="chrome masked mark-trash" aria-hidden="true"></span></button>
@@ -232,7 +232,7 @@
      Cancel. -->
 <div id="apply" class="window">
   <div class="bar">
-    <h2>From preset</h2>
+    <h2>Apply preset</h2>
     <button class="shut" type="button" title="Close" aria-label="Close"><span class="chrome masked mark-x" aria-hidden="true"></span></button>
   </div>
   <p class="note" id="apply-what"></p>
@@ -261,7 +261,7 @@
     <button class="shut" type="button" title="Close" aria-label="Close"><span class="chrome masked mark-x" aria-hidden="true"></span></button>
   </div>
   <label class="part" for="claim-name">Name</label>
-  <input id="claim-name" type="text" maxlength="128" placeholder="What this land is">
+  <input id="claim-name" type="text" maxlength="128" placeholder="Name your land">
 
   <!-- Two corners, each its own labelled pair. West/north and east/south rather
        than "x1, z1": a corner of a rectangle on a north-up map has a compass
@@ -295,7 +295,7 @@
          above it. Set apart from the pair it acts on, and no wider than the words
          on it: a button the width of the window reads as the section's own
          heading rather than as one shortcut inside it. -->
-    <button id="claim-full-height" class="apart" type="button">Max height</button>
+    <button id="claim-full-height" class="apart" type="button">Full height</button>
   </div>
 
   <!-- Who else may do anything here. The game offers two everybody-permissions
@@ -303,7 +303,7 @@
        third would be a permission system the game would not enforce. -->
   <div id="claim-access">
     <span class="part">Permissions</span>
-    <label class="line"><input id="claim-everyone-walks" type="checkbox">Anyone may walk across it</label>
+    <label class="line"><input id="claim-everyone-walks" type="checkbox">Anyone may walk through</label>
     <label class="line"><input id="claim-everyone-uses" type="checkbox">Anyone may use doors and chests</label>
     <!-- Both of the game's everybody-permissions at once, which is the common
          case for a road or a market and two presses otherwise. It ticks the
@@ -417,16 +417,16 @@
           <input id="want-colour" type="color" aria-label="Player colour" tabindex="-1">
         </button>
       </div>
-      <p class="note">Set a custom colour for your player icon and your claim colour.</p>
+      <p class="note">Set a custom colour for your player icon and your claims.</p>
     </section>
   </div>
   <div class="pair">
     <!-- How the tiles reach this person. Exact is what a map for finding one
          block wants; compact is a fifth of the bytes for everybody else. -->
     <section>
-      <h3>Map Render Detail</h3>
+      <h3>Map render detail</h3>
       <label class="line"><input type="radio" name="want-format" value="png">Exact: every block keeps its own colour</label>
-      <label class="line"><input type="radio" name="want-format" value="jpeg">Compact: about a fifth of the data, and a lone block such as an ore may blur</label>
+      <label class="line"><input type="radio" name="want-format" value="jpeg">Compact: a fifth of the data; a lone block such as an ore may blur</label>
     </section>
     <!-- Whose map yours is. Under a private map what you have explored is yours
          alone until you hand it to a group, one box per group the game has you
@@ -435,7 +435,7 @@
     <section id="share-map" hidden>
       <h3>Share my map with</h3>
       <div id="share-groups"></div>
-      <p class="note">Share my map exploration with these groups. Deselect to unshare.</p>
+      <p class="note">Share my map exploration with these groups. Untick to stop sharing.</p>
     </section>
   </div>
   <!-- Which key does what, one row per action, built by script from the one

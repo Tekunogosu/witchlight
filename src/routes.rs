@@ -82,7 +82,7 @@ fn stored(request: &mut Request, state: &State, path: &str) -> Reply {
         return match *request.method() {
             Method::Put => pinned(request, state, key, true),
             Method::Delete => pinned(request, state, key, false),
-            _ => http::text(405, "a marker is pinned with a put and unpinned with a delete"),
+            _ => http::text(405, "a marker is pinned with a PUT and unpinned with a DELETE"),
         };
     }
 
@@ -93,7 +93,7 @@ fn stored(request: &mut Request, state: &State, path: &str) -> Reply {
         return match *request.method() {
             Method::Put => changed(request, state, key),
             Method::Delete => removed(request, state, key),
-            _ => http::text(405, "a marker is changed with a put and taken away with a delete"),
+            _ => http::text(405, "a marker is changed with a PUT and taken away with a DELETE"),
         };
     }
 
@@ -103,7 +103,7 @@ fn stored(request: &mut Request, state: &State, path: &str) -> Reply {
         return match *request.method() {
             Method::Put => claim_changed(request, state, key),
             Method::Delete => claim_removed(request, state, key),
-            _ => http::text(405, "a claim is changed with a put and given up with a delete"),
+            _ => http::text(405, "a claim is changed with a PUT and given up with a DELETE"),
         };
     }
 
@@ -120,7 +120,7 @@ fn stored(request: &mut Request, state: &State, path: &str) -> Reply {
     if let Some(name) = urls::chrome_name(path) {
         return match crate::chrome::icon(name) {
             Some(body) => http::asset(body, "image/svg+xml"),
-            None => http::text(404, "the furniture wears no such mark"),
+            None => http::text(404, "no such mark"),
         };
     }
 
@@ -168,7 +168,7 @@ fn stored(request: &mut Request, state: &State, path: &str) -> Reply {
 /// something it does not do.
 fn made(request: &mut Request, state: &State) -> Reply {
     if *request.method() != Method::Post {
-        return http::text(405, "markers are made with a post");
+        return http::text(405, "markers are made with a POST");
     }
 
     let (who, body) = match asked(request, state, "make a marker") {
@@ -202,7 +202,7 @@ fn made(request: &mut Request, state: &State) -> Reply {
 /// among the ones it is sent, which is the only honest confirmation there is.
 fn claimed(request: &mut Request, state: &State) -> Reply {
     if *request.method() != Method::Post {
-        return http::text(405, "claims are made with a post");
+        return http::text(405, "claims are made with a POST");
     }
 
     let (who, body) = match asked(request, state, "claim land") {
@@ -353,7 +353,7 @@ fn claim_removed(request: &mut Request, state: &State, key: &str) -> Reply {
 /// no route per field.
 fn preferences(request: &mut Request, state: &State) -> Reply {
     let Some(who) = state.sessions.who(&http::cookies(request)) else {
-        return unknown("keep settings");
+        return unknown("save settings");
     };
 
     match *request.method() {
@@ -368,10 +368,10 @@ fn preferences(request: &mut Request, state: &State) -> Reply {
             if state.keep_person(&who.uid, person) {
                 http::json(&kept(state, &who.uid))
             } else {
-                http::text(500, "those could not be kept")
+                http::text(500, "those could not be saved")
             }
         }
-        _ => http::text(405, "settings are read with a get and kept with a put"),
+        _ => http::text(405, "settings are read with a GET and saved with a PUT"),
     }
 }
 

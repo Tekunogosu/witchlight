@@ -82,7 +82,7 @@ if (map.getContainer().classList.contains('leaflet-touch')) {
  *  about you; putting them in a column would make one read as the other's. */
 const row = L.DomUtil.create('div', '', corner);
 row.id = 'row';
-const cogBar = cornerButton('cog', 'gear-six', 'Settings', row);
+const cogBar = cornerButton('cog', 'gear-six', 'Map display', row);
 const accountBar = cornerButton('account', 'user', 'Account', row);
 /**
  * The one corner button that says a name as well as wearing a mark.
@@ -94,7 +94,7 @@ const accountBar = cornerButton('account', 'user', 'Account', row);
  */
 const accountName = document.createElement('span');
 accountName.className = 'who';
-accountName.textContent = 'Unauthenticated';
+accountName.textContent = 'Not signed in';
 accountBar.querySelector('a').append(accountName);
 /**
  * What the world's clock says, in the corner opposite the tools.
@@ -172,7 +172,7 @@ const accessBar = cornerButton('access', 'person-arms-spread', 'Accessibility');
 const mineBar = cornerButton('mine', 'map-pin-simple', 'Add a marker');
 const markerButton = mineBar.querySelector('a');
 const presetButton = cornerAnchor(mineBar, 'bookmarks-simple', 'Presets');
-const directoryButton = cornerAnchor(mineBar, 'list-bullets', 'All markers');
+const directoryButton = cornerAnchor(mineBar, 'list-bullets', 'View marker list');
 
 /**
  * Brings the map's own controls into the column the rest of the tools are in.
@@ -242,7 +242,7 @@ function markZoom() {
 function showAccount(me) {
   const button = accountBar.querySelector('a');
   const named = me && me.Name;
-  accountName.textContent = named || 'Unauthenticated';
+  accountName.textContent = named || 'Not signed in';
   button.classList.toggle('out', !named);
   button.title = named
     ? `Signed in as ${me.Name}`

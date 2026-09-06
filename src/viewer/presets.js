@@ -127,7 +127,7 @@ function drawPresets() {
   // are still there.
   if (drawn > 0) return;
   nothingFound(list, held.length === 0
-    ? 'No presets yet. Tick "set as preset" when you save a marker.'
+    ? 'No presets yet. Use the preset bookmark when you save a marker.'
     : `None of your ${held.length} presets matches that.`);
 }
 
@@ -197,7 +197,7 @@ function drawPresetPick(looking) {
     : all;
 
   if (all.length === 0) {
-    nothingFound(presetPick, 'No presets yet. Tick "set as preset" when you save a marker.');
+    nothingFound(presetPick, 'No presets yet. Use the preset bookmark when you save a marker.');
     return;
   }
   if (held.length === 0) {

@@ -9,6 +9,67 @@ which is where that rule is kept rather than in anybody's memory.
 A version that moved for the other half says so and lists nothing, which is not an
 omission: it is what "one release" looks like from the side that did not change.
 
+## 0.50.1
+
+**Deploy note:** both halves, upgraded together; nothing is cleared.
+
+- The hotkey reminder under the map is a three-column grid instead of a
+  wrapped row, with a rule between each column so the keys and their labels
+  line up instead of breaking wherever the previous label happened to end.
+
+## 0.50.0
+
+**Deploy note:** both halves, upgraded together; nothing is cleared. **Seven
+settings are renamed and the old names are refused.** A config file that still
+uses an old name stops the service with a message naming the new one. Rename
+these before restarting:
+
+| Old name | New name |
+|---|---|
+| `markers_public` | `allow_public_markers` |
+| `markers_public_editable` | `allow_editing_public_markers` |
+| `players_public` | `show_players_to_everyone` |
+| `private_map` | `personal_maps` |
+| `anonymous_spawn` | `show_spawn_to_guests` |
+| `anonymous_spawn_radius_chunks` | `spawn_radius_chunks` |
+| `sessions_reset_on_restart` | `invalidate_sessions_on_restart` |
+
+- Every note written into the configuration file now states what the setting
+  controls, what true and false do, the default, and which half reads it.
+- Every comment in `config.rs` is rewritten in the same plain style.
+- The project gains a `CLAUDE.md` that fixes the comment style for future work.
+
+## 0.49.2
+
+**Deploy note:** both halves, upgraded together; nothing is cleared.
+
+- The readout labels under the map wore borders and a background, because the
+  hotkey button and the readout label shared one class name. The button has a
+  class of its own again.
+- The hotkey rows in the account window are three sections of three, side by
+  side, with the key first on every row so the keys of a section stand in one
+  column. A key with nobody signed in is dim rather than the colour of a rule.
+- Tooltips: the claims toggle says "Show land claims", the claim list "View
+  claims list", the marker list "View marker list". The claim form's name box
+  asks you to "Name your land", and walking permission is "Anyone may walk
+  through" on the form and in the claim view.
+
+## 0.49.1
+
+**Deploy note:** both halves, upgraded together; nothing is cleared.
+
+- A language pass over everything the web map, the command line and the service
+  log say. "Kept" is now "saved" throughout; the corner button reads "Not signed
+  in" rather than "Unauthenticated"; the button over the layer switches is
+  titled "Map display"; "From preset" is "Apply preset"; a pinned marker is
+  "pinned" rather than "kept in sight"; the claim view names the same
+  permissions the claim form does; headings are in sentence case; and an
+  in-game command is `/witchlight`, which is the name that is always registered,
+  rather than `wl`, which is an alias that another mod may already hold.
+- The empty presets list pointed at a control called "set as preset", which
+  does not exist; it now names the preset bookmark on the marker form.
+- Two messages carried literal backticks into the page; they are gone.
+
 ## 0.49.0
 
 **Deploy note:** both halves, upgraded together; nothing is cleared.

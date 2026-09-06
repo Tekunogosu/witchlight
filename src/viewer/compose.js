@@ -556,7 +556,7 @@ function armOrDelete() {
   if (!dropArmed) {
     dropArmed = true;
     showDrop();
-    sayHere(`Press the bin again to delete ${namedHere()}.`);
+    sayHere(`Press again to delete ${namedHere()}.`);
     return;
   }
   dropArmed = false;
@@ -709,8 +709,8 @@ function showPin() {
   markerPin.textContent = '';
   markerPin.append(chromeMark(kept ? 'push-pin' : 'push-pin-slash'));
   const words = kept
-    ? `Kept in sight on your map in game — click to stop keeping ${namedHere()}`
-    : `Keep ${namedHere()} in sight on your map in game`;
+    ? `Pinned to your in-game map — click to unpin ${namedHere()}`
+    : `Pin ${namedHere()} to your in-game map`;
   markerPin.classList.toggle('on', kept);
   markerPin.title = words;
   markerPin.setAttribute('aria-label', words);
@@ -728,7 +728,7 @@ function showSeen() {
 function showKeepsake() {
   const named = markerName.value.trim() || 'this marker';
   const words = alsoPreset
-    ? `${named} is a preset — click to stop keeping it`
+    ? `${named} is a preset — click to make it a plain marker`
     : `Set ${named} as a preset`;
   markerRemember.classList.toggle('on', alsoPreset);
   markerRemember.title = words;

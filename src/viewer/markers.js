@@ -210,7 +210,7 @@ async function askForMarker() {
 
   if (!answer.ok) {
     // The service says which field was wrong, in words meant to be read.
-    sayHere(await answer.text().catch(() => 'That was refused.'), true);
+    sayHere(await answer.text().catch(() => 'The request was refused.'), true);
     markerSave.disabled = false;
     return;
   }
@@ -258,7 +258,7 @@ async function askToDelete() {
     return refused('The map service is not answering.');
   }
   if (!answer.ok) {
-    return refused(await answer.text().catch(() => 'That was refused.'));
+    return refused(await answer.text().catch(() => 'The request was refused.'));
   }
 
   awaiting = editing.Key;
@@ -286,7 +286,7 @@ function refused(why) {
 async function updatePreset() {
   const pattern = markerPattern.value.trim();
   if (pattern === '') {
-    sayHere('A preset needs something to match. `*` stands for any run of characters.', true);
+    sayHere('A preset needs something to match. An asterisk (*) stands for any run of characters.', true);
     return;
   }
 
@@ -436,8 +436,8 @@ async function lost() {
     return;
   }
   sayHere(going
-    ? `${named} was taken but is still there. Try again.`
-    : `${named} was taken but has not appeared. Try again.`, true);
+    ? `${named} was accepted but is still there. Try again.`
+    : `${named} was accepted but has not appeared. Try again.`, true);
 }
 
 /** Whether what this page is waiting on has happened yet. */

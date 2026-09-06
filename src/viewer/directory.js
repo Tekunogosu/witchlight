@@ -119,7 +119,7 @@ function fillAway(box, place) {
   const blocks = awayFrom(place);
   box.textContent = blocks === null ? '—' : saidAway(blocks);
   box.title = blocks === null
-    ? 'Sign in, and be in the world, to see how far away this is'
+    ? 'Sign in and join the world to see the distance'
     : `${Math.round(blocks)} blocks away`;
 }
 
@@ -405,8 +405,8 @@ async function onePrivacy(place, hidden) {
   sayDirectory('Asking the game server…');
   const took = await askPrivacy(place, hidden);
   sayDirectory(took
-    ? `Asked for ${place.Title || 'the marker'} to be ${hidden ? 'private' : 'public'}.`
-    : 'That was refused.', !took);
+    ? `Asked the game server to make ${place.Title || 'the marker'} ${hidden ? 'private' : 'public'}.`
+    : 'The request was refused.', !took);
 }
 
 function sayDirectory(what, wrong) {
@@ -509,8 +509,8 @@ async function allPrivacy(hidden, verb) {
     started(askPrivacy(place, hidden), 'changing who sees a marker')));
   const failed = took.filter(ok => !ok).length;
   sayDirectory(failed === 0
-    ? `Asked for ${took.length} to be made ${verb}.`
-    : `${took.length - failed} asked for; ${failed} refused.`, failed > 0);
+    ? `Asked the game server to make ${took.length} ${verb}.`
+    : `${took.length - failed} sent; ${failed} refused.`, failed > 0);
 }
 
 /** Shows one of the lists, and says which for the eye and for the reader. */

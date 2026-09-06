@@ -1,13 +1,13 @@
-//! Where the exports are and where to serve them from.
+//! The settings file: where it lives, what it holds, and how it is written.
 //!
-//! Settings come from a file and command-line flags win over it. The file is
-//! written with the defaults on a first run, so there is always something to
-//! edit.
+//! Settings are read from a TOML file. Command-line flags override the file. On
+//! the first run the file is written with the defaults, so there is always a file
+//! to edit.
 //!
-//! Which file depends on who started this. Run by hand it is
-//! `~/.config/witchlight/config.toml`; started by the server mod it is
-//! `witchlight.conf` in the game's `ModConfig` folder, which the mod names with
-//! `--config` so that everything about one server's map sits with that server.
+//! The file's location depends on who started the service. Run by hand, the
+//! service reads `~/.config/witchlight/config.toml`. Started by the server mod,
+//! it reads `witchlight.conf` in the game's `ModConfig` folder, which the mod
+//! passes with `--config`.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -16,191 +16,146 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 
-/// What the operator has decided that the page must be told.
+/// The settings the web page and the live feeds need from the config.
 ///
-/// Who a marker belongs to when nobody has said otherwise, whether where
-/// somebody is standing is everybody's to see, and how often to ask for the lot.
-/// They travel together so the half asking never has one without the others —
-/// and because a function taking eight loose arguments is a function taking a
-/// settings file badly.
+/// This is the subset of `Config` that decides which controls the page offers and
+/// how the service scopes what each viewer is sent. The values are copied out of
+/// `Config` by `Config::rules`, which also clamps `live_refresh_ms`.
 ///
-/// Nothing here is enforced here. The mod is the half that decides who is sent
-/// what; what these settle is which controls the page offers and how often it
-/// asks.
+/// The mod enforces the visibility rules on its own copy of these settings. The
+/// service uses them to decide what to send and what to show.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Rules {
-    /// Whether a marker nobody has decided about is everyone's.
-    pub markers_public: bool,
-    /// Whether a marker anybody can see is a marker anybody can change.
-    pub markers_editable: bool,
-    /// Whether where a player is standing is everybody's to see. Enforced by the
-    /// mod; what this decides here is only what the page is told, so that a short
-    /// list of players reads as a server that chose it rather than as a fault.
-    pub players_public: bool,
-    /// How long the page leaves between asking where everybody is, in
-    /// milliseconds. Already held to a gap a browser can keep up with — the
-    /// clamping is `Config::rules`, so nothing downstream has to wonder.
+    /// When true, a new marker whose owner has not chosen a visibility is
+    /// visible to everyone. When false, only its owner sees it.
+    pub allow_public_markers: bool,
+    /// When true, any signed-in player may edit a public marker. When false,
+    /// only the owner may edit it.
+    pub allow_editing_public_markers: bool,
+    /// When true, every player's position is shown to every viewer. When
+    /// false, a player's position is shown only to members of their own group.
+    pub show_players_to_everyone: bool,
+    /// The interval between live polls from the page, in milliseconds. Already
+    /// clamped to the range `REFRESH_FLOOR_MS..=REFRESH_CEILING_MS`.
     pub live_refresh_ms: u64,
-    /// Whether each person is shown the map as they last saw it rather than the
-    /// map as it is. See [`crate::memory`].
-    pub private_map: bool,
-    /// Under a private map, whether the ground around spawn is shown to
-    /// everybody, a browser with no session included.
-    pub anonymous_spawn: bool,
-    /// How far from spawn that reaches, in chunks each way.
-    pub anonymous_spawn_radius_chunks: i32,
-    /// How far a player sees, in chunks each way. Zero means the game's own
-    /// chunk radius, as the mod reports it.
+    /// When true, each player sees only the terrain they have explored. When
+    /// false, every viewer sees the whole map. See [`crate::memory`].
+    pub personal_maps: bool,
+    /// When true and `personal_maps` is on, the terrain around spawn is shown to
+    /// every viewer, including a browser that is not signed in.
+    pub show_spawn_to_guests: bool,
+    /// The radius of the spawn area that `show_spawn_to_guests` reveals, in
+    /// chunks.
+    pub spawn_radius_chunks: i32,
+    /// The radius a player reveals around themselves, in chunks. Zero means the
+    /// view distance the game granted that player, as reported by the mod.
     pub sight_radius_chunks: i32,
-    /// How long a browser stays logged in after it was last seen, in hours.
-    /// Zero means for ever.
+    /// How long a browser session stays valid after its last request, in hours.
+    /// Zero means sessions never expire.
     pub session_hours: u64,
-    /// Whether a restart of the service logs every browser out.
-    pub sessions_reset_on_restart: bool,
-    /// Player groups the map treats as no group at all, by name. Compared
-    /// case-insensitively — see [`Config::hidden_groups`].
+    /// When true, every browser session is invalidated when the service starts.
+    pub invalidate_sessions_on_restart: bool,
+    /// Player group names the map ignores. Compared case-insensitively. See
+    /// [`Config::hidden_groups`].
     pub hidden_groups: Vec<String>,
 }
 
-/// Which privilege each `wl` command asks of whoever types it.
+/// The privilege required to run each `/witchlight` command in game.
 ///
-/// A privilege code the game knows — `controlserver`, `chat`, `commandplayer` —
-/// with `admin` and `player` spelled out for the two that answer almost every
-/// server. The mod is the half that enforces it; nothing here reads these, for
-/// the same reason nothing here reads `autostart`.
+/// Each value is a Vintage Story privilege code such as `controlserver`, `chat`
+/// or `commandplayer`. The shorthand `admin` and `player` cover most servers.
+/// The mod checks these when a command is typed; the service does not read them.
 ///
-/// The split is between commands that change what the server is doing and
-/// commands that answer a question about the person typing them. Exporting the
-/// world, reading the map's whole state, starting or stopping the service and
-/// asking for the palette every block is coloured by are an operator's; a link
-/// to your own page, a marker where you are standing, and asking a client for a
-/// portrait or the marker pictures are anybody's.
-///
-/// Each decides who may start the request and nothing about whom it may be sent
-/// to: the mod asks whichever client can answer, and what comes back is taken on
-/// the same terms whoever asked for it — only an admin's palette or icon may
-/// replace one already chosen. See the mod's `PaletteExchange` and
-/// `IconExchange`.
+/// Each value controls who may start the request. It does not control which
+/// client answers it. The mod asks whichever client can answer, and only an
+/// admin's palette or icon set may replace one already chosen. See the mod's
+/// `PaletteExchange` and `IconExchange`.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Commands {
-    /// A link that signs your own browser in as you.
+    /// `/witchlight login`: sends the player a link that signs their browser in.
     pub login: String,
-    /// A marker where you are looking.
+    /// `/witchlight mark`: places a marker on the block the player is looking at.
     pub mark: String,
-    /// Asking a client for a picture of its player.
+    /// `/witchlight portrait`: asks a client for a picture of its player.
     pub portrait: String,
-    /// Asking a client for a block colour palette.
+    /// `/witchlight palette`: asks a client for the block colour palette.
     pub palette: String,
-    /// Asking a client for the pictures markers are drawn with.
+    /// `/witchlight icons`: asks a client for the marker icons.
     pub icons: String,
-    /// Writing the surface of every loaded chunk.
+    /// `/witchlight export`: writes the surface of every loaded chunk.
     pub export: String,
-    /// What has been exported, and where the palette came from.
+    /// `/witchlight status`: reports the state of the map and the service.
     pub status: String,
-    /// Starting and stopping the map service.
+    /// `/witchlight service`: starts and stops the map service.
     pub service: String,
 }
 
-/// Who may see the land claims on the map, and who may draw a new one.
+/// What the map does with land claims.
 ///
-/// Two privileges rather than one, because they are two different asks. Seeing
-/// where a claim is answers "may I build here" and is the sort of thing a server
-/// puts on a public map; drawing one takes land, and a server that shows every
-/// boundary is not thereby a server where anybody may fence off a valley.
-///
-/// Written the way `[commands]` is — a privilege the game knows, with `admin`
-/// and `player` spelled out for the two that answer most servers — because it is
-/// the same question in the same file and a second spelling would be a second
-/// thing to explain.
-///
-/// The mod is the half that enforces both. What the service does with them is
-/// hold the lists of who the mod says may, so that a browser is never handed a
-/// claim its reader may not see; what the page does with them is decide whether
-/// to offer the button.
+/// `view` and `create` are privilege codes, written the same way as `[commands]`.
+/// `worldgen` is a switch. The mod enforces all three by deciding what it sends
+/// to the service. The service keeps the mod's answer so that no browser is sent
+/// a claim its viewer may not see, and the page uses it to decide whether to
+/// offer the claim buttons.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Claims {
-    /// Who may see where the claims are.
+    /// The privilege required to see claims on the map.
     pub view: String,
-    /// Who may draw a new one from the map.
+    /// The privilege required to draw a new claim on the map.
     pub create: String,
-    /// Whether the map draws the claims the world made for itself.
+    /// When true, the map draws the claims the world generator created, such as
+    /// the perimeters around trader camps and story structures. When false, it
+    /// does not.
     ///
-    /// Not a permission but a third question about the same subject, which is
-    /// why it sits in this table rather than beside the other switches: a claim
-    /// round a trader camp or a story structure has an owner's name on it and no
-    /// owner behind it, and it exists from the moment the world generated that
-    /// ground rather than from the moment anybody found it.
-    ///
-    /// Off. A web map is the one place those boundaries can all be read at once,
-    /// from a chair, without going anywhere — so drawing them is handing every
-    /// reader the location of every trader on the server, which is a thing the
-    /// game does not otherwise give anybody. An operator who wants them turns
-    /// this on.
-    ///
-    /// Enforced by the mod, and by leaving them out of what it sends rather than
-    /// by the page declining to draw them. A claim that reached a browser is a
-    /// claim anybody may read out of it, so this can only mean anything on the
-    /// side that decides what to send.
+    /// Default false. Those claims reveal the location of every trader on the
+    /// server, which the game does not otherwise give any player.
     pub worldgen: bool,
 }
 
 impl Default for Claims {
     fn default() -> Self {
         Self {
-            // Where a claim is, is already everybody's: the game sends every
-            // claim to every client and draws the borders for anyone holding the
-            // right tool. A map that hid them would be telling players less than
-            // the game does, so the default is what they already have and the
-            // setting is for a server that wants less.
+            // The game already sends every claim to every client, so the map
+            // shows them to every player by default.
             view: PLAYER.to_owned(),
-            // What the game asks of `/land claim`, and for the same reason. The
-            // map must not be a way round a rule the server already has, so this
-            // starts as that rule rather than as a looser one — and an operator
-            // narrowing it here narrows the map alone, which is the point of its
-            // being a setting.
+            // The same privilege the game requires for `/land claim`, so the map
+            // cannot grant land to anyone the game would refuse.
             create: Privilege::CLAIM_LAND.to_owned(),
-            // Where a trader camp is, is not already everybody's, which is what
-            // makes this the one of the three that starts closed. The game tells
-            // a client about a claim it is standing near; the map would tell a
-            // reader about every one at once.
             worldgen: false,
         }
     }
 }
 
-/// A privilege code this service names by hand.
+/// Privilege codes from the game that this service names directly.
 ///
-/// Only where a default has to be one particular privilege of the game's rather
-/// than `admin` or `player`. Spelled once so that the settings file, the template
-/// and the tests cannot disagree about it.
+/// Only the codes used as defaults are listed, so the settings file, the template
+/// and the tests spell each one the same way.
 pub struct Privilege;
 
 impl Privilege {
-    /// What Vintage Story asks of anybody running `/land claim`.
+    /// The privilege Vintage Story requires for `/land claim`.
     pub const CLAIM_LAND: &'static str = "claimland";
 }
 
-/// The shortest gap the page is ever told to leave between live polls.
+/// The shortest live poll interval the page is ever told, in milliseconds.
 ///
-/// A gap of nothing is a browser asking again the instant it is answered, which
-/// is a denial of service written into a settings file — and a quarter second is
-/// already faster than the mod posts. Clamped rather than refused, so a number
-/// somebody typed in seconds still leaves a working map.
+/// A value below this would have the browser ask again the instant it was
+/// answered. Values below the floor are clamped rather than refused, so a number
+/// typed in seconds by mistake still gives a working map.
 pub const REFRESH_FLOOR_MS: u64 = 250;
 
-/// The longest.
+/// The longest live poll interval the page is ever told, in milliseconds.
 ///
-/// A map that says where people are once a minute is as slow as one still worth
-/// calling live: a marker the page has just asked for is confirmed on this beat,
-/// and past a minute the form has given up waiting before the answer arrives.
+/// The marker form waits for confirmation on this interval, and past one minute
+/// it has given up before the confirmation arrives.
 pub const REFRESH_CEILING_MS: u64 = 60_000;
 
-/// What `admin` is short for.
+/// The shorthand privilege that means "server admins".
 pub const ADMIN: &str = "admin";
 
-/// What `player` is short for.
+/// The shorthand privilege that means "every player".
 pub const PLAYER: &str = "player";
 
 impl Default for Commands {
@@ -218,277 +173,210 @@ impl Default for Commands {
     }
 }
 
+/// Every setting in the configuration file.
+///
+/// The doc comment on each field describes the setting. The text written into the
+/// operator's file comes from `NOTES`, and a test checks that every field has a
+/// note.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
-    /// The Vintage Story data directory — the server's `--dataPath`. Exports are
-    /// read from the `witchlight` folder inside it unless `map_data` says
-    /// otherwise.
+    /// The Vintage Story data directory, which is the game server's `--dataPath`.
+    /// Map data is read from the `witchlight` folder inside it unless `map_data`
+    /// names another location.
     pub vs_data: PathBuf,
 
-    /// Where map data is kept. Empty means the `witchlight` folder inside
-    /// `vs_data`, which is where it has always been.
-    ///
-    /// Worth setting where the maps should live somewhere other than beside the
-    /// world — a larger disk, a directory a web server already serves.
+    /// The directory that holds the map data. Empty means the `witchlight`
+    /// folder inside `vs_data`. Set it to keep the map on another disk or in a
+    /// directory a web server already serves.
     pub map_data: PathBuf,
 
-    /// Whether each world gets a directory of its own inside `map_data`.
+    /// When true, each world's map is kept in its own subdirectory of
+    /// `map_data`. When false, the map is kept directly in `map_data`.
     ///
-    /// On unless an operator turns it off. Every singleplayer save shares one
-    /// data path: without this the second world writes its terrain into the
-    /// first world's map at the same coordinates, and every palette and
-    /// block-name file is rewritten on each switch because the mod sets differ.
-    /// A dedicated server runs one world and loses nothing by filing it the same
-    /// way; one that wants its map directly in the folder turns this off.
+    /// Default true. Every singleplayer save shares one data path, and without
+    /// this a second world would overwrite the first world's map. Turning it on
+    /// moves an existing map into its own subdirectory.
     ///
-    /// Read by the mod, which is the only half that knows which world is running.
-    /// This half is told the answer with `--exports`, and reads this only to know
-    /// where to look when somebody runs `witchlight serve` by hand.
+    /// The mod reads this and passes the chosen directory to the service with
+    /// `--exports`. The service reads it only when run by hand.
     pub per_world: bool,
 
-    /// Address to listen on. All interfaces by default, so the map is reachable
-    /// from the rest of the network without further configuration. Set it to
-    /// `127.0.0.1:8080` to keep it on this machine only.
+    /// The address and port the map is served on. Default `0.0.0.0:8080`, which
+    /// listens on every interface. Use `127.0.0.1:8080` to serve only this
+    /// machine.
     pub bind: String,
 
-    /// Where the server mod posts who is online and where the markers are.
+    /// The address and port the mod posts live data to: player positions,
+    /// markers and claims.
     ///
-    /// Empty means loopback on a port the machine picks, published in `api.json`
-    /// beside the map so the mod finds it without being told and two game servers
-    /// on one box collide with nothing. Set a `host:port` only for a mod running
-    /// on another machine, which is also the one case `api_token` must be set.
+    /// Empty means loopback on a free port, published in `api.json` beside the
+    /// map so the mod finds it on its own. Set a `host:port` only when the mod
+    /// runs on another machine, in which case `api_token` must also be set.
     pub api_bind: String,
 
-    /// What the mod must present to post. Empty means a fresh one each start,
-    /// written into `api.json` where the mod reads it.
-    ///
-    /// Only worth setting where that file cannot reach the mod — a mod on another
-    /// machine — in which case the same value goes on both sides.
+    /// The bearer token the mod must present when posting live data. Empty means
+    /// a new token is generated on each start and written to `api.json` for the
+    /// mod to read. Set it only when the mod runs on another machine, and set
+    /// the same value on both sides.
     pub api_token: String,
 
-    /// Whether a marker whose owner has not decided is everyone's.
+    /// When true, a new marker whose owner has not chosen a visibility is
+    /// visible to everyone. When false, only its owner sees it.
     ///
-    /// Off, so a marker a player drops is theirs until they say otherwise —
-    /// somebody's unfinished base is not the server's business by default. An
-    /// operator running a map everyone is meant to share turns it on, and every
-    /// marker without a decision of its own becomes public.
-    ///
-    /// The mod reads it too: it decides both what the in-game map shares and what
-    /// the web map shows, and those must be the same answer or the two disagree
-    /// about who can see what.
-    pub markers_public: bool,
+    /// Default false. Read by both the mod and the service, so the in-game map
+    /// and the web map agree.
+    pub allow_public_markers: bool,
 
-    /// Whether a marker anybody can see is a marker anybody can change.
+    /// When true, any signed-in player may edit a public marker. When false,
+    /// only the marker's owner may edit it. A private marker can only ever be
+    /// edited by its owner.
     ///
-    /// Off, because being shown something is not being handed it. An operator
-    /// running a map the server keeps together — trader routes, roads nobody
-    /// owns — turns it on, and a public marker becomes everyone's to correct. A
-    /// private marker is never anybody's but its owner's whatever this says.
-    ///
-    /// The mod reads it too, and it is the mod that enforces it: what the page
-    /// makes of this only decides whether an edit is offered.
-    pub markers_public_editable: bool,
+    /// Default false. The mod enforces it. The page reads it to decide whether
+    /// to offer the edit controls.
+    pub allow_editing_public_markers: bool,
 
-    /// Whether where a player is standing is everybody's to see.
+    /// When true, every player's position is shown to every viewer of the map.
+    /// When false, a player's position is shown only to members of their own
+    /// player group. The number of players online is shown to everyone either
+    /// way.
     ///
-    /// On, which is what a map of a server people play on together is for. An
-    /// operator running a server where being findable is not part of the deal
-    /// turns it off, and then a player appears to their own group and to nobody
-    /// else — how many are on is still said to everyone, because that is a fact
-    /// about the server rather than about anybody on it.
+    /// Default true. `personal_maps` overrides it: while personal maps are on,
+    /// positions are always restricted to the player's own group.
     ///
-    /// Vintage Story has no setting of its own to follow here. Its server config
-    /// says nothing about who may see whom, and the nearest thing in the world
-    /// config — `allowMap` — decides whether there is a map at all, which is a
-    /// different question. So this is witchlight's own, and it defaults to what
-    /// the map has always done.
-    ///
-    /// The mod reads it and enforces it: it is the half that knows the groups,
-    /// and a service holding positions it must not send is a service one bug away
-    /// from sending them.
-    pub players_public: bool,
+    /// The mod enforces it, because the mod is the half that knows the groups.
+    pub show_players_to_everyone: bool,
 
-    /// Player groups the map treats as no group at all, by name.
+    /// Player group names the map ignores. A group listed here is never offered
+    /// for sharing a map, never counted, and never shown in the Group tab of the
+    /// player list.
     ///
-    /// Some mods put every player on the server into a group of their own —
-    /// xlib makes one called `xlib` — and a group everybody is in is not a
-    /// group anybody chose. Left in, it would be offered as a group to share a
-    /// map with and would make the Group tab of the player list everybody, so a
-    /// group named here is dropped as it arrives from the mod: it is never
-    /// offered, never counted and never shared against.
-    ///
-    /// Matched by name, case-insensitively, so `XLib` and `xlib` name the same
-    /// group.
+    /// Default `["xlib"]`. Some mods put every player into one group, and a
+    /// group that contains everyone is not useful for sharing. Names are compared
+    /// case-insensitively.
     pub hidden_groups: Vec<String>,
 
-    /// Whether each person is shown the map as they last saw it.
+    /// When true, each player sees only the terrain they have explored, as it
+    /// looked when they last saw it. When false, every viewer sees the whole map
+    /// as it is now.
     ///
-    /// On. A public server is not one map: it is a map per person, of what that
-    /// person has been near, and ground that changed while they were away stays
-    /// as they remember it until they go back. Off, everybody is shown the same
-    /// map, which is what a server of friends wants and what the map always did.
+    /// Default true. Read by both halves. While it is on, the mod restricts each
+    /// player's position to their own group regardless of
+    /// `show_players_to_everyone`.
+    pub personal_maps: bool,
+
+    /// When true and `personal_maps` is on, the terrain around spawn is shown to
+    /// every viewer, including a browser that is not signed in. When false, a
+    /// browser that is not signed in sees nothing until someone signs in.
     ///
-    /// The mod reads it too: while it is on, where a player stands is their
-    /// group's to see and nobody else's, whatever `players_public` says.
-    pub private_map: bool,
+    /// Default true.
+    pub show_spawn_to_guests: bool,
 
-    /// Whether the ground around spawn is everybody's to see under a private
-    /// map — a browser with no session included, which is otherwise shown
-    /// nothing at all.
-    pub anonymous_spawn: bool,
+    /// The radius of the spawn area that `show_spawn_to_guests` reveals, in
+    /// chunks. Default 8, which is a square about half a kilometre across.
+    pub spawn_radius_chunks: i32,
 
-    /// How far from spawn that reaches, in chunks each way. Eight is a square
-    /// half a kilometre across.
-    pub anonymous_spawn_radius_chunks: i32,
-
-    /// How far a player sees, in chunks as the crow flies: what standing
-    /// somewhere adds to their map. Zero means each player's own view distance
-    /// as the game granted it, which is as far as it loads chunks for them —
-    /// or the server's `MaxChunkRadius` where the mod is too old to say.
+    /// The radius a player reveals around themselves as they move, in chunks.
+    /// Zero means the view distance the game granted that player, which is as
+    /// far as the game loads chunks for them. Default 0.
     pub sight_radius_chunks: i32,
 
-    /// How long a browser stays logged in after it was last seen, in hours.
+    /// How long a browser session stays valid after its last request, in hours.
+    /// Zero means sessions never expire: a session lasts until the browser signs
+    /// out or `invalidate_sessions_on_restart` clears it.
     ///
-    /// Zero, which means for ever: a login is kept until that browser logs out
-    /// or the operator forgets everybody with `sessions_reset_on_restart`. A
-    /// map is a thing somebody opens for a minute while playing, and a login
-    /// that lapses is the most common reason to have to find the link again.
-    /// Set it where a browser left logged in on a shared machine is the larger
-    /// worry than a login link asked for again.
+    /// Default 0. Set it on a server where a browser left signed in on a shared
+    /// machine is a bigger concern than asking for a login link again.
     pub session_hours: u64,
 
-    /// Whether a restart of the service logs every browser out.
+    /// When true, every browser session is invalidated when the service starts,
+    /// and every viewer must sign in again. When false, sessions are kept in the
+    /// map's database and survive a restart.
     ///
-    /// Off: logins are kept in the map's database and survive a restart, so a
-    /// game server that restarts nightly does not cost everybody a login each
-    /// morning. On, every restart starts with nobody logged in, which is the
-    /// one way to be sure a session handed out before is worth nothing now.
-    pub sessions_reset_on_restart: bool,
+    /// Default false.
+    pub invalidate_sessions_on_restart: bool,
 
-    /// How long the page leaves between asking where everybody is, in
-    /// milliseconds, where it has to ask at all.
+    /// The interval between live polls from the page, in milliseconds.
     ///
-    /// One second. The page is told of changes as they happen — see
-    /// `events.rs` — and asks on this clock only while that is not working:
-    /// a proxy that will not hold a request open, or a service with too many
-    /// browsers waiting already. Then this is the whole of how fresh the live
-    /// half of the map is. Players, markers, claims and whether a marker just asked for
-    /// has been made all arrive on this one beat, so this number is the whole of
-    /// how fresh the live half of the map is. Lower it on a server where people
-    /// watch each other move; raise it on one where a browser left open all day
-    /// should cost the machine less.
+    /// Default 1000. The page is normally told of changes as they happen through
+    /// `/events`, and polls on this interval only when that connection is not
+    /// available, for example behind a proxy that does not hold requests open.
+    /// Players, markers and claims all arrive on the same poll.
     ///
-    /// Milliseconds because the interesting choices sit inside a second of each
-    /// other, and seconds would round every one of them to the same number.
-    ///
-    /// Held between `REFRESH_FLOOR_MS` and `REFRESH_CEILING_MS`, which is what
-    /// keeps a zero out of a browser's timer. Read here alone: the page is told
-    /// the number when it is served, so a change reaches a browser once the
-    /// service has restarted and the page has been reloaded.
+    /// Clamped to `REFRESH_FLOOR_MS..=REFRESH_CEILING_MS` by `Config::rules`.
+    /// The page receives the value when it is served, so a change takes effect
+    /// after the service restarts and the page reloads.
     pub live_refresh_ms: u64,
 
-    /// How long the server mod leaves between writing what the terrain has done,
-    /// in milliseconds.
+    /// The interval between terrain exports by the mod, in milliseconds.
     ///
-    /// Ten seconds, which is what it always was. This is the map's own coalescing
-    /// knob: a chunk changed six times inside one beat is written once, so raising
-    /// it trades how current the terrain is against how often the disk is touched.
-    /// A server whose map is watched while people build wants it low; one on a
-    /// drive somebody is trying not to wear out wants it high.
+    /// Default 10000. A chunk that changes several times within one interval is
+    /// written once, so a larger value means less disk activity and a less
+    /// current map. The mod clamps it to the range 1000 to 600000, and a world
+    /// save exports whatever the interval was holding.
     ///
-    /// The number matters far less than it did. A chunk that moves now costs its
-    /// own kilobyte or so rather than the quarter-megabyte square it sits in — see
-    /// the mod's `Regions` — so ten seconds is affordable where it used not to be.
-    ///
-    /// Read and enforced by the mod, which is the half that does the writing —
-    /// nothing here acts on it, as with `autostart` and `announce`. It holds the
-    /// number between one second and ten minutes: an export runs on the server's
-    /// own tick, so a gap of nothing is the game doing this instead of the world,
-    /// and past ten minutes a map is not a picture of a world people are in.
+    /// Read by the mod only.
     pub export_interval_ms: u64,
 
-    /// How far around a player the terrain puller may fill in, in chunks as
-    /// the crow flies, where the mod has not said how far that player sees.
+    /// The radius around a player that the terrain puller may fill in, in
+    /// chunks, when the mod has not reported that player's view distance.
     ///
-    /// Zero means the game server's own `MaxChunkRadius` — the furthest the
-    /// game loads chunks for anybody, which is what an in-game map could ever
-    /// have shown a player standing there. Backfilling any further than that
-    /// draws ground the generator laid down and nobody could have walked to,
-    /// which is not the shape a map of what has been explored should have.
-    ///
-    /// A mod that reports each player's own view distance makes this the
-    /// fallback for a player it has not reported yet. Set it past zero only to
-    /// draw wider than the game showed anyone — worth doing on a server whose
-    /// operator wants the web map more generous than the client, never worth
-    /// doing by accident.
+    /// Default 0, which means the game server's `MaxChunkRadius`. That is the
+    /// furthest the game loads chunks for anyone, so the map never draws ground
+    /// no in-game map could have shown. Set it above zero to draw wider than the
+    /// game shows its players.
     pub backfill_radius_chunks: i32,
 
-    /// How many threads render tiles. Zero decides from the machine, capped so
-    /// that the game server this usually shares a box with keeps its cores.
+    /// The number of threads that render tiles. Zero picks a count from the
+    /// CPU count, leaving cores for the game server that usually shares the
+    /// machine. Default 0.
     pub threads: usize,
 
-    /// How much memory rendered tiles may occupy before the least used are
-    /// dropped. They are rebuilt on demand, so this costs time and not the map.
+    /// The memory budget for rendered tiles, in megabytes. When the budget is
+    /// exceeded the least recently used tiles are dropped and rendered again on
+    /// demand. Default 256.
     pub tile_cache_mb: usize,
 
-    /// Whether the server mod starts this service itself.
+    /// When true, the server mod starts and stops this service itself. When
+    /// false, the operator runs `witchlight serve` by hand, which lets the map
+    /// outlive the game server.
     ///
-    /// Read by the mod rather than by anything here — it is a setting about who
-    /// runs the map, and the only sensible place for it is beside everything else
-    /// about the map. Turn it off to run `witchlight serve` yourself, which is what
-    /// a map that should outlive the game server wants.
+    /// Default true. Read by the mod only.
     pub autostart: bool,
 
-    /// Whether the server mod tells a player where the map is when they join.
-    ///
-    /// Read by the mod, like `autostart`: a map nobody knows the address of is a
-    /// map nobody looks at, and the mod is the half that can say so in chat.
+    /// When true, the mod tells each player the map's address in chat when they
+    /// join. Default true. Read by the mod only.
     pub announce: bool,
 
-    /// What to tell them, when it is not where this is listening.
-    ///
-    /// Empty means the address this works out for itself, which is right on a
-    /// machine somebody can reach directly and wrong everywhere else: a server on
-    /// the open internet is reached at a name, through a proxy, on a port this
-    /// never sees. Only an operator knows that address, so only an operator can
-    /// set it.
+    /// The address the mod announces. Empty means the address the service works
+    /// out for itself, which is correct on a LAN and wrong behind a proxy, a
+    /// domain name or NAT. Set it to the address players actually use.
     pub announce_url: String,
 
-    /// Who may run each `wl` command in game.
+    /// The privilege required to run each `/witchlight` command in game.
     ///
-    /// Last in the file because it is a table, and a table has to come after
-    /// every plain setting or the ones below it read as part of it.
+    /// Tables must come after every plain setting in a TOML file, so this and
+    /// the tables below it are the last fields.
     pub commands: Commands,
 
-    /// Who may see the land claims, and who may draw one from the map.
-    ///
-    /// A table, so it sits with the other tables at the foot of the file.
+    /// Who may see land claims, who may draw one, and whether generated claims
+    /// are drawn.
     pub claims: Claims,
 
-    /// Extra bars on a player's card, beside their health and their food.
+    /// Extra bars on each player's card, beside health and food.
     ///
-    /// A mod that gives players a resource — mana, stamina, a level — keeps it
-    /// on the player's own entity, where the server can already read it. So this
-    /// half needs to know nothing about any mod: an operator names the
-    /// attributes and the mod reads whatever is under them, exactly as it
-    /// already reads the game's own health and hunger.
+    /// A mod that gives players a resource such as mana or stamina stores it as
+    /// attributes on the player entity. Each entry here names those attributes,
+    /// and the mod reads them the same way it reads health and hunger. The value
+    /// format is `name | value attribute | maximum attribute | colour | group`.
+    /// The key is only a label for the entry.
     ///
-    /// Each value is `name | value attribute | maximum attribute | colour |
-    /// group`. The key is only a name for the entry, and the entries are read in
-    /// the order they appear in the file.
+    /// The group is the heading the bar is filed under in the accessibility
+    /// window. When the group is left out, the mod uses the id of an installed
+    /// mod that appears in the attribute's name, if there is one.
     ///
-    /// The group is what the map files the bar under where a reader switches
-    /// bars on and off. Left out, the mod looks for an installed mod whose id
-    /// appears in the attribute's own name and uses that — which answers for a
-    /// mod that names its attributes after itself and for no other, since an
-    /// attribute carries no record of what wrote it.
-    ///
-    /// **A bar is drawn only for a player who actually has it.** A missing
-    /// attribute, or one whose maximum is zero, is a player this does not apply
-    /// to — somebody who has not taken up magic, or a server without the mod —
-    /// and no bar is the right picture of that. Which is also why naming an
-    /// attribute nothing has costs nothing.
+    /// A bar is drawn only for a player who has the attribute with a maximum
+    /// above zero. An entry for a mod that is not installed draws nothing.
     pub bars: BTreeMap<String, String>,
 }
 
@@ -501,15 +389,15 @@ impl Default for Config {
             bind: "0.0.0.0:8080".to_owned(),
             api_bind: String::new(),
             api_token: String::new(),
-            markers_public: false,
-            markers_public_editable: false,
-            private_map: true,
-            anonymous_spawn: true,
-            anonymous_spawn_radius_chunks: 8,
+            allow_public_markers: false,
+            allow_editing_public_markers: false,
+            personal_maps: true,
+            show_spawn_to_guests: true,
+            spawn_radius_chunks: 8,
             sight_radius_chunks: 0,
             session_hours: 0,
-            sessions_reset_on_restart: false,
-            players_public: true,
+            invalidate_sessions_on_restart: false,
+            show_players_to_everyone: true,
             hidden_groups: vec!["xlib".to_owned()],
             live_refresh_ms: 1000,
             export_interval_ms: 10_000,
@@ -521,12 +409,8 @@ impl Default for Config {
             announce_url: String::new(),
             commands: Commands::default(),
             claims: Claims::default(),
-            // What a stock Rustbound Magic keeps its two bars under, since that
-            // is the mod most likely to be behind this setting being wanted at
-            // all. Named rather than detected: this half never sees a mod, and a
-            // key it has wrong costs a bar that does not draw rather than
-            // anything that breaks. Sorted by key in the file, so `mana` comes
-            // before the experience that raises it.
+            // The two bars a stock Rustbound Magic install provides. The keys
+            // sort alphabetically in the file, so `mana` comes before `mana_exp`.
             bars: [
                 (
                     "mana".to_owned(),
@@ -547,36 +431,47 @@ impl Default for Config {
     }
 }
 
-/// What to say about a setting this build no longer has.
+/// Builds the text appended to a parse error when the file uses a retired key.
 ///
-/// `deny_unknown_fields` is what catches a misspelled setting rather than letting
-/// it read as a default, and it catches a renamed one the same way — correctly,
-/// and unhelpfully. A settings file older than the build stops the service dead,
-/// so the one thing worth saying is which name replaced which.
-///
-/// One list rather than a check at the point of each rename, so the next one is
-/// an entry and not another branch.
+/// `deny_unknown_fields` rejects a renamed key the same way it rejects a
+/// misspelled one. This function checks the file text for each retired name and
+/// says which key replaced it, so the operator knows what to change.
 fn retired(text: &str) -> String {
-    const RETIRED: [(&str, &str); 1] = [(
-        "api_socket",
-        "api_bind, which is an address rather than a unix socket path. Leave it \
-         empty for loopback on a free port, which is where the mod now looks",
-    )];
+    const RETIRED: [(&str, &str); 8] = [
+        (
+            "api_socket",
+            "api_bind, which is an address rather than a unix socket path. Leave it \
+             empty for loopback on a free port, which is where the mod now looks",
+        ),
+        ("markers_public", "allow_public_markers"),
+        ("markers_public_editable", "allow_editing_public_markers"),
+        ("players_public", "show_players_to_everyone"),
+        ("private_map", "personal_maps"),
+        ("anonymous_spawn_radius_chunks", "spawn_radius_chunks"),
+        ("anonymous_spawn", "show_spawn_to_guests"),
+        ("sessions_reset_on_restart", "invalidate_sessions_on_restart"),
+    ];
 
     let mut said = String::new();
     for (was, now) in RETIRED {
-        if text.lines().any(|line| line.trim_start().starts_with(was)) {
+        // A key is matched as a whole word, so `anonymous_spawn` does not also
+        // match `anonymous_spawn_radius_chunks`.
+        let used = text.lines().any(|line| {
+            let line = line.trim_start();
+            line.starts_with(was)
+                && line[was.len()..].chars().next().is_none_or(|next| next == ' ' || next == '=')
+        });
+        if used {
             said.push_str(&format!("\n\n`{was}` is now {now}."));
         }
     }
     said
 }
 
-/// The directories one level down that are maps in their own right.
+/// Lists the subdirectories of `base` that are maps.
 ///
-/// Filed per world, one directory each, and a palette is what says a directory
-/// is a map. Anything else in there — a stray folder, something half-copied — is
-/// not one and is not offered as one.
+/// A directory is a map when it contains a palette file. Any other directory is
+/// ignored.
 fn maps_inside(base: &Path) -> Vec<PathBuf> {
     let Ok(listing) = std::fs::read_dir(base) else {
         return Vec::new();
@@ -588,14 +483,14 @@ fn maps_inside(base: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Where the game puts its data when nobody has told it otherwise.
+/// The game's default data directory.
 fn default_vs_data() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("VintagestoryData")
 }
 
-/// `~/.config/witchlight/config.toml`.
+/// The default configuration file, `~/.config/witchlight/config.toml`.
 #[must_use]
 pub fn default_path() -> PathBuf {
     dirs::config_dir()
@@ -605,28 +500,28 @@ pub fn default_path() -> PathBuf {
 }
 
 impl Config {
-    /// What this settings file says about who may see and change what.
+    /// Copies the settings the page and the feeds need into a `Rules`, clamping
+    /// `live_refresh_ms` to its allowed range.
     #[must_use]
     pub fn rules(&self) -> Rules {
         Rules {
-            markers_public: self.markers_public,
-            markers_editable: self.markers_public_editable,
-            players_public: self.players_public,
-            // Clamped here rather than where it is read, so that the number the
-            // page is handed and the number a test asks about are the same one.
+            allow_public_markers: self.allow_public_markers,
+            allow_editing_public_markers: self.allow_editing_public_markers,
+            show_players_to_everyone: self.show_players_to_everyone,
+            // Clamped here so the page and the tests see the same number.
             live_refresh_ms: self.live_refresh_ms.clamp(REFRESH_FLOOR_MS, REFRESH_CEILING_MS),
-            private_map: self.private_map,
-            anonymous_spawn: self.anonymous_spawn,
-            anonymous_spawn_radius_chunks: self.anonymous_spawn_radius_chunks,
+            personal_maps: self.personal_maps,
+            show_spawn_to_guests: self.show_spawn_to_guests,
+            spawn_radius_chunks: self.spawn_radius_chunks,
             sight_radius_chunks: self.sight_radius_chunks,
             session_hours: self.session_hours,
-            sessions_reset_on_restart: self.sessions_reset_on_restart,
+            invalidate_sessions_on_restart: self.invalidate_sessions_on_restart,
             hidden_groups: self.hidden_groups.clone(),
         }
     }
 
-    /// Loads `path`. A missing file is not an error — the defaults are a working
-    /// configuration — but a malformed one is.
+    /// Loads the configuration from `path`. A missing file yields the defaults.
+    /// A file that cannot be read or parsed is an error.
     pub fn load(path: &Path) -> Result<Self> {
         let text = match std::fs::read_to_string(path) {
             Ok(text) => text,
@@ -641,6 +536,8 @@ impl Config {
         })
     }
 
+    /// Writes the configuration to `path` as a commented TOML file, creating the
+    /// parent directory if needed.
     pub fn write(&self, path: &Path) -> Result<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
@@ -650,7 +547,7 @@ impl Config {
             .map_err(|error| Error::io(format!("writing {}", path.display()), error))
     }
 
-    /// Where map data is kept, before any per-world directory inside it.
+    /// The directory that holds the map data, before any per-world subdirectory.
     #[must_use]
     pub fn map_data_dir(&self) -> PathBuf {
         if self.map_data.as_os_str().is_empty() {
@@ -660,17 +557,13 @@ impl Config {
         }
     }
 
-    /// Which directory holds the map to serve.
+    /// Resolves the directory that holds the map to serve.
     ///
-    /// The mod names it outright when it starts this, because the mod is the half
-    /// that knows which world is running. Everything here is for a service run by
-    /// hand, which has to work it out from what is on disk.
-    ///
-    /// A palette is what makes a directory a map rather than a folder of them, so
-    /// it is what the looking looks for. One directly inside means the map is
-    /// there; one a level down means the maps are filed per world, and a single
-    /// one of those is not a choice to make anybody type out. Several is, and
-    /// saying which were found beats picking one of them.
+    /// `told` is the `--exports` flag, which the mod always passes. When it is
+    /// absent the service looks on disk: a palette directly inside the map data
+    /// directory means the map is there; a palette one level down means maps are
+    /// filed per world. One world is served without being named. Several worlds
+    /// is an error that lists them, so the operator can name one.
     pub fn exports(&self, told: Option<&Path>) -> Result<PathBuf> {
         if let Some(told) = told {
             return Ok(told.to_path_buf());
@@ -681,7 +574,7 @@ impl Config {
             return Ok(base);
         }
 
-        // A set of files copied off a server with `scp`, handed straight to
+        // A map directory copied off a server and passed straight to
         // `--vs-data`, rather than the data path it was copied out of.
         if self.map_data.as_os_str().is_empty() && crate::palette::path_in(&self.vs_data).exists() {
             return Ok(self.vs_data.clone());
@@ -706,22 +599,18 @@ impl Config {
         }
     }
 
-    /// The settings file this writes: every value serde knows how to write, with
-    /// what it is for standing over it.
+    /// Renders the configuration as a TOML file with a note above each setting.
     ///
-    /// The values come from serde and the notes from <see>NOTES</see>, laid over
-    /// each other by walking what was written. Neither half can invent a setting
-    /// the other has not heard of: a value with no note is caught by
-    /// `every_setting_written_says_what_it_is_for`, and a note for a setting that
-    /// no longer exists is never reached and is caught by the same test.
+    /// The values come from serde and the notes from `NOTES`. The test
+    /// `every_setting_written_says_what_it_is_for` checks that every written
+    /// setting has a note and that every note matches a written setting.
     #[must_use]
     pub fn to_template(&self) -> String {
         let body = toml::to_string_pretty(self).unwrap_or_else(|error| format!("# {error}\n"));
         let mut file = String::from(HEADER);
 
-        // Which table the settings being written belong to, so that a name inside
-        // one is looked up as `commands.export` rather than as a top-level
-        // `export` that would mean something else.
+        // The table the current line belongs to, so a key inside `[commands]` is
+        // looked up as `commands.export` rather than as a top-level `export`.
         let mut table = String::new();
 
         for line in body.lines() {
@@ -746,261 +635,231 @@ impl Config {
     }
 }
 
-/// What the file says about itself before it says anything about a setting.
-///
-/// Two lines, because everything else a reader needs is beside the line it is
-/// about. This says only what cannot be: which half of witchlight acts on what
-/// they are reading.
+/// The comment block at the top of the written configuration file.
 const HEADER: &str = "\
-# witchlight configuration
+# Witchlight configuration
 #
-# Written by the map service, and read by both halves of witchlight: a note
-# saying the mod reads a setting means the game server is what acts on it.
+# This file is written by the map service and read by both the map service and
+# the server mod. Each note says which half acts on the setting.
 ";
 
-/// What one setting is for, as it is written above that setting.
+/// The note written above each setting in the configuration file.
 ///
-/// Keyed by the name serde writes — a setting inside a table by `table.key`, and
-/// a table itself by its own bracketed name — so a setting that moves into a
-/// table takes its note with it rather than losing it.
-///
-/// Written beside the settings rather than in a block at the head of the file.
-/// A note a screen away from the line it is about is a note nobody reads and a
-/// line nobody dares change, and the block had grown to sixty lines of prose
-/// standing between an operator and the first thing they came to edit.
-///
-/// A table rather than prose, because a table can be checked: see
-/// `every_setting_written_says_what_it_is_for`, which is what stops a setting
-/// being added and reaching an operator unexplained. The keys under `[bars]` are
-/// the operator's own names and are the one thing in the file with nothing to
-/// say about them; the note on the table says what they all are.
+/// Keys match the names serde writes. A setting inside a table is keyed as
+/// `table.key`, and a table itself by its bracketed name. The keys under `[bars]`
+/// are the operator's own labels and have no notes; the note on the table
+/// describes them all.
 const NOTES: &[(&str, &str)] = &[
     (
         "vs_data",
-        "The game server's `--dataPath`. Exports are read from the `witchlight`\n\
-         folder inside it.",
+        "The Vintage Story data directory (the game server's --dataPath).\n\
+         Map data is read from the `witchlight` folder inside it unless map_data\n\
+         is set.",
     ),
     (
         "map_data",
-        "Where the map is kept instead. Worth setting where it should live\n\
-         somewhere other than beside the world — a larger disk, a directory a web\n\
-         server already serves. Empty is the folder above.",
+        "The directory that holds the map data. Empty means the `witchlight`\n\
+         folder inside vs_data. Set it to keep the map on another disk or in a\n\
+         directory a web server already serves.",
     ),
     (
         "per_world",
-        "Files each world's map in a directory of its own inside that folder. On\n\
-         unless turned off: every singleplayer save shares one data path, and the\n\
-         second world would otherwise write its terrain into the first world's\n\
-         map. A dedicated server that wants its one map directly in the folder\n\
-         turns it off. Turning it on moves the map already there down into its\n\
-         own directory rather than leaving it to be written over. Read by the\n\
-         mod, which is the only half that knows which world is running.",
+        "true: each world's map is kept in its own subdirectory of map_data.\n\
+         false: the map is kept directly in map_data.\n\
+         Default: true. Every singleplayer save shares one data path, and without\n\
+         this a second world would overwrite the first world's map. Turning it on\n\
+         moves an existing map into its own subdirectory. Read by the mod.",
     ),
     (
         "bind",
-        "Where the map is served. Every address this machine has, so it is\n\
-         reachable from the rest of the network without further configuration;\n\
-         `127.0.0.1:8080` keeps it to this machine alone.",
+        "The address and port the map is served on. 0.0.0.0:8080 listens on every\n\
+         interface. 127.0.0.1:8080 serves only this machine.",
     ),
     (
         "api_bind",
-        "Where the mod posts who is online and where the markers and claims are.\n\
-         Empty means loopback on a port the machine picks, published in api.json\n\
-         beside the map so the mod finds it without being told and two game\n\
-         servers on one box collide with nothing. Set a host:port only for a mod\n\
-         running on another machine.",
+        "The address and port the mod posts live data to (player positions,\n\
+         markers and claims). Empty means loopback on a free port, published in\n\
+         api.json beside the map so the mod finds it on its own. Set a host:port\n\
+         only when the mod runs on another machine.",
     ),
     (
         "api_token",
-        "What the mod must present to post. Empty means a fresh one each start,\n\
-         written into api.json where the mod reads it — so this is only worth\n\
-         setting where that file cannot reach the mod, and then the same value\n\
-         goes on both sides.",
+        "The token the mod must present when posting live data. Empty means a new\n\
+         token is generated on each start and written to api.json for the mod to\n\
+         read. Set it only when the mod runs on another machine, and set the same\n\
+         value on both sides.",
     ),
     (
-        "markers_public",
-        "What a marker nobody has chosen for is: off keeps one to its owner, on\n\
-         shares it with everybody. Read by the mod as well as here, so the\n\
-         in-game map and the web map agree.",
+        "allow_public_markers",
+        "Controls who can see a new marker when its owner has not chosen.\n\
+         true: new markers are visible to everyone. false: only their owner sees\n\
+         them. Default: false. Read by both the mod and the map service.",
     ),
     (
-        "markers_public_editable",
-        "Whether anybody may change a marker anybody can see. Off, so a public\n\
-         marker is readable by all and writable by its owner; on, the server\n\
-         corrects its own map together. A private marker is never anybody's but\n\
-         its owner's either way.",
+        "allow_editing_public_markers",
+        "true: any signed-in player may edit a public marker. false: only the\n\
+         owner may edit it. A private marker can only ever be edited by its\n\
+         owner. Default: false. Enforced by the mod.",
     ),
     (
-        "players_public",
-        "Whether where somebody is standing is everybody's to see. On; turn it off\n\
-         and a player shows on the map to their own group and to nobody else. How\n\
-         many are online is still said either way. Read and enforced by the mod,\n\
-         which is the half that knows the groups.",
+        "show_players_to_everyone",
+        "true: every player's position is shown to every viewer. false: a\n\
+         player's position is shown only to members of their own player group.\n\
+         The number of players online is shown to everyone either way.\n\
+         Default: true. While personal_maps is on, positions are always\n\
+         restricted to the player's own group. Enforced by the mod.",
     ),
     (
         "hidden_groups",
-        "Player groups the map treats as no group at all, by name. A mod that\n\
-         puts everybody into one group — xlib does — would otherwise offer that\n\
-         group for sharing a map with and make the Group tab of the player\n\
-         list everybody. Matched regardless of case.",
+        "Player group names the map ignores. A group listed here is never offered\n\
+         for sharing a map and never shown in the Group tab of the player list.\n\
+         Some mods (xlib, for example) put every player into one group, and a\n\
+         group that contains everyone is not useful for sharing. Names are\n\
+         compared case-insensitively.",
     ),
     (
-        "private_map",
-        "Whether each person is shown the map as they last saw it. On, and a\n\
-         public server is a map per person: what they have been near, with ground\n\
-         that changed while they were away kept as they remember it until they\n\
-         go back. Off, everybody is shown the same map. Read by the mod too: while\n\
-         this is on a player's position is their group's to see and nobody else's.",
+        "personal_maps",
+        "true: each player sees only the terrain they have explored, as it looked\n\
+         when they last saw it. false: every viewer sees the whole map as it is\n\
+         now. Default: true. Read by both halves. While it is on, the mod\n\
+         restricts each player's position to their own group regardless of\n\
+         show_players_to_everyone.",
     ),
     (
-        "anonymous_spawn",
-        "Under a private map, whether the ground around spawn is everybody's to\n\
-         see, a browser nobody has logged in on included. On. Off, a browser with\n\
-         no session is shown nothing until somebody logs in on it.",
+        "show_spawn_to_guests",
+        "Applies only while personal_maps is on. true: the terrain around spawn\n\
+         is shown to every viewer, including a browser that is not signed in.\n\
+         false: a browser that is not signed in sees nothing. Default: true.",
     ),
     (
-        "anonymous_spawn_radius_chunks",
-        "How far from spawn that reaches, in chunks each way. 8 is a square half a\n\
-         kilometre across.",
+        "spawn_radius_chunks",
+        "The radius of the spawn area that show_spawn_to_guests reveals, in\n\
+         chunks. Default: 8, which is a square about half a kilometre across.",
     ),
     (
         "sight_radius_chunks",
-        "How far a player sees, in chunks as the crow flies: standing somewhere\n\
-         adds this much around them to their map. 0 uses each player's own view\n\
-         distance as the game granted it, which is as far as it loads chunks\n\
-         for them.",
+        "The radius a player reveals around themselves as they move, in chunks.\n\
+         0 means the view distance the game granted that player. Default: 0.",
     ),
     (
         "session_hours",
-        "How long a browser stays logged in after it was last seen, in hours.\n\
-         0 means for ever: a login is kept until that browser logs out or\n\
-         sessions_reset_on_restart forgets everybody.",
+        "How long a browser session stays valid after its last request, in hours.\n\
+         0 means sessions never expire: a session lasts until the browser signs\n\
+         out or invalidate_sessions_on_restart clears it. Default: 0.",
     ),
     (
-        "sessions_reset_on_restart",
-        "Whether a restart of the service logs every browser out. Off, so\n\
-         logins are kept in the map's database and survive a restart. On,\n\
-         every restart starts with nobody logged in.",
+        "invalidate_sessions_on_restart",
+        "true: every browser session is invalidated when the map service starts,\n\
+         and every viewer must sign in again. false: sessions are kept in the\n\
+         map's database and survive a restart. Default: false.",
     ),
     (
         "live_refresh_ms",
-        "How long the page leaves between asking where everybody is, in\n\
-         milliseconds, where it has to ask at all. The page is told of changes\n\
-         as they happen and asks on this clock only while that is not working;\n\
-         then players, markers and claims all arrive on this one beat. Anything\n\
-         below 250 is served as 250 and anything above 60000 as 60000.",
+        "The interval between live polls from the web page, in milliseconds. The\n\
+         page is normally told of changes as they happen and polls on this\n\
+         interval only when that connection is unavailable, for example behind\n\
+         a proxy that does not hold requests open. Values below 250 are treated\n\
+         as 250 and values above 60000 as 60000. Default: 1000.",
     ),
     (
         "export_interval_ms",
-        "How long the server mod leaves between writing what the terrain has\n\
-         done, in milliseconds. This is the map's coalescing knob: a chunk\n\
-         changed six times inside one beat is written once, so raising it trades\n\
-         how current the terrain is against how often the disk is touched.\n\
-         Anything below 1000 is used as 1000 and anything above 600000 as\n\
-         600000, and a world save exports whatever the gap was holding. Read by\n\
-         the mod, which is the half that does the writing.",
+        "The interval between terrain exports, in milliseconds. A chunk that\n\
+         changes several times within one interval is written once, so a larger\n\
+         value means less disk activity and a less current map. Values below 1000\n\
+         are treated as 1000 and values above 600000 as 600000. A world save\n\
+         exports immediately. Default: 10000. Read by the mod.",
     ),
     (
         "backfill_radius_chunks",
-        "How far around a player the terrain puller may fill in, in chunks,\n\
-         where the mod has not said how far that player sees. 0 uses the game\n\
-         server's own MaxChunkRadius — the furthest it loads chunks for anybody,\n\
-         so the map never draws ground no in-game map could have shown. Set\n\
-         past 0 to draw wider than the game itself ever showed anyone.",
+        "The radius around a player that the map may fill in, in chunks, when the\n\
+         mod has not reported that player's view distance. 0 means the game\n\
+         server's MaxChunkRadius, so the map never draws ground no in-game map\n\
+         could have shown. Set it above 0 to draw wider than the game shows its\n\
+         players. Default: 0.",
     ),
     (
         "threads",
-        "How many requests are answered at once. 0 decides from the machine, held\n\
-         back so that the game server this usually shares a box with keeps cores\n\
-         of its own.",
+        "The number of threads that render tiles. 0 picks a count from the CPU\n\
+         count, leaving cores for the game server that usually shares the\n\
+         machine. Default: 0.",
     ),
     (
         "tile_cache_mb",
-        "How much memory rendered tiles may hold before the least used are\n\
-         dropped. They are rebuilt on demand, so this costs time and not the map.",
+        "The memory budget for rendered tiles, in megabytes. When it is exceeded,\n\
+         the least recently used tiles are dropped and rendered again on demand.\n\
+         Default: 256.",
     ),
     (
         "autostart",
-        "Whether the server mod runs this service itself. Turn it off to run\n\
-         `witchlight serve` by hand, which is what a map that should outlive the\n\
-         game server wants.",
+        "true: the server mod starts and stops the map service itself. false: run\n\
+         `witchlight serve` by hand, which lets the map outlive the game server.\n\
+         Default: true. Read by the mod.",
     ),
     (
         "announce",
-        "Whether the mod tells a player where the map is when they join.",
+        "true: the mod tells each player the map's address in chat when they\n\
+         join. false: it does not. Default: true. Read by the mod.",
     ),
     (
         "announce_url",
-        "What to tell them. Empty means the address this works out for itself,\n\
-         which is right on a machine they can reach directly and wrong behind a\n\
-         proxy, a domain or NAT.",
+        "The address the mod announces. Empty means the address the map service\n\
+         works out for itself, which is correct on a LAN and wrong behind a\n\
+         proxy, a domain name or NAT. Set it to the address players actually use.",
     ),
     (
         "[commands]",
-        "Who may run each `wl` command in game. `admin` and `player` are the two\n\
-         that answer most servers; any privilege the game knows — controlserver,\n\
-         chat, commandplayer — works too, and a name the game does not know is\n\
-         refused to everyone but an admin, so a typo locks a command rather than\n\
-         opening it. Read by the mod, which is the half that knows who is an\n\
-         admin.",
+        "The privilege required to run each /witchlight command in game. `admin`\n\
+         and `player` cover most servers. Any privilege code the game knows also\n\
+         works, such as controlserver, chat or commandplayer. A code the game does\n\
+         not know locks the command to admins. Read by the mod.",
     ),
-    ("commands.login", "A link that signs your own browser in as you."),
-    ("commands.mark", "A marker where you are looking."),
-    ("commands.portrait", "Asking a client for a picture of its player."),
-    ("commands.palette", "Asking a client for a block colour palette."),
-    ("commands.icons", "Asking a client for the pictures markers are drawn with."),
-    ("commands.export", "Writing the surface of every loaded chunk."),
-    ("commands.status", "The whole of what state the map is in."),
-    ("commands.service", "Starting and stopping the map service."),
+    ("commands.login", "/witchlight login: sends you a link that signs your browser in."),
+    ("commands.mark", "/witchlight mark: places a marker on the block you are looking at."),
+    ("commands.portrait", "/witchlight portrait: asks a client for a picture of its player."),
+    ("commands.palette", "/witchlight palette: asks a client for the block colour palette."),
+    ("commands.icons", "/witchlight icons: asks a client for the marker icons."),
+    ("commands.export", "/witchlight export: writes the surface of every loaded chunk."),
+    ("commands.status", "/witchlight status: reports the state of the map and the service."),
+    ("commands.service", "/witchlight service: starts and stops the map service."),
     (
         "[claims]",
-        "What the map does with the land claims. The first two are spelled the way\n\
-         [commands] are and answer two different questions, because they are two:\n\
-         seeing where a claim is tells somebody whether they may build there, and\n\
-         drawing one takes land. Read and enforced by the mod.",
+        "What the map does with land claims. view and create are privilege codes,\n\
+         written the same way as [commands]. Read and enforced by the mod.",
     ),
     (
         "claims.view",
-        "Who may see where the claims are. Open, because the game already sends\n\
-         every claim to every client — a map that hid them would tell players less\n\
-         than the game does.",
+        "The privilege required to see claims on the map. Default: player, because\n\
+         the game already sends every claim to every client.",
     ),
     (
         "claims.create",
-        "Who may draw a new one from the map. What the game asks of `/land claim`,\n\
-         so the map is never a way round a rule the server already has; narrowing\n\
-         it narrows the map alone.",
+        "The privilege required to draw a new claim on the map. Default: claimland,\n\
+         the same privilege the game requires for /land claim.",
     ),
     (
         "claims.worldgen",
-        "Whether the map draws the claims the world made for itself — the\n\
-         perimeters round trader camps and story structures, which carry an\n\
-         owner's name and no owner. Off, because those exist from the moment the\n\
-         ground generated, and drawing them hands every reader the location of\n\
-         every trader on the server. Turn it on for a map that shows the lot.",
+        "true: the map draws the claims the world generator created, such as the\n\
+         perimeters around trader camps and story structures. false: it does not.\n\
+         Default: false, because those claims reveal the location of every trader\n\
+         on the server.",
     ),
     (
         "[bars]",
-        "A bar on each player's card beside their health and their food, read off\n\
-         that player's own entity — which is where a mod giving players mana or\n\
-         stamina already keeps it, and which the server can read without knowing\n\
-         anything about the mod. Each entry is `name | value attribute | maximum\n\
-         attribute | colour | group`, and the key is only a name for the entry. A\n\
-         bar is drawn only for a player who has that attribute with a maximum\n\
-         above zero, so one nothing on this server uses simply never appears.\n\
-         Left out, the group is taken from an installed mod whose id is in the\n\
-         attribute's own name. The two below are what a stock Rustbound Magic\n\
-         uses.",
+        "Extra bars on each player's card, beside health and food. Each entry names\n\
+         attributes on the player entity that a mod stores a resource in, such as\n\
+         mana or stamina. The value format is:\n\
+         name | value attribute | maximum attribute | colour | group\n\
+         The key is only a label for the entry. The group is the heading the bar\n\
+         is filed under; left out, the mod uses the id of an installed mod that\n\
+         appears in the attribute's name. A bar is drawn only for a player who has\n\
+         the attribute with a maximum above zero, so an entry for a mod that is\n\
+         not installed draws nothing. The two entries below are for Rustbound\n\
+         Magic.",
     ),
 ];
 
-/// One setting's note, as the lines that stand over it, or nothing where it has
-/// none.
-///
-/// A blank line before every note, without exception: a rule with an exception is
-/// a file that reads as though it were formatted by hand and got tired. What has
-/// no note — the operator's own names under `[bars]` — is a list, and a list
-/// reads better closed up anyway.
+/// Formats the note for `key` as comment lines with a blank line before them.
+/// Returns an empty string when the key has no note.
 fn noted(key: &str) -> String {
     let Some((_, note)) = NOTES.iter().find(|(name, _)| *name == key) else {
         return String::new();

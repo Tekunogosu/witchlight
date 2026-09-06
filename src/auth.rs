@@ -59,7 +59,7 @@ impl Keeping {
         Self {
             good_for: (rules.session_hours > 0)
                 .then(|| Duration::from_secs(rules.session_hours.saturating_mul(60 * 60))),
-            reset_on_restart: rules.sessions_reset_on_restart,
+            reset_on_restart: rules.invalidate_sessions_on_restart,
         }
     }
 }
@@ -284,7 +284,7 @@ impl Sessions {
     /// is what it always did.
     fn write(&self, writing: impl FnOnce(&Store) -> crate::error::Result<()>) {
         if let Some(Err(error)) = self.store.as_deref().map(writing) {
-            warned(format_args!("a login could not be written down: {error}"));
+            warned(format_args!("a login could not be saved: {error}"));
         }
     }
 }
@@ -383,7 +383,7 @@ mod tests {
         let rules = crate::state::testing::rules(false);
         assert_eq!(Keeping::from_rules(&rules), Keeping::FOREVER, "0 hours is for ever");
 
-        let rules = Rules { session_hours: 36, sessions_reset_on_restart: true, ..rules };
+        let rules = Rules { session_hours: 36, invalidate_sessions_on_restart: true, ..rules };
         assert_eq!(
             Keeping::from_rules(&rules),
             Keeping { good_for: Some(Duration::from_secs(36 * 60 * 60)), reset_on_restart: true }

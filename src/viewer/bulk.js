@@ -172,7 +172,7 @@ function showBulkRow() {
   const many = chosenMarkers().length;
   const own = deletable().length;
   fromPresetButton.disabled = many === 0;
-  fromPresetButton.textContent = many === 0 ? 'From preset' : `From preset (${many})`;
+  fromPresetButton.textContent = many === 0 ? 'Apply preset' : `Apply preset (${many})`;
 
   bulkDropButton.disabled = own === 0;
   const words = own === 0
@@ -212,7 +212,7 @@ async function dropTicked() {
   if (armed !== 'delete') {
     armed = 'delete';
     showBulkRow();
-    sayDirectory(`Press the bin again to delete ${going.length}.`);
+    sayDirectory(`Press again to delete ${going.length}.`);
     return;
   }
 
@@ -223,8 +223,8 @@ async function dropTicked() {
     started(askDelete(place), 'deleting a marker')));
   const failed = took.filter(ok => !ok).length;
   sayDirectory(failed === 0
-    ? `Asked for ${took.length} to be deleted.`
-    : `${took.length - failed} asked for; ${failed} refused.`, failed > 0);
+    ? `Asked the game server to delete ${took.length}.`
+    : `${took.length - failed} sent; ${failed} refused.`, failed > 0);
 }
 
 /**
@@ -300,7 +300,7 @@ function drawApplyList() {
   showApply();
   if (drawn > 0) return;
   nothingFound(applyList, held.length === 0
-    ? 'No presets yet. Tick "set as preset" when you save a marker.'
+    ? 'No presets yet. Use the preset bookmark when you save a marker.'
     : `None of your ${held.length} presets matches that.`);
 }
 
@@ -345,10 +345,10 @@ async function applyToTicked() {
 
   if (failed === 0) {
     shutWindow(applyPanel);
-    sayDirectory(`Asked for ${took.length} to be made like ${preset.Title || preset.Pattern}.`);
+    sayDirectory(`Asked the game server to make ${took.length} like ${preset.Title || preset.Pattern}.`);
     return;
   }
-  sayApply(`${took.length - failed} asked for; ${failed} refused.`, true);
+  sayApply(`${took.length - failed} sent; ${failed} refused.`, true);
 }
 
 /** Asks for one marker to be made what the preset says it is. */

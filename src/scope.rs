@@ -1,6 +1,6 @@
 //! What one reader is shown of the map.
 //!
-//! With `private_map` off, everybody is shown the whole map, and this is a
+//! With `personal_maps` off, everybody is shown the whole map, and this is a
 //! pass-through to the tiles the service already draws. With it on, a reader is
 //! shown the map as their memory has it — see [`crate::memory`] — plus the
 //! ground around spawn as it is, which the operator may open to anybody: a
@@ -137,17 +137,17 @@ impl State {
     /// What a reader with this session is shown.
     #[must_use]
     pub fn scope_for(&self, uid: Option<&str>) -> Scope {
-        if !self.rules.private_map {
+        if !self.rules.personal_maps {
             return Scope::Whole;
         }
 
-        let spawn = self.rules.anonymous_spawn.then(|| {
+        let spawn = self.rules.show_spawn_to_guests.then(|| {
             let facts = crate::facts::read(&self.data);
             let edge = self.chunk_edge().max(1) as i32;
             Disc {
                 cx: facts.spawn_x.div_euclid(edge),
                 cz: facts.spawn_z.div_euclid(edge),
-                radius: self.rules.anonymous_spawn_radius_chunks.max(0),
+                radius: self.rules.spawn_radius_chunks.max(0),
             }
         });
 
@@ -643,8 +643,8 @@ mod tests {
     fn the_spawn_disc_is_everybodys() {
         let held = Scratch::new("scope-spawn");
         let mut state = state_in(held.at(), true);
-        state.rules.anonymous_spawn = true;
-        state.rules.anonymous_spawn_radius_chunks = 1;
+        state.rules.show_spawn_to_guests = true;
+        state.rules.spawn_radius_chunks = 1;
         ground(&state, (0, 0), 11);
         ground(&state, (3, 0), 11);
 

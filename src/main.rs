@@ -65,8 +65,8 @@ struct Args {
     #[arg(short = 'd', long, value_name = "DIR")]
     vs_data: Option<PathBuf>,
 
-    /// The map to serve, named outright. This is how the server mod says which
-    /// world's map this is; by hand it is only needed where the settings keep a
+    /// The exported map directory to serve. The server mod passes this to say
+    /// which world's map this is; by hand it is only needed where the settings keep a
     /// directory per world and more than one has been exported.
     #[arg(short = 'e', long, value_name = "DIR")]
     exports: Option<PathBuf>,
@@ -79,7 +79,7 @@ struct Args {
     #[arg(short = 'a', long, value_name = "ADDR")]
     api_bind: Option<String>,
 
-    /// How many threads render tiles. 0 decides from the machine.
+    /// How many threads render tiles. 0 picks from the CPU count.
     #[arg(short = 't', long, value_name = "N")]
     threads: Option<usize>,
 

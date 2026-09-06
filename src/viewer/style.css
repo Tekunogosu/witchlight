@@ -443,7 +443,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; color-scheme: dark;
    from script, so the list it is about is still readable behind it. */
 #apply { left: 380px; top: 190px; width: 374px; }
 #directory { left: 340px; top: 150px; width: 580px; }
-#profile { left: 50%; top: 90px; width: 480px; }
+#profile { left: 50%; top: 90px; width: 580px; }
 /* The two windows that list things somebody may have a great many of. Their own
    height goes to the list rather than to the window, so the heading, the search
    and the buttons stay put while the rows scroll under them — which is what
@@ -1057,22 +1057,24 @@ button.seen[disabled]:hover { background: none; }
    and nothing matching what was typed — and they need different words. */
 .nothing { margin: 0; padding: 6px var(--gap-1) 10px;
            font-size: var(--font-sm); color: var(--text-dim); }
-/* The keys, two rows to a line: nine questions the same shape as the switches
-   above them, and a column of nine would be most of the window. Each row is a
-   name and the key beside it, which is a button because pressing it is how the
-   key is changed. */
+/* The keys, three sections of three side by side: nine questions the same shape
+   as the switches above them, and a column of nine would be most of the window.
+   Each row is the key and then its action, so the keys of a section stand in one
+   column; the key is a button because pressing it is how it is changed. Its
+   class is its own — `.key` is the readout's label under the map. */
 #hotkey-panel { margin-top: var(--gap-2); padding-top: var(--gap-2);
                 border-top: 1px solid var(--line-soft); }
 #hotkey-panel h3 { margin: 0 0 var(--gap-1); font-size: var(--font-md);
                    color: var(--section); font-weight: bold; }
-#hotkey-rows { display: grid; grid-template-columns: 1fr 1fr; gap: 0 var(--gap-3); }
-#hotkey-rows .line { justify-content: space-between; cursor: default; }
-.key { min-width: 5.5em; padding: 2px var(--gap-2); font: inherit; font-size: var(--font-sm);
+#hotkey-rows { display: grid; grid-template-columns: auto auto auto; justify-content: space-between;
+               gap: 0 var(--gap-3); }
+#hotkey-rows .line { justify-content: flex-start; cursor: default; white-space: nowrap; }
+.hotkey { min-width: 4.5em; flex: none; text-align: center; padding: 2px var(--gap-2); font: inherit; font-size: var(--font-sm);
        color: var(--text-strong); cursor: pointer; background: var(--surface-bar);
        border: 1px solid var(--line-edge); border-radius: var(--round-sm); }
-.key:hover { border-color: var(--accent-soft); }
-.key.listening { color: var(--accent); border-color: var(--accent); }
-.key[disabled] { color: var(--line); cursor: default; border-color: var(--line-soft); }
+.hotkey:hover { border-color: var(--accent-soft); }
+.hotkey.listening { color: var(--accent); border-color: var(--accent); }
+.hotkey[disabled] { color: var(--text-dim); cursor: default; border-color: var(--line-soft); }
 #profile-said { margin: var(--gap-2) 0 var(--gap-3); font-size: var(--font-md);
                 color: var(--text-dim); min-height: 17px; }
 #profile-said.wrong { color: var(--warn); }
@@ -1123,14 +1125,19 @@ button.seen[disabled]:hover { background: none; }
         border-bottom: 1px solid var(--line-soft); white-space: pre; }
 #what:empty { display: none; }
 /* Which key does what, as words: a key in the strong colour and its action in
-   the quiet one, wrapped at the panel's width rather than widening it into a
-   line the eye has to travel. Nothing to say — the hints switched off, or nobody
-   signed in — is no line at all, the way the picker's line is. */
-#keys { display: flex; flex-wrap: wrap; column-gap: 10px; row-gap: 2px; max-width: 320px;
+   the quiet one, three to a row so they line up in columns instead of wrapping
+   wherever the previous word happened to end. Nothing to say — the hints
+   switched off, or nobody signed in — is no line at all, the way the picker's
+   line is. */
+#keys { display: grid; grid-template-columns: repeat(3, auto); column-gap: 10px; row-gap: 2px;
         margin-bottom: 7px; padding-bottom: 6px; border-bottom: 1px solid var(--line-soft);
         font-size: var(--font-sm); color: var(--text-dim); white-space: nowrap; }
 #keys:empty { display: none; }
 #keys b { font-weight: normal; color: var(--text-strong); }
+/* The rule between one column and the next, the same one `.read.apart` draws
+   below this panel. On the second and third of every row of three, so the
+   dividers are a property of the grid rather than wrappers around each word. */
+#keys span:nth-child(3n+2), #keys span:nth-child(3n) { border-left: 1px solid var(--line-soft); padding-left: 10px; }
 .player, .marker { background: none; border: none; }
 /* A player, drawn the way the game's own map draws one: a dot with a cone over
    it for the way they are looking, turned by the bearing the mod sends.

@@ -156,9 +156,9 @@ function drawProfile() {
   document.getElementById('colour-custom').disabled = !named;
   wantSaid.textContent = named
     ? (mine.PrivateByDefault === true || mine.PrivateByDefault === false
-      ? 'Your own choice, over the server default.'
+      ? 'Your own setting, overriding the server default.'
       : `Following the server default, which is ${viewer && viewer.MarkersPublic ? 'public' : 'private'}.`)
-    : 'Run /witchlight login in the game to keep settings.';
+    : 'Run /witchlight login in the game to save settings.';
   draftProfile();
 }
 
@@ -261,7 +261,7 @@ function drawShares(named) {
     box.setAttribute('aria-label', `Share my map with ${group.Name}`);
     box.addEventListener('change', () => {
       draftProfile();
-      sayProfile('Not kept yet.');
+      sayProfile('Not saved yet.');
     });
     line.append(box, document.createTextNode(String(group.Name)));
     list.append(line);
@@ -279,7 +279,7 @@ async function keepProfile() {
   if (!draft) return;
 
   if (!(viewer && viewer.Name)) {
-    sayProfile('Sign in to keep these.', true);
+    sayProfile('Sign in to save these.', true);
     return;
   }
 
@@ -330,7 +330,7 @@ function buildProfile() {
   for (const box of switches) {
     box.addEventListener('change', () => {
       draftProfile();
-      sayProfile('Not kept yet.');
+      sayProfile('Not saved yet.');
     });
   }
   // The mark follows the picker as it is dragged, so the colour is seen on the

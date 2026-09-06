@@ -59,11 +59,11 @@ impl State {
         serde_json::json!({
             "Name": who.as_ref().map(|who| who.name.clone()),
             "Uid": who.as_ref().map(|who| who.uid.clone()),
-            "MarkersPublic": self.rules.markers_public,
-            "PublicMarkersEditable": self.rules.markers_editable,
-            "PlayersPublic": self.rules.players_public,
-            "PrivateMap": self.rules.private_map,
-            "AnonymousSpawn": self.rules.anonymous_spawn,
+            "MarkersPublic": self.rules.allow_public_markers,
+            "PublicMarkersEditable": self.rules.allow_editing_public_markers,
+            "PlayersPublic": self.rules.show_players_to_everyone,
+            "PrivateMap": self.rules.personal_maps,
+            "AnonymousSpawn": self.rules.show_spawn_to_guests,
             // The groups this person is in, for the settings form to offer
             // sharing with. Empty for a stranger, who is in nobody's.
             "Groups": who

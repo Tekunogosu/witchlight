@@ -203,8 +203,8 @@ function claimMay(claim) {
   const guest = uid && (claim.Guests || []).find(named => named.Uid === uid);
   const may = [];
   if (guest && guest.Builds) may.push('You can build and break blocks here.');
-  if (guest || claim.EveryoneUses) may.push('You can open chests and use blocks here.');
-  if (guest || claim.EveryoneWalks || claim.EveryoneUses) may.push('You can walk through here.');
+  if (guest || claim.EveryoneUses) may.push('You can use doors and chests here.');
+  if (guest || claim.EveryoneWalks || claim.EveryoneUses) may.push('You can walk through.');
   return may.length ? may : ['You have no permissions on this claim.'];
 }
 
@@ -358,7 +358,7 @@ function setDrawing(on) {
   map.getContainer().classList.toggle('drawing', on);
   map.getContainer().classList.toggle('picking', placing || picking);
 
-  if (on) sayClaim('Drag out the ground to claim.');
+  if (on) sayClaim('Drag across the map to mark the area.');
 }
 
 /** Moves the outline as the drag stretches it. */
@@ -440,7 +440,7 @@ function endClaim(latlng) {
 
   if (from.x === far.x && from.z === far.z) {
     layer(drawnRectangle, false);
-    sayClaim('Drag out the ground to claim.');
+    sayClaim('Drag across the map to mark the area.');
     return;
   }
 
@@ -514,7 +514,7 @@ function editClaim(claim) {
   dressClaimForm();
   traceClaim();
   sayClaim((claim.Areas || []).length > 1
-    ? 'This claim is several areas. The map can rename it and say who may use it; '
+    ? 'This claim has several areas. You can rename it and set permissions here; '
       + 'its shape is changed in game.'
     : '');
   measureClaim();
@@ -803,7 +803,7 @@ async function askForClaim() {
   if (allowance) {
     const over = claimVolume(asked) - (allowance.Allowance - allowance.Used);
     if (over > 0) {
-      sayClaim(`That is ${over.toLocaleString()} m³ past your allowance.`, true);
+      sayClaim(`${over.toLocaleString()} m³ over your allowance — make it smaller or shallower.`, true);
       return;
     }
     if (allowance.Areas >= allowance.MaxAreas) {
@@ -884,8 +884,8 @@ function watchClaim() {
     // guessing at one of five. So this says what is true — it did not happen —
     // and points at where the answer is.
     sayClaim(
-      'The game server did not do it. Check `/land` in game for why — a new claim '
-      + 'may overlap another or be past what you are allowed, and a change needs '
+      'The game server refused it. Check /land in game for why: a new claim '
+      + 'may overlap another or exceed your allowance, and a change needs '
       + 'the claim to still be yours.', true);
   }
 }
@@ -911,10 +911,10 @@ function claimSettled() {
  * The second button is offered only where the mod says this reader may draw one,
  * so a server that keeps its land to a role shows a toggle and nothing else.
  */
-const claimBar = cornerButton('claims', 'polygon', 'Land claims');
+const claimBar = cornerButton('claims', 'polygon', 'Show land claims');
 const claimShow = claimBar.querySelector('a');
-const claimDraw = cornerAnchor(claimBar, 'selection-plus', 'Draw a land claim');
-const claimList = cornerAnchor(claimBar, 'list-bullets', 'View claim list');
+const claimDraw = cornerAnchor(claimBar, 'selection-plus', 'Draw a claim');
+const claimList = cornerAnchor(claimBar, 'list-bullets', 'View claims list');
 // Offered only to somebody the mod says may take land. Said as a class on the
 // bar rather than a style on the button, so what is hidden and what is shown is
 // one rule in the stylesheet — see `#claims .claim-make`.

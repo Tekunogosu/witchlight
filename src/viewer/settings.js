@@ -346,7 +346,7 @@ function drawBarSwitches() {
   if (barsSeen.size === 0) return;
 
   const heading = document.createElement('h2');
-  heading.textContent = 'Bar display';
+  heading.textContent = 'Player bars';
   panel.append(heading);
 
   const byGroup = new Map();
@@ -363,7 +363,7 @@ function drawBarSwitches() {
   for (const group of groups) {
     const under = document.createElement('p');
     under.className = 'note';
-    under.textContent = group || 'Not from a mod this map could name';
+    under.textContent = group || 'Other';
     panel.append(under);
 
     for (const name of byGroup.get(group)) {
@@ -476,7 +476,7 @@ function buildSettings() {
   // are the same length and answered the same way, one choice from a short
   // list — and every size under the pair, since six sliders are a block of
   // their own whatever is above them.
-  const colours = accessSection('Map Colour Filter');
+  const colours = accessSection('Map colour filter');
   for (const [name, filter] of Object.entries(filters)) {
     colours.append(choiceButton('filter', name, filter.label, () => chooseFilter(name)));
   }

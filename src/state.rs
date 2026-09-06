@@ -709,25 +709,25 @@ pub mod testing {
         Palette::load(at).expect("it parses")
     }
 
-    pub fn rules(private_map: bool) -> Rules {
+    pub fn rules(personal_maps: bool) -> Rules {
         Rules {
-            markers_public: false,
-            markers_editable: false,
-            players_public: true,
+            allow_public_markers: false,
+            allow_editing_public_markers: false,
+            show_players_to_everyone: true,
             live_refresh_ms: 2000,
-            private_map,
-            anonymous_spawn: false,
-            anonymous_spawn_radius_chunks: 8,
+            personal_maps,
+            show_spawn_to_guests: false,
+            spawn_radius_chunks: 8,
             sight_radius_chunks: 0,
             session_hours: 0,
-            sessions_reset_on_restart: false,
+            invalidate_sessions_on_restart: false,
             hidden_groups: vec!["xlib".to_owned()],
         }
     }
 
     /// A map of this build's chunk edge, read from a fresh scratch directory.
-    pub fn state_in(at: &Path, private_map: bool) -> State {
-        State::load(at, palette_in(at), 1 << 20, rules(private_map)).expect("a start")
+    pub fn state_in(at: &Path, personal_maps: bool) -> State {
+        State::load(at, palette_in(at), 1 << 20, rules(personal_maps)).expect("a start")
     }
 }
 

@@ -170,7 +170,7 @@ function sayWho(shown) {
 
   if (whoTab === 'group') {
     note.textContent = viewer && viewer.Name
-      ? `Nobody from your group is on. ${online} on the server.`
+      ? `Nobody from your group is online. ${online} online on the server.`
       : 'Sign in to see who is on with you.';
     return;
   }

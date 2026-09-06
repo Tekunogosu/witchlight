@@ -202,7 +202,7 @@ fn settle(state: &State, data: &Path) {
     // go; both are redrawn from region files that are not in question.
     if pyramid::reset_unless_built_from(data, crate::columns::VERSION) {
         say!(
-            "the stored levels were built by a different format or painter, so they have been cleared — the map redraws as it is asked for"
+            "the stored levels were built by a different format or renderer, so they have been cleared — the map redraws as it is asked for"
         );
     }
 
@@ -273,7 +273,7 @@ fn wait_for_events(request: tiny_http::Request, state: &State) {
 
     let waited = state.events.wait(|| state.generation() > since || state.events.live_seq() > live);
     let reply = match waited {
-        None => crate::http::text(503, "too many browsers waiting — ask on a clock instead"),
+        None => crate::http::text(503, "too many clients waiting — retry later"),
         Some(_) => {
             let scope = state.scope_for(uid.as_deref());
             let generation = state.generation();
