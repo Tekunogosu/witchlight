@@ -39,6 +39,7 @@ use rusqlite::{Connection, OptionalExtension as _, params};
 
 use crate::columns::{REGION_CHUNKS, pack, unpack};
 use crate::error::{Error, Result};
+use crate::log::say;
 
 /// The schema this build writes. A file at another number is a file another
 /// build wrote, and refusing it is the honest answer until there is a migration
@@ -199,11 +200,56 @@ impl Store {
         store
     }
 
+    /// A copy of the database as it stands, before a migration changes it.
+    ///
+    /// Named for the schema it holds rather than the one about to be written,
+    /// because the question asked while rolling back is "which file gets me back
+    /// to where I was", and the answer is the number the old build reads. Several
+    /// migrations leave several files rather than overwriting one.
+    ///
+    /// `VACUUM INTO` rather than a copy of the file: the database is in WAL mode,
+    /// and the bytes of `map.sqlite` alone are not the database — recent writes
+    /// live in `map.sqlite-wal` until a checkpoint folds them in. This writes one
+    /// consistent file whatever state the log is in.
+    ///
+    /// A backup that cannot be written stops the migration. Refusing to start is
+    /// recoverable and a schema changed with no way back is not, so the failure
+    /// that leaves a working database is the one to choose.
+    fn back_up_before_migrating(&self, path: &Path, from: i64) -> Result<()> {
+        let backup = path.with_extension(format!("schema{from}.bak"));
+
+        // An older run of this same migration already wrote one. Keeping it means
+        // keeping the copy made when the database was last known good, which is
+        // what a rollback wants; overwriting it here would replace that with
+        // whatever a half-finished attempt has since left behind.
+        if backup.exists() {
+            say!("keeping the schema {from} backup already beside the map");
+            return Ok(());
+        }
+
+        self.lock()
+            .execute("VACUUM INTO ?1", [&backup.to_string_lossy().as_ref()])
+            .map_err(|error| Error::database(format!("backing up schema {from} to {}", backup.display()), error))?;
+
+        say!("schema {from} backed up to {}", backup.display());
+        Ok(())
+    }
+
     fn migrate(&self, path: &Path) -> Result<()> {
-        let connection = self.lock();
-        let version: i64 = connection
+        let version: i64 = self
+            .lock()
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .map_err(|error| Error::database("reading the schema version", error))?;
+
+        // Before the first write of the migration and not after it: a migration
+        // that fails halfway has already changed the file. Only where the schema
+        // is about to move — a database already at this build's number is not
+        // written to, and a fresh one at 0 has nothing worth keeping.
+        if version != 0 && version != SCHEMA && !path.starts_with(":memory:") {
+            self.back_up_before_migrating(path, version)?;
+        }
+
+        let connection = self.lock();
 
         match version {
             0 => {
@@ -835,6 +881,71 @@ pub fn set_bit(bits: &mut [u8; BITSET_BYTES], slot: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::files::testing::Scratch;
+
+    /// A migration keeps a copy of what it is about to change, named for the
+    /// schema that copy holds — which is the number the build being rolled back
+    /// to reads, and so the only number that answers "which file do I restore".
+    #[test]
+    fn a_migration_leaves_the_old_schema_beside_the_map() {
+        let scratch = Scratch::new("store-migration-backup");
+        let path = path_in(scratch.at());
+
+        // A schema 2 database: everything but the three tables schema 3 adds.
+        Store::open(scratch.at()).expect("a fresh database");
+        {
+            let connection = Connection::open(&path).expect("the database");
+            connection
+                .execute_batch(
+                    "DROP TABLE markers;
+                     DROP TABLE preferences;
+                     DROP TABLE visited;
+                     PRAGMA user_version = 2;",
+                )
+                .expect("a database as schema 2 left it");
+        }
+
+        let backup = path.with_extension("schema2.bak");
+        assert!(!backup.exists(), "nothing has been migrated yet");
+
+        Store::open(scratch.at()).expect("the migration to schema 3");
+
+        assert!(backup.exists(), "the schema it came from is kept beside the map");
+        let kept = Connection::open(&backup).expect("the backup opens");
+        let version: i64 = kept.query_row("PRAGMA user_version", [], |row| row.get(0)).expect("its version");
+        assert_eq!(version, 2, "the backup holds the schema it is named for, not the one migrated to");
+
+        // A second migration must not replace the copy made when the database was
+        // last known good with whatever a later attempt has since left behind.
+        std::fs::write(&backup, b"not a database").expect("standing in for an older backup");
+        {
+            let connection = Connection::open(&path).expect("the database");
+            connection.execute_batch("PRAGMA user_version = 2;").expect("back to schema 2");
+        }
+        let _ = Store::open(scratch.at());
+        assert_eq!(
+            std::fs::read(&backup).expect("the backup still there"),
+            b"not a database",
+            "an existing backup is kept, not written over"
+        );
+    }
+
+    /// Opening a database already at this build's schema writes nothing, so
+    /// there is nothing to keep a copy of.
+    #[test]
+    fn opening_a_current_database_keeps_no_copy() {
+        let scratch = Scratch::new("store-no-needless-backup");
+
+        Store::open(scratch.at()).expect("a fresh database");
+        Store::open(scratch.at()).expect("opening it again");
+
+        let copies: Vec<_> = std::fs::read_dir(scratch.at())
+            .expect("the directory")
+            .filter_map(std::result::Result::ok)
+            .filter(|entry| entry.path().extension().is_some_and(|end| end == "bak"))
+            .collect();
+        assert!(copies.is_empty(), "a database that did not migrate leaves no backup");
+    }
 
     #[test]
     fn what_the_service_must_still_have_is_kept_by_row() {

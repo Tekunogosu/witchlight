@@ -9,6 +9,21 @@ which is where that rule is kept rather than in anybody's memory.
 A version that moved for the other half says so and lists nothing, which is not an
 omission: it is what "one release" looks like from the side that did not change.
 
+## 0.50.2
+
+**Deploy note:** both halves, upgraded together; nothing is cleared.
+
+- A migration now keeps a copy of the database before it changes anything. The
+  copy is named for the schema it holds — `map.schema2.bak` beside `map.sqlite`
+  — so the file to restore when rolling a build back is the one whose name
+  carries the old build's number. It is written before the first change and only
+  where the schema is about to move: a new database and one already at this
+  build's number both leave no copy. A copy that is already there is kept rather
+  than written over, so a second attempt cannot replace the one made when the
+  database was last known good. A copy that cannot be written stops the service
+  instead of migrating, since a refusal to start can be undone and a schema
+  changed with no way back cannot.
+
 ## 0.50.1
 
 **Deploy note:** both halves, upgraded together; nothing is cleared.
