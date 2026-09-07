@@ -30,7 +30,7 @@
 //! - `divergences` is where a person's memory disagrees with the map: a chunk
 //!   they saw that changed while they were not there, and the version they saw.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -44,7 +44,7 @@ use crate::log::say;
 /// The schema this build writes. A file at another number is a file another
 /// build wrote, and refusing it is the honest answer until there is a migration
 /// to run.
-const SCHEMA: i64 = 3;
+const SCHEMA: i64 = 5;
 
 /// Chunks in a region, which is how many bits a `discovered` row holds.
 const BITS: usize = (REGION_CHUNKS * REGION_CHUNKS) as usize;
@@ -141,6 +141,28 @@ const KEPT_TABLES: &str = "CREATE TABLE markers (
                              radius INTEGER NOT NULL,
                              at INTEGER NOT NULL,
                              PRIMARY KEY (cx, cz)
+                         ) WITHOUT ROWID;";
+
+/// Which plugins have registered, and what shape they last declared.
+///
+/// Here rather than in each plugin's own database so that what is installed can
+/// be answered without opening every plugin's file — including a plugin that has
+/// been removed, whose rows are kept and reported rather than dropped.
+///
+/// `shape` is the fingerprint of the last declaration, which is what says
+/// whether a plugin registering again is the same plugin.
+const PLUGINS_TABLE: &str = "CREATE TABLE plugins (
+                             id TEXT PRIMARY KEY,
+                             shape TEXT NOT NULL,
+                             declared TEXT NOT NULL DEFAULT '',
+                             enabled INTEGER NOT NULL,
+                             at INTEGER NOT NULL
+                         ) WITHOUT ROWID;
+                         CREATE TABLE plugin_shares (
+                             plugin TEXT NOT NULL,
+                             uid TEXT NOT NULL,
+                             said INTEGER NOT NULL,
+                             PRIMARY KEY (plugin, uid, said)
                          ) WITHOUT ROWID;";
 
 pub struct Discovered {
@@ -297,26 +319,51 @@ impl Store {
                          ) WITHOUT ROWID;
                          {SESSIONS_TABLE}
                          {KEPT_TABLES}
+                         {PLUGINS_TABLE}
                          PRAGMA user_version = {SCHEMA};"
                     ))
                     .map_err(|error| Error::database("creating the schema", error))?;
                 Ok(())
             }
-            // Schema 1 is schema 2 without the sessions, and schema 2 is schema
-            // 3 without what used to be three files beside the map: each is
-            // carried forward with everything it holds.
+            // Schema 1 is schema 2 without the sessions, schema 2 is schema 3
+            // without what used to be three files beside the map, and schema 3
+            // is schema 4 without the register of what plugins are installed.
+            // Each is carried forward with everything it holds.
             1 => {
                 connection
                     .execute_batch(&format!(
-                        "{SESSIONS_TABLE} {KEPT_TABLES} PRAGMA user_version = {SCHEMA};"
+                        "{SESSIONS_TABLE} {KEPT_TABLES} {PLUGINS_TABLE} PRAGMA user_version = {SCHEMA};"
                     ))
                     .map_err(|error| Error::database("adding the sessions and kept tables", error))?;
                 Ok(())
             }
             2 => {
                 connection
-                    .execute_batch(&format!("{KEPT_TABLES} PRAGMA user_version = {SCHEMA};"))
+                    .execute_batch(&format!(
+                        "{KEPT_TABLES} {PLUGINS_TABLE} PRAGMA user_version = {SCHEMA};"
+                    ))
                     .map_err(|error| Error::database("adding the kept tables", error))?;
+                Ok(())
+            }
+            3 => {
+                connection
+                    .execute_batch(&format!("{PLUGINS_TABLE} PRAGMA user_version = {SCHEMA};"))
+                    .map_err(|error| Error::database("adding the plugin register", error))?;
+                Ok(())
+            }
+            // Schema 4 is schema 5 without the shape a plugin declared. Only its
+            // fingerprint was kept, which says whether a shape moved and cannot
+            // say what it is — so nothing could be served until the mod
+            // registered again, and a map loaded before that drew no plugin at
+            // all. The column is added empty: a plugin whose shape is not known
+            // yet is one this waits to hear from, exactly as before.
+            4 => {
+                connection
+                    .execute_batch(&format!(
+                        "ALTER TABLE plugins ADD COLUMN declared TEXT NOT NULL DEFAULT '';
+                         PRAGMA user_version = {SCHEMA};"
+                    ))
+                    .map_err(|error| Error::database("keeping what each plugin declared", error))?;
                 Ok(())
             }
             SCHEMA => Ok(()),
@@ -328,6 +375,160 @@ impl Store {
                 ),
             }),
         }
+    }
+
+    /// What one plugin last declared, or nothing where it has never registered.
+    ///
+    /// The fingerprint of its shape and whether it is still installed — the two
+    /// questions asked of a plugin before its own database is opened.
+    pub fn plugin(&self, id: &str) -> Result<Option<(String, bool)>> {
+        self.lock()
+            .query_row("SELECT shape, enabled FROM plugins WHERE id = ?1", [id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? != 0))
+            })
+            .optional()
+            .map_err(|error| Error::database(format!("reading what {id} registered"), error))
+    }
+
+    /// Every plugin that has ever registered, whether or not it still is.
+    ///
+    /// Ordered by name so the status an operator reads is the same list twice
+    /// running rather than whatever order the rows come back in.
+    pub fn plugins(&self) -> Result<Vec<(String, String, bool)>> {
+        let connection = self.lock();
+        let mut statement = connection
+            .prepare("SELECT id, shape, enabled FROM plugins ORDER BY id")
+            .map_err(|error| Error::database("reading the plugin register", error))?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)? != 0))
+            })
+            .map_err(|error| Error::database("reading the plugin register", error))?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|error| Error::database("reading the plugin register", error))?;
+        Ok(rows)
+    }
+
+    /// A plugin has registered, with the shape it declared.
+    ///
+    /// Replaces whatever was there, since a plugin registering is the plugin
+    /// saying what it is now — and marks it installed, which is what a plugin
+    /// registering means about one that had been removed and is back.
+    pub fn keep_plugin(&self, id: &str, shape: &str, declared: &str, at: SystemTime) -> Result<()> {
+        self.lock()
+            .execute(
+                "INSERT OR REPLACE INTO plugins (id, shape, declared, enabled, at) \
+                 VALUES (?1, ?2, ?3, 1, ?4)",
+                rusqlite::params![id, shape, declared, seconds(at)],
+            )
+            .map(|_| ())
+            .map_err(|error| Error::database(format!("keeping what {id} registered"), error))
+    }
+
+    /// Every installed plugin's own declaration, as the shape it last sent.
+    ///
+    /// What the service opens its databases from when it starts, so a plugin
+    /// serves its rows from the moment the map is up rather than from whenever
+    /// the game server next gets around to registering it again.
+    ///
+    /// A plugin registered by an older build has no declaration kept and is not
+    /// answered for here. It is served once it registers, which is what happened
+    /// to every plugin before this was kept.
+    pub fn declared_plugins(&self) -> Result<Vec<(String, String, String)>> {
+        let connection = self.lock();
+        let mut statement = connection
+            .prepare(
+                "SELECT id, shape, declared FROM plugins \
+                 WHERE enabled = 1 AND declared <> '' ORDER BY id",
+            )
+            .map_err(|error| Error::database("reading what plugins declared", error))?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
+            })
+            .map_err(|error| Error::database("reading what plugins declared", error))?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|error| Error::database("reading what plugins declared", error))?;
+        Ok(rows)
+    }
+
+    /// A plugin is no longer installed.
+    ///
+    /// Its row stays and its rows stay: what an operator does with the data of a
+    /// plugin they have removed is their decision, and a service that dropped it
+    /// would be making that decision for them. Marked rather than deleted so the
+    /// status can say it is still there.
+    pub fn forget_plugin(&self, id: &str) -> Result<()> {
+        self.lock()
+            .execute("UPDATE plugins SET enabled = 0 WHERE id = ?1", [id])
+            .map(|_| ())
+            .map_err(|error| Error::database(format!("marking {id} gone"), error))
+    }
+
+    /// Which groups one person shares one plugin's rows with.
+    ///
+    /// Kept per plugin rather than beside `share_map_with`, because showing
+    /// where somebody has explored is not the same as showing what they found
+    /// there — one control over both would surprise people in the direction
+    /// that costs them something.
+    pub fn plugin_shared_with(&self, plugin: &str, uid: &str) -> Result<Vec<i32>> {
+        let connection = self.lock();
+        let mut statement = connection
+            .prepare("SELECT said FROM plugin_shares WHERE plugin = ?1 AND uid = ?2 ORDER BY said")
+            .map_err(|error| Error::database("reading who a plugin is shared with", error))?;
+        let groups = statement
+            .query_map(params![plugin, uid], |row| row.get::<_, i32>(0))
+            .map_err(|error| Error::database("reading who a plugin is shared with", error))?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|error| Error::database("reading who a plugin is shared with", error))?;
+        Ok(groups)
+    }
+
+    /// Replaces which groups one person shares one plugin's rows with.
+    ///
+    /// The whole set at once, in one transaction: this is one answer to one
+    /// question, and a half-written answer is a person sharing with a group they
+    /// took the tick out of.
+    pub fn keep_plugin_shares(&self, plugin: &str, uid: &str, groups: &[i32]) -> Result<()> {
+        let mut connection = self.lock();
+        let deal = connection
+            .transaction()
+            .map_err(|error| Error::database("keeping who a plugin is shared with", error))?;
+        deal.execute("DELETE FROM plugin_shares WHERE plugin = ?1 AND uid = ?2", params![plugin, uid])
+            .map_err(|error| Error::database("clearing who a plugin was shared with", error))?;
+        for group in groups {
+            deal.execute(
+                "INSERT OR REPLACE INTO plugin_shares (plugin, uid, said) VALUES (?1, ?2, ?3)",
+                params![plugin, uid, group],
+            )
+            .map_err(|error| Error::database("keeping who a plugin is shared with", error))?;
+        }
+        deal.commit()
+            .map_err(|error| Error::database("keeping who a plugin is shared with", error))?;
+        Ok(())
+    }
+
+    /// Everybody who shares one plugin's rows with anybody, by uid.
+    ///
+    /// Read at start and whenever a share is written, so that answering "whose
+    /// rows may this reader see" is a lookup in memory rather than a query per
+    /// request.
+    pub fn plugin_shares(&self, plugin: &str) -> Result<HashMap<String, HashSet<i32>>> {
+        let connection = self.lock();
+        let mut statement = connection
+            .prepare("SELECT uid, said FROM plugin_shares WHERE plugin = ?1")
+            .map_err(|error| Error::database("reading a plugin's shares", error))?;
+        let rows = statement
+            .query_map([plugin], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i32>(1)?)))
+            .map_err(|error| Error::database("reading a plugin's shares", error))?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|error| Error::database("reading a plugin's shares", error))?;
+
+        let mut held: HashMap<String, HashSet<i32>> = HashMap::new();
+        for (uid, group) in rows {
+            held.entry(uid).or_default().insert(group);
+        }
+        Ok(held)
     }
 
     /// Every browser still logged in.
@@ -900,6 +1101,8 @@ mod tests {
                     "DROP TABLE markers;
                      DROP TABLE preferences;
                      DROP TABLE visited;
+                     DROP TABLE plugins;
+                     DROP TABLE plugin_shares;
                      PRAGMA user_version = 2;",
                 )
                 .expect("a database as schema 2 left it");
@@ -945,6 +1148,115 @@ mod tests {
             .filter(|entry| entry.path().extension().is_some_and(|end| end == "bak"))
             .collect();
         assert!(copies.is_empty(), "a database that did not migrate leaves no backup");
+    }
+
+    /// What a plugin declared is kept, so the service can open it again on its
+    /// next start without waiting to be registered a second time.
+    ///
+    /// Only the fingerprint of a shape used to be kept. A fingerprint says
+    /// whether a shape has moved and cannot say what the shape is, so nothing
+    /// could be opened from the register: every plugin was unknown until the
+    /// game server registered it again, and a map opened before that answered
+    /// `no plugin by that name has registered` and drew nothing.
+    #[test]
+    fn the_register_keeps_what_a_plugin_declared() {
+        let store = Store::in_memory();
+        let now = SystemTime::now();
+        let shape = r#"{"columns":{"x":"int"},"key":["x"],"scope":"owner"}"#;
+
+        store.keep_plugin("wl-heatmap", "abc123", shape, now).unwrap();
+
+        let declared = store.declared_plugins().unwrap();
+        assert_eq!(declared.len(), 1, "an installed plugin that declared a shape is answered for");
+        assert_eq!(declared[0].0, "wl-heatmap");
+        assert_eq!(declared[0].1, "abc123", "its fingerprint, so opening it reads as no change");
+        assert_eq!(declared[0].2, shape, "and the declaration itself, which is what it is opened from");
+
+        // A plugin that has been removed is not opened. Its rows stay where they
+        // are; what an operator does with them is their decision.
+        store.forget_plugin("wl-heatmap").unwrap();
+        assert!(
+            store.declared_plugins().unwrap().is_empty(),
+            "a plugin that is no longer installed is not opened at start"
+        );
+
+        // One registered by an older build has no declaration and is not opened
+        // from the register. It is served once it registers, as it always was.
+        store.keep_plugin("wl-older", "999", "", now).unwrap();
+        assert!(
+            store.declared_plugins().unwrap().iter().all(|(id, _, _)| id != "wl-older"),
+            "a plugin whose shape was never kept is waited on rather than guessed at"
+        );
+    }
+
+    /// The register says what is installed and what merely was, which is what
+    /// lets a plugin be removed without its rows going with it.
+    #[test]
+    fn the_register_remembers_a_plugin_that_has_been_removed() {
+        let store = Store::in_memory();
+        let now = SystemTime::now();
+
+        assert_eq!(store.plugin("wl-heatmap").unwrap(), None, "nothing has registered");
+        assert!(store.plugins().unwrap().is_empty());
+
+        store.keep_plugin("wl-heatmap", "abc123", "{}", now).unwrap();
+        assert_eq!(store.plugin("wl-heatmap").unwrap(), Some(("abc123".to_owned(), true)));
+
+        // Registering again with a new shape replaces what was said, because a
+        // plugin registering is the plugin saying what it is now.
+        store.keep_plugin("wl-heatmap", "def456", "{}", now).unwrap();
+        assert_eq!(store.plugin("wl-heatmap").unwrap(), Some(("def456".to_owned(), true)));
+
+        // Removed: still known, still listed, no longer installed.
+        store.forget_plugin("wl-heatmap").unwrap();
+        assert_eq!(
+            store.plugin("wl-heatmap").unwrap(),
+            Some(("def456".to_owned(), false)),
+            "what it declared is remembered so its rows can still be spoken for"
+        );
+
+        // And back again, without having lost what it said in between.
+        store.keep_plugin("wl-heatmap", "def456", "{}", now).unwrap();
+        assert_eq!(store.plugin("wl-heatmap").unwrap(), Some(("def456".to_owned(), true)));
+
+        store.keep_plugin("wl-other", "999", "{}", now).unwrap();
+        let listed = store.plugins().unwrap();
+        assert_eq!(listed.len(), 2);
+        assert_eq!(listed[0].0, "wl-heatmap", "listed by name, the same order twice running");
+        assert_eq!(listed[1].0, "wl-other");
+    }
+
+    /// Sharing is per plugin and per person, and replacing it is one answer
+    /// rather than a set of edits.
+    #[test]
+    fn who_a_plugin_is_shared_with_is_kept_per_person() {
+        let store = Store::in_memory();
+
+        assert!(store.plugin_shared_with("wl-heatmap", "ada").unwrap().is_empty(), "nobody shares by default");
+
+        store.keep_plugin_shares("wl-heatmap", "ada", &[4, 1]).unwrap();
+        assert_eq!(store.plugin_shared_with("wl-heatmap", "ada").unwrap(), vec![1, 4], "sorted, and both kept");
+
+        // Replaced whole: a group taken off is a group no longer shared with,
+        // not one that lingers because only additions were written.
+        store.keep_plugin_shares("wl-heatmap", "ada", &[4]).unwrap();
+        assert_eq!(store.plugin_shared_with("wl-heatmap", "ada").unwrap(), vec![4]);
+
+        store.keep_plugin_shares("wl-heatmap", "ada", &[]).unwrap();
+        assert!(store.plugin_shared_with("wl-heatmap", "ada").unwrap().is_empty(), "and may be taken off entirely");
+
+        // One person's answer is not another's, and one plugin's is not another's.
+        store.keep_plugin_shares("wl-heatmap", "ada", &[1]).unwrap();
+        store.keep_plugin_shares("wl-heatmap", "bob", &[2]).unwrap();
+        store.keep_plugin_shares("wl-other", "ada", &[3]).unwrap();
+        assert_eq!(store.plugin_shared_with("wl-heatmap", "ada").unwrap(), vec![1]);
+        assert_eq!(store.plugin_shared_with("wl-heatmap", "bob").unwrap(), vec![2]);
+        assert_eq!(store.plugin_shared_with("wl-other", "ada").unwrap(), vec![3]);
+
+        let all = store.plugin_shares("wl-heatmap").unwrap();
+        assert_eq!(all.len(), 2, "everybody sharing this plugin, and nobody sharing another");
+        assert_eq!(all["ada"], HashSet::from([1]));
+        assert_eq!(all["bob"], HashSet::from([2]));
     }
 
     #[test]

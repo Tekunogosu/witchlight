@@ -26,6 +26,7 @@ mod memory;
 mod net;
 mod palette;
 mod pending;
+mod plugins;
 mod preferences;
 mod pull;
 mod pyramid;

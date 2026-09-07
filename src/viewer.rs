@@ -33,6 +33,11 @@ pub const LEAFLET_CSS: &str = include_str!("vendor/leaflet.css");
 pub const SCRIPT: &str = concat!(
     include_str!("viewer/work.js"),
     include_str!("viewer/frame.js"),
+    // Before the windows, because `shutWindow` reads what a plugin's panel said
+    // it has to put down and a `const` cannot be read before it is initialised.
+    // Nothing here runs at load: what it declares is called when a plugin
+    // registers, which is after all of this.
+    include_str!("viewer/plugins.js"),
     include_str!("viewer/mark.js"),
     include_str!("viewer/settings.js"),
     include_str!("viewer/map.js"),
@@ -88,7 +93,7 @@ fn fingerprint(parts: &[&str]) -> String {
 
 /// The page, with the world's bounds and this build's number filled in.
 ///
-/// The version comes from the build rather than from `/info.json`, so what the
+/// The version comes from the build rather than from `/info`, so what the
 /// page shows is what compiled it — a page fetched from one build cannot report
 /// the number of another. It also versions the style and the scripts, which is
 /// what lets those be cached forever and still change when this does.
@@ -112,6 +117,158 @@ pub fn page((min_x, min_z, max_x, max_z): (i32, i32, i32, i32), refresh_ms: u64)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every address the page asks for is one the service answers.
+    ///
+    /// The page and the routes are two files that have to agree about a list of
+    /// strings, and nothing but this notices when they stop. Renaming the data
+    /// addresses to drop `.json` left four fetches behind — they were written
+    /// with a template literal rather than a plain string, so the search that
+    /// found the others missed them, and one of the four was `/info`, which is
+    /// the only thing that tells the page a map exists at all. The map drew
+    /// nothing, said nothing, and logged nothing.
+    ///
+    /// Read off the script rather than listed here, because a list here is a
+    /// third copy to keep in step with the two that already disagree.
+    #[test]
+    fn every_address_the_page_asks_for_is_one_the_service_answers() {
+        // What `routes::route` matches on, and what `urls` reads a name out of.
+        // A prefix means the rest of the path is a name or a position.
+        const ANSWERED: &[&str] = &[
+            "/", "/viewer.css", "/viewer.js", "/leaflet.js", "/leaflet.css", "/login", "/logout",
+            "/me", "/me/preferences", "/live", "/colors", "/icons", "/info", "/blocks", "/block",
+            "/plugins",
+            "/markers", "/claims", "/events", "/tiles/", "/icons/", "/chrome/", "/portraits/",
+            "/data/", "/plugins/", "/markers/", "/claims/",
+        ];
+
+        let mut missing = Vec::new();
+        // `fetch('/x')` and `fetch(`/x${...}`)` alike: what is wanted is the
+        // address, which ends at the first thing that is not part of one.
+        for (at, _) in SCRIPT.match_indices("fetch(") {
+            let rest = &SCRIPT[at + "fetch(".len()..];
+            let Some(opened) = rest.chars().next() else { continue };
+            if opened != '\'' && opened != '`' && opened != '"' {
+                continue;
+            }
+            let address: String = rest[1..]
+                .chars()
+                .take_while(|c| !matches!(c, '\'' | '`' | '"' | '?' | '$' | '{'))
+                .collect();
+            if !address.starts_with('/') {
+                continue;
+            }
+
+            let known = ANSWERED.iter().any(|answered| {
+                // A prefix is an address whose rest is a name or a position, and
+                // the page's own root is not one of those: `/` ends in a slash
+                // and would otherwise match every address there is, which is how
+                // the first version of this test passed while the map was blank.
+                if answered.len() > 1 && answered.ends_with('/') {
+                    // What follows is a name or a position, and the page usually
+                    // builds it from a variable — so the address read off the
+                    // script ends at the prefix itself.
+                    address.starts_with(answered)
+                } else {
+                    address == *answered
+                }
+            });
+            if !known {
+                missing.push(address);
+            }
+        }
+
+        missing.sort();
+        missing.dedup();
+        assert!(
+            missing.is_empty(),
+            "the page asks for {missing:?}, which the service does not answer — \
+             either the route was renamed and the page was not, or the other way about"
+        );
+    }
+
+    /// The page has to fetch the list of plugins and load each one's script.
+    ///
+    /// Both halves of the plugin system can be complete and correct and the map
+    /// still draws nothing, because a plugin's script is only ever run by the
+    /// page asking for it: the service served `/plugins/{id}/viewer.js` and the
+    /// page never requested it, so every plugin's `start` went uncalled. That
+    /// looked exactly like a broken plugin from the outside and was not one.
+    ///
+    /// The test above does not cover this. It reads addresses out of `fetch(`,
+    /// and a script is loaded by setting `src` on a tag.
+    #[test]
+    fn the_page_loads_every_registered_plugin() {
+        assert!(
+            SCRIPT.contains("fetch('/plugins'"),
+            "the page has to ask which plugins are registered"
+        );
+        assert!(
+            SCRIPT.contains("/plugins/${encodeURIComponent(id)}/viewer.js"),
+            "the page has to load each plugin's script from where the service serves it"
+        );
+        // The call, not the name: `loadPlugins` appears in the script the moment
+        // the function is declared, so a test looking for the bare name passes
+        // whether or not anything ever calls it — which is exactly the shape of
+        // the bug this test exists for.
+        assert!(
+            SCRIPT.contains("then(loadPlugins)"),
+            "and it has to actually call the loader at boot, after `pollMe` has answered"
+        );
+    }
+
+    /// What a plugin is handed, checked by name.
+    ///
+    /// A plugin is a thing outside this repository written against this list, so
+    /// a name that quietly stops being offered is somebody else's plugin that
+    /// stops working with no warning from anything here. Listed rather than
+    /// counted, because the point is which names, not how many.
+    #[test]
+    fn a_plugin_is_handed_what_it_was_promised() {
+        const OFFERED: &[&str] = &[
+            "asset:", "at,", "said,", "meant,", "me:", "layer(", "mark(", "popup(",
+            "panel(", "button(", "hotkey(", "setting(", "setSetting(", "reads:",
+            "tool(", "pointing:", "kept(", "linked(", "say(", "fetch(", "style(",
+            "sharedWith(", "shareWith(", "forget(", "beat:", "started:",
+        ];
+
+        let mut missing = Vec::new();
+        for name in OFFERED {
+            if !SCRIPT.contains(name) {
+                missing.push(*name);
+            }
+        }
+        assert!(missing.is_empty(), "a plugin is no longer handed {missing:?}");
+    }
+
+    /// The hooks a plugin's own object may answer to, called by the page.
+    ///
+    /// The other half of the contract: a plugin declares these and the page is
+    /// what calls them, so one dropped here is a plugin whose code is simply
+    /// never reached.
+    #[test]
+    fn every_hook_a_plugin_may_answer_to_is_called() {
+        for hook in ["plugin.start", "plugin.onChange", "plugin.onTerrain", "plugin.onLink"] {
+            assert!(SCRIPT.contains(hook), "nothing calls {hook}");
+        }
+    }
+
+    /// A plugin's key, switch and pane are all named for the plugin.
+    ///
+    /// Two plugins on one map must not be able to take each other's furniture by
+    /// choosing the same word for it, and the map's own must not be reachable
+    /// either — which is what the joining is for.
+    #[test]
+    fn a_plugins_furniture_is_named_for_the_plugin() {
+        assert!(
+            SCRIPT.contains("const id = `${plugin}:${name}`"),
+            "a plugin's key and switch are named for it"
+        );
+        assert!(
+            SCRIPT.contains("`plugin-${id}-${pane}`"),
+            "and so is a pane it draws into"
+        );
+    }
 
     #[test]
     fn the_page_names_the_build_and_leaves_no_placeholder_behind() {

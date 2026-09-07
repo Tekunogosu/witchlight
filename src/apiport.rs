@@ -182,7 +182,103 @@ fn posted(request: &mut Request, channel: &Channel) -> Reply {
             None => http::text(400, "expected {\"Edge\":…, \"Chunks\":[{\"X\":…, \"Z\":…, \"Season\":…, \"Record\":…}]}"),
         },
 
+        // A plugin saying what it is. Its own database is made where there is
+        // none, and a column it has added since is carried onto the table that
+        // is already there — anything else that moved is refused with its rows
+        // left alone. See `crate::plugins`.
+        other if other.starts_with("/plugins/register/") => {
+            let Some(id) = other.strip_prefix("/plugins/register/") else {
+                return http::text(404, "not found");
+            };
+            registered(channel, id, &body)
+        }
+
+        // Rows from a plugin's own collector. Whose they are is the mod's
+        // answer, taken from the player it knows, and never the plugin's.
+        other if other.starts_with("/plugins/data/") => {
+            let Some(id) = other.strip_prefix("/plugins/data/") else {
+                return http::text(404, "not found");
+            };
+            kept_rows(channel, id, &body)
+        }
+
         _ => http::text(404, "not found"),
+    }
+}
+
+/// One plugin's registration, from the mod that carries it.
+fn registered(channel: &Channel, id: &str, body: &str) -> Reply {
+    let Ok(shape) = serde_json::from_str::<crate::plugins::Shape>(body) else {
+        return http::text(400, "expected a shape: {\"columns\":{…}, \"key\":[…], \"scope\":\"owner\"}");
+    };
+
+    // What it said last time, so that a plugin registering again unchanged costs
+    // a lookup rather than a migration.
+    let was = match channel.state.store.plugin(id) {
+        Ok(found) => found.map(|(shape, _)| shape),
+        Err(error) => return http::text(500, &format!("could not read the register: {error}")),
+    };
+
+    let root = crate::plugins::plugins_dir(&channel.state.data);
+    if let Err(error) = channel.state.plugins.register(&root, id, &shape, was.as_deref()) {
+        // A plugin that will not register is a plugin whose rows are not served,
+        // which is a thing the operator has to be able to see in the log.
+        warn!("plugin {id}: {error}");
+        return http::text(400, &error.to_string());
+    }
+
+    // The declaration itself as well as its fingerprint. The fingerprint says
+    // whether a shape moved; only the declaration says what the shape is, which
+    // is what lets the service open this plugin again on its next start without
+    // waiting to be told a second time.
+    if let Err(error) =
+        channel.state.store.keep_plugin(id, &shape.fingerprint(), body, std::time::SystemTime::now())
+    {
+        return http::text(500, &format!("could not keep the registration: {error}"));
+    }
+
+    // What people had already said about sharing this plugin, read once here
+    // rather than per request. Every later change writes both the database and
+    // what is held — see `State::keep_plugin_shares`.
+    channel.state.recall_plugin_shares(id);
+
+    say!("plugin {id}: registered");
+    http::text(204, "")
+}
+
+/// Rows a plugin has collected.
+fn kept_rows(channel: &Channel, id: &str, body: &str) -> Reply {
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "PascalCase")]
+    struct Sent {
+        #[serde(default)]
+        owner: String,
+        /// What that owner is called. Sent by the mod because the mod is the
+        /// half that knows, and kept so a reader can be told whose a shared row
+        /// is without that person having to be online.
+        #[serde(default)]
+        owner_name: String,
+        #[serde(default)]
+        rows: Vec<serde_json::Value>,
+    }
+
+    let Ok(sent) = serde_json::from_str::<Sent>(body) else {
+        return http::text(400, "expected {\"Owner\":…, \"Rows\":[…]}");
+    };
+
+    let Some(plugin) = channel.state.plugins.get(id) else {
+        return http::text(404, "no plugin by that name has registered");
+    };
+
+    match plugin.write(&sent.owner, &sent.owner_name, &sent.rows) {
+        Ok(_) => {
+            // Every browser told, the way a marker's arrival is: a plugin's rows
+            // are live data and a page holding them should not wait on a clock
+            // to find out they moved.
+            channel.state.events.live_changed();
+            http::text(204, "")
+        }
+        Err(error) => http::text(500, &error.to_string()),
     }
 }
 

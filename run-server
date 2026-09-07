@@ -8,11 +8,13 @@
 #
 # The newest witchlight archive in the mod repository's dist/ is copied into the
 # testbed's Mods folder on every start, so the server always runs what was last
-# packaged. The map serves on http://127.0.0.1:8098 and the game listens on
-# 127.0.0.1:42420, which is what ./run-client connects to.
+# packaged, and so is the newest archive of every plugin repository named in
+# WITCHLIGHT_PLUGIN_REPOS. The map serves on http://127.0.0.1:8098 and the game
+# listens on 127.0.0.1:42420, which is what ./run-client connects to.
 #
-# Override where the game and the mod repository are with SERVER_DIR and
-# WITCHLIGHT_MOD_REPO; the defaults are this machine's.
+# Override where the game and the repositories are with SERVER_DIR,
+# WITCHLIGHT_MOD_REPO and WITCHLIGHT_PLUGIN_REPOS (colon-separated); the
+# defaults are this machine's.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -35,6 +37,21 @@ if [ -z "$archive" ]; then
 fi
 cp "$archive" "$data/Mods/witchlight.zip"
 echo "run-server: installed $(basename "$archive")"
+
+# Any plugin repository named in WITCHLIGHT_PLUGIN_REPOS, newest archive each,
+# so a plugin under development is tested against the map service beside it.
+# Colon-separated, like a PATH; unset means the map and nothing on it.
+for repo in $(echo "${WITCHLIGHT_PLUGIN_REPOS:-$here/../../witchlight-heatmap}" | tr ':' ' '); do
+    [ -d "$repo/dist" ] || continue
+    plugin=$(ls -1 "$repo"/dist/*.zip 2>/dev/null | grep -v _client | sort -V | tail -n 1 || true)
+    [ -n "$plugin" ] || continue
+    # Under its own modid, since two archives sharing one means the game loads
+    # neither and says so in a way that reads as three unrelated bugs.
+    modid=$(unzip -p "$plugin" modinfo.json 2>/dev/null | sed -n 's/.*"modid"[^"]*"\([^"]*\)".*/\1/p' | head -n 1)
+    [ -n "$modid" ] || continue
+    cp "$plugin" "$data/Mods/$modid.zip"
+    echo "run-server: installed $(basename "$plugin")"
+done
 
 # Only what differs from the game's own defaults; the server fills in the rest
 # and rewrites the file. Loopback and no advertising, so nothing but this

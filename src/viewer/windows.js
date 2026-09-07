@@ -281,6 +281,16 @@ function shutWindow(panel) {
   // A window shut with a row still waiting for a key is a page whose next
   // press vanishes into it.
   if (panel === profile) stopListening();
+  // A plugin's panel is not one this file knows, so it says for itself what it
+  // has to put down — see `plugins.js`.
+  const putDown = shutting.get(panel);
+  if (putDown) {
+    try {
+      putDown();
+    } catch (error) {
+      console.error('witchlight: a plugin failed on closing', error);
+    }
+  }
 }
 
 /**

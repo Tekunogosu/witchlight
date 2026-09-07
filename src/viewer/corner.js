@@ -89,7 +89,7 @@ const accountBar = cornerButton('account', 'user', 'Account', row);
  *
  * The name is its own element rather than the button's text, because the button
  * already has a child: writing a name onto the button would take the mark with
- * it. It says something before `/me.json` has answered, so the button reads as a
+ * it. It says something before `/me` has answered, so the button reads as a
  * control rather than as an empty box for the width of one request.
  */
 const accountName = document.createElement('span');
@@ -257,7 +257,7 @@ function showAccount(me) {
  *  following a login link lands back here as a fresh page. */
 async function pollMe() {
   try {
-    viewer = await (await fetch('/me.json', { cache: 'no-store' })).json();
+    viewer = await (await fetch('/me', { cache: 'no-store' })).json();
   } catch (error) {
     viewer = null;
   }

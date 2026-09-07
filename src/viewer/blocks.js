@@ -133,7 +133,7 @@ async function findBlocks() {
 
   let found = [];
   try {
-    found = await (await fetch(`/blocks.json?q=${encodeURIComponent(asked)}`)).json();
+    found = await (await fetch(`/blocks?q=${encodeURIComponent(asked)}`)).json();
   } catch (error) {
     /* the service may be restarting; an empty list says so quietly enough */
   }

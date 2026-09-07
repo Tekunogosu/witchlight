@@ -62,6 +62,14 @@ pub struct State {
     pub sessions: Arc<Sessions>,
     /// Markers asked for on the map and waiting for the mod to collect them.
     pub pending: Arc<Pending>,
+    /// Every plugin holding rows here. Empty until one registers, which is the
+    /// only thing that ever puts anything in it — nothing is loaded from disk
+    /// and no plugin code runs in this process.
+    pub plugins: Arc<crate::plugins::Plugins>,
+    /// Which groups each person shares each plugin's rows with, by plugin. Read
+    /// from the database when a plugin registers and kept, so that answering
+    /// "whose rows may this reader see" costs a lookup rather than a query.
+    plugin_shares: Mutex<HashMap<String, HashMap<String, HashSet<i32>>>>,
     /// What each person has set for themselves — their presets, and where their
     /// new markers start. Kept against a uid and written to a file of its own.
     pub preferences: Arc<Preferences>,
@@ -166,7 +174,7 @@ impl State {
             memory.set_shares(&uid, person.share_map_with.iter().copied());
         }
 
-        Ok(Self {
+        let state = Self {
             store,
             memory,
             world: RwLock::new(world),
@@ -176,6 +184,8 @@ impl State {
             live,
             sessions,
             pending: Arc::new(Pending::new()),
+            plugins: Arc::new(crate::plugins::Plugins::default()),
+            plugin_shares: Mutex::new(HashMap::new()),
             preferences,
             names: RwLock::new(crate::watch::block_names(data).unwrap_or_default()),
             named: Mutex::new(files::modified(&crate::watch::names_path(data))),
@@ -193,7 +203,110 @@ impl State {
             sea_level: std::sync::atomic::AtomicI32::new(crate::facts::read(data).sea_level),
             data: data.to_path_buf(),
             levels: Levels::new(data),
-        })
+        };
+
+        state.recall_plugins();
+        Ok(state)
+    }
+
+    /// Opens every plugin the register says is installed, as it last declared
+    /// itself.
+    ///
+    /// Done at start rather than left to the mod. A plugin registers when the
+    /// game server tells it to, which is after the map is already serving — so a
+    /// reader who opened the map first was told no such plugin had registered
+    /// and was shown nothing, for as long as it took the other half to get
+    /// around to it.
+    ///
+    /// A plugin that will not open is said and skipped. The map is the service's
+    /// and serves whether or not a plugin does.
+    fn recall_plugins(&self) {
+        let declared = match self.store.declared_plugins() {
+            Ok(found) => found,
+            Err(error) => {
+                warn!("could not read what plugins declared: {error}");
+                return;
+            }
+        };
+
+        let root = crate::plugins::plugins_dir(&self.data);
+        for (id, was, declaration) in declared {
+            let Ok(shape) = serde_json::from_str::<crate::plugins::Shape>(&declaration) else {
+                warn!("plugin {id}: what it declared is not a shape this build reads");
+                continue;
+            };
+
+            // `was` is its own fingerprint, so opening it here is never read as a
+            // shape that moved: nothing has changed since it last registered.
+            if let Err(error) = self.plugins.register(&root, &id, &shape, Some(was.as_str())) {
+                warn!("plugin {id}: {error}");
+                continue;
+            }
+
+            self.recall_plugin_shares(&id);
+            say!("plugin {id}: opened from the register");
+        }
+    }
+
+    /// Whose rows of one plugin a reader may be shown: their own, and those of
+    /// everybody who has shared that plugin with a group the reader is in.
+    ///
+    /// The same shape [`Memory::view`] answers for terrain, and deliberately not
+    /// the same answer: sharing where you have explored is not sharing what you
+    /// found there, and a reader who may see one may not see the other. Reading
+    /// this from the terrain's shares would have made a shared map leak
+    /// somebody's ore.
+    ///
+    /// Empty for a reader with no session, which is what a stranger is shown.
+    #[must_use]
+    pub fn plugin_sources(&self, plugin: &str, uid: Option<&str>) -> Vec<String> {
+        let Some(uid) = uid.filter(|uid| !uid.is_empty()) else {
+            return Vec::new();
+        };
+
+        let mut sources = vec![uid.to_owned()];
+        if let Ok(held) = self.plugin_shares.lock() {
+            if let Some(shares) = held.get(plugin) {
+                for (sharer, groups) in shares {
+                    if sharer == uid {
+                        continue;
+                    }
+                    // Whether a group the sharer named has this reader in it is
+                    // the mod's answer, already filtered of the game's own chat
+                    // channels — see `PlayerFeed.Joined` in the mod.
+                    if groups.iter().any(|group| self.memory.group_holds(*group, uid)) {
+                        sources.push(sharer.clone());
+                    }
+                }
+            }
+        }
+        sources.sort();
+        sources
+    }
+
+    /// Takes what one person has said about sharing one plugin, and keeps it.
+    pub fn keep_plugin_shares(&self, plugin: &str, uid: &str, groups: &[i32]) -> Result<()> {
+        self.store.keep_plugin_shares(plugin, uid, groups)?;
+        if let Ok(mut held) = self.plugin_shares.lock() {
+            held.entry(plugin.to_owned())
+                .or_default()
+                .insert(uid.to_owned(), groups.iter().copied().collect());
+        }
+        Ok(())
+    }
+
+    /// Reads one plugin's shares off the database into memory, which is done
+    /// when it registers and never again — every later change goes through
+    /// [`State::keep_plugin_shares`], which writes both.
+    pub fn recall_plugin_shares(&self, plugin: &str) {
+        match self.store.plugin_shares(plugin) {
+            Ok(shares) => {
+                if let Ok(mut held) = self.plugin_shares.lock() {
+                    held.insert(plugin.to_owned(), shares);
+                }
+            }
+            Err(error) => warn!("could not read who shares {plugin}: {error}"),
+        }
     }
 
     /// Where the world's oceans sit.

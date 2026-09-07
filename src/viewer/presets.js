@@ -441,10 +441,11 @@ function buildPresets() {
 function holdingPresetPick() {
   return presetPick.contains(document.activeElement)
     || presetPickButton.contains(document.activeElement);
-
-  // The window it is placed against can be dragged out from under it, and the
-  // screen can be resized under both.
-  addEventListener('resize', () => {
-    if (presetPick.classList.contains('open')) placePresetPick();
-  });
 }
+
+// The window it is placed against can be dragged out from under it, and the
+// screen can be resized under both. Outside the function above rather than
+// after its `return`, where it was unreachable and never bound at all.
+addEventListener('resize', () => {
+  if (presetPick.classList.contains('open')) placePresetPick();
+});

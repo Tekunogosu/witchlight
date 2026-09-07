@@ -360,18 +360,80 @@ function applyZoomCeiling() {
  * only way to ask for a particular view from outside the page, which is what makes
  * the zoom levels testable at all.
  */
+/**
+ * The place a link names, out of the hash.
+ *
+ * The place is the first field and anything after it belongs to whoever put it
+ * there — a plugin saying which of its layers is shown, say. Matched loosely at
+ * the end for exactly that reason: anchored to the whole hash, one extra field
+ * made this answer nothing and the map stopped honouring links altogether.
+ */
 function readAddress() {
-  const found = location.hash.match(/^#(-?\d+),(-?\d+),([\d.]+)$/);
+  const found = location.hash.match(/^#(-?\d+),(-?\d+),([\d.]+)(?:;|$)/);
   if (!found) return null;
   const perBlock = Number(found[3]);
   if (!(perBlock > 0)) return null;
   return { x: Number(found[1]), z: Number(found[2]), zoom: zoomFor(perBlock, NATIVE_ZOOM) };
 }
 
+/**
+ * What the hash carries after the place, as `name=value` by name.
+ *
+ * Everything past the first `;`. A plugin's own state lives here, so what a
+ * reader copies out of the address bar carries what they were looking at rather
+ * than only where.
+ */
+function readAddressExtras() {
+  const rest = location.hash.slice(location.hash.indexOf(';') + 1);
+  const held = new Map();
+  if (!location.hash.includes(';')) return held;
+  for (const part of rest.split(';')) {
+    if (!part) continue;
+    // Not `at`: that is the page's own position helper, and a local of that
+    // name shadows it for everything below.
+    const split = part.indexOf('=');
+    if (split <= 0) continue;
+    held.set(
+      decodeURIComponent(part.slice(0, split)),
+      decodeURIComponent(part.slice(split + 1)),
+    );
+  }
+  return held;
+}
+
+/** Replaces one name's value in the hash, leaving the place and the rest alone. */
+function keepInAddress(name, value) {
+  const extras = readAddressExtras();
+  if (value === undefined || value === null || value === '') extras.delete(name);
+  else extras.set(name, String(value));
+  addressExtras = extras;
+  writeAddress();
+}
+
+/**
+ * What is being carried past the place, held rather than read back each time.
+ *
+ * `writeAddress` runs on every pan, and reading the hash it is about to
+ * overwrite would be reading what it wrote last — so what a plugin asked to keep
+ * is held here and written out beside the place.
+ */
+let addressExtras = readAddressExtras();
+
 function writeAddress() {
   if (!terrain) return;
   const centre = map.getCenter();
   const perBlock = scaleAt(map.getZoom(), NATIVE_ZOOM).toFixed(2);
+  // Whatever is being carried past the place goes back out with it. Written
+  // rather than left alone because this replaces the whole hash: a pan that
+  // wrote only the place threw away everything a plugin had put there.
+  let rest = '';
+  for (const [name, value] of addressExtras) {
+    rest += `;${encodeURIComponent(name)}=${encodeURIComponent(value)}`;
+  }
   // Replace rather than push: panning a map should not fill the back button.
-  history.replaceState(null, '', `#${Math.round(centre.lng)},${Math.round(centre.lat)},${perBlock}`);
+  history.replaceState(
+    null,
+    '',
+    `#${Math.round(centre.lng)},${Math.round(centre.lat)},${perBlock}${rest}`,
+  );
 }

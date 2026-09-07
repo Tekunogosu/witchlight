@@ -30,7 +30,7 @@ const LIVE_BEAT = window.witchlight.refresh;
  */
 async function pollIcons() {
   try {
-    icons = new Set(await (await fetch('/icons.json')).json());
+    icons = new Set(await (await fetch('/icons')).json());
   } catch (error) {
     /* the service may be restarting */
   }
@@ -44,7 +44,7 @@ async function pollIcons() {
  */
 async function pollColours() {
   try {
-    const offered = await (await fetch('/colors.json')).json();
+    const offered = await (await fetch('/colors')).json();
     if (Array.isArray(offered) && offered.length > 0) palette = offered;
   } catch (error) {
     /* the service may be restarting */
@@ -55,7 +55,7 @@ async function pollColours() {
 async function pollLive() {
   if (pushed) return;
   try {
-    const live = await (await fetch('/live.json')).json();
+    const live = await (await fetch('/live')).json();
     await takeLive(live);
   } catch (error) {
     /* the service may be restarting */
@@ -74,7 +74,7 @@ async function takeLive(live) {
     playerColours = (live.Colors && typeof live.Colors === 'object') ? live.Colors : {};
     // Both from the same post: the claims this reader may be sent, and whether
     // the mod says they may draw one. The second rides the live poll rather than
-    // `/me.json` because it is the mod's answer and arrives when the mod does —
+    // `/me` because it is the mod's answer and arrives when the mod does —
     // a page opened before the game server was up learns it on the next beat
     // instead of needing a reload.
     claims = live.Claims || [];
@@ -118,6 +118,10 @@ async function takeLive(live) {
     drawClaims(claims);
     showClaims();
     watchClaim();
+    // On the same beat the markers are, so a plugin hears that something moved
+    // when the page does rather than on a clock of its own — and is handed what
+    // arrived, so it does not fetch the same answer a second time.
+    pluginsChanged(live);
     say();
   } catch (error) {
     /* the service may be restarting */
@@ -135,7 +139,7 @@ async function pollWorld() {
   if (pushed && generation !== 0) return;
   try {
     const query = generation === 0 ? '' : `?since=${generation}`;
-    const info = await (await fetch(`/info.json${query}`, { cache: 'no-store' })).json();
+    const info = await (await fetch(`/info${query}`, { cache: 'no-store' })).json();
     takeInfo(info);
   } catch (error) {
     /* the service may be restarting; try again next time */
@@ -179,6 +183,10 @@ function takeInfo(info) {
     // said about it was true of the map before this export, so it is asked again.
     told = null;
     started(ask(), 'looking up the block under the pointer');
+    // The ground itself moved, which is a different thing from the live beat and
+    // on a far slower clock. A plugin drawing anything worked out from the
+    // terrain had no way to hear about this at all.
+    pluginsRedrew({ generation, bounds });
     say();
   } catch (error) {
     /* a reading the page could not take is one the next will replace */
@@ -238,7 +246,11 @@ buildHotkeys();
 // After every bar that hangs in the tool column exists, including the map's own
 // zoom and the block picker — which are Leaflet's and are moved into it.
 gatherCorner();
-started(pollMe(), 'reading who is signed in');
+// After the column exists, because a plugin's button hangs in it, and after
+// `pollMe` has answered rather than merely started: a plugin reads `wl.me()` in
+// its own `start`, and one that ran first would be told there is nobody looking
+// and would quietly draw nothing that depends on who that is.
+started(pollMe().then(loadPlugins), 'reading who is signed in, then loading plugins');
 for (const setting of Object.values(settings)) setting.apply(setting.on);
 
 // A beat rather than an interval: each answer is waited for before the next

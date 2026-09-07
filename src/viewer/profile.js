@@ -66,7 +66,7 @@ async function watchMine() {
 async function pollGroups() {
   if (!(viewer && viewer.Name)) return;
   try {
-    const held = await (await fetch('/me.json', { cache: 'no-store' })).json();
+    const held = await (await fetch('/me', { cache: 'no-store' })).json();
     if (held && Array.isArray(held.Groups)) viewer.Groups = held.Groups;
   } catch (error) {
     /* what is held stands until the service answers */
@@ -80,7 +80,7 @@ async function pollMine() {
     return;
   }
   try {
-    const held = await (await fetch('/me/preferences.json', { cache: 'no-store' })).json();
+    const held = await (await fetch('/me/preferences', { cache: 'no-store' })).json();
     mine = held && typeof held === 'object' ? held : mine;
     takeHiddenMarkers();
   } catch (error) {

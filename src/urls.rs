@@ -168,6 +168,147 @@ fn stored_name<'a>(url: &'a str, prefix: &str, suffix: &str) -> Option<&'a str> 
     is_stored_name(name).then_some(name)
 }
 
+/// `/plugins/{plugin}/assets/{path}`, where the path is a file a plugin shipped.
+///
+/// The one address whose name has more than one part in it, because a plugin
+/// keeps its own files in its own shape — `assets/icons/mountains.svg` — and the
+/// service is not the half that decides what that shape is.
+///
+/// Every segment is read to the same rule a single name is, which is what makes
+/// the extra depth safe rather than a new way in: a segment that cannot be
+/// anything but itself cannot be `..`, cannot hold a separator, and cannot name
+/// anything outside the directory it is joined onto. The extension is read the
+/// same way and kept, since what a plugin serves is its own business and this
+/// says only that it is a file with a name.
+///
+/// Answered without touching the disk. Canonicalising a path and comparing it
+/// against the directory would be a second rule, kept in a second place, whose
+/// answer depends on what happens to be on the filesystem at the moment it is
+/// asked — a symlink planted between the check and the read makes it wrong. What
+/// is accepted here is decided by the bytes of the request alone.
+#[must_use]
+pub fn plugin_asset(path: &str) -> Option<(&str, &str)> {
+    let rest = path.strip_prefix("/plugins/")?;
+    let (plugin, file) = rest.split_once('/')?;
+
+    // The plugin's own name is a name like any other, so a request cannot climb
+    // out of the plugins directory before a file has even been read.
+    if !is_stored_name(plugin) {
+        return None;
+    }
+
+    let asset = file.strip_prefix("assets/")?;
+    is_asset_path(asset).then_some((plugin, asset))
+}
+
+/// `/plugins/{plugin}/viewer.js`, everything one plugin runs on the page.
+///
+/// One address rather than any file at a plugin's root, because the root is
+/// where its database lives: a rule that served what was named there would serve
+/// `data.sqlite` to anybody who asked. The script has one name and this answers
+/// for that name alone, which is why what a plugin ships for the page to show —
+/// its pictures — lives under `assets/` and is read by a rule of its own.
+///
+/// A plugin written across several files is still one address: what is served
+/// under this name is everything that plugin runs, joined and wrapped in a scope
+/// of its own by whoever answers this. A file of a plugin's is never addressable
+/// on its own, which is what keeps two plugins from reaching each other's.
+#[must_use]
+pub fn plugin_script(path: &str) -> Option<&str> {
+    let rest = path.strip_prefix("/plugins/")?;
+    let plugin = rest.strip_suffix("/viewer.js")?;
+    is_stored_name(plugin).then_some(plugin)
+}
+
+/// `/data/{plugin}`, where the name is a plugin that has registered.
+#[must_use]
+pub fn plugin_data(path: &str) -> Option<&str> {
+    let name = path.strip_prefix("/data/")?;
+    is_stored_name(name).then_some(name)
+}
+
+/// `/data/{plugin}/shares`, which groups this reader shares that plugin with.
+///
+/// Read before a row's own address, since `shares` would otherwise read as the
+/// key of a row — a plugin whose key is one text column could have a row called
+/// that, and the two must not be the same address.
+#[must_use]
+pub fn plugin_shares(path: &str) -> Option<&str> {
+    let rest = path.strip_prefix("/data/")?;
+    let name = rest.strip_suffix("/shares")?;
+    is_stored_name(name).then_some(name)
+}
+
+/// `/data/{plugin}/{key}`, where the key names one row of that plugin's.
+///
+/// The key is the values of the plugin's own key columns, in the order it
+/// declared them, separated by commas — which is what a plugin's own page has to
+/// hand, since it is what it was answered with.
+#[must_use]
+pub fn plugin_row(path: &str) -> Option<(&str, Vec<&str>)> {
+    let rest = path.strip_prefix("/data/")?;
+    let (name, key) = rest.split_once('/')?;
+    if !is_stored_name(name) || key.is_empty() {
+        return None;
+    }
+
+    // Read to the same rule the rest of a URL is: a key is values, and a value
+    // that could be anything but itself is not one this answers for.
+    let parts: Vec<&str> = key.split(',').collect();
+    parts
+        .iter()
+        .all(|part| !part.is_empty() && part.len() <= 32 && part.bytes().all(is_key_byte))
+        .then_some((name, parts))
+}
+
+/// Whether a byte may stand in the key that names one row.
+///
+/// Numbers, which is what a position is, and the letters and dashes a name or a
+/// code carries. Not a separator and not a quote: what this allows through is
+/// bound into a statement rather than written into one, and this is the belt to
+/// that brace.
+const fn is_key_byte(byte: u8) -> bool {
+    byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_' || byte == b'-'
+}
+
+/// Whether a path may be joined onto a plugin's own directory.
+///
+/// Every segment a name, the last one a name and an extension, and at most as
+/// deep as a plugin has any reason to go. Depth is capped for the same reason a
+/// name's length is: a limit nobody legitimate reaches is a limit that only ever
+/// stops somebody trying something.
+#[must_use]
+pub fn is_asset_path(path: &str) -> bool {
+    if path.is_empty() || path.len() > 128 {
+        return false;
+    }
+
+    let mut segments = path.split('/').peekable();
+    let mut depth = 0;
+
+    while let Some(segment) = segments.next() {
+        depth += 1;
+        if depth > 4 {
+            return false;
+        }
+
+        // The last segment is the file, and a file has an extension. Every one
+        // before it is a directory and is only a name.
+        if segments.peek().is_none() {
+            let Some((stem, extension)) = segment.rsplit_once('.') else {
+                return false;
+            };
+            return is_stored_name(stem) && is_stored_name(extension);
+        }
+
+        if !is_stored_name(segment) {
+            return false;
+        }
+    }
+
+    false
+}
+
 /// Whether a name may be joined onto a directory this service serves out of.
 #[must_use]
 pub fn is_stored_name(name: &str) -> bool {
@@ -176,6 +317,33 @@ pub fn is_stored_name(name: &str) -> bool {
         && name
             .bytes()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
+}
+
+/// Every range a query asks for, as `?x=-1000..1000&z=0..500`.
+///
+/// The column names are read to the same rule every other name is, so what
+/// reaches the store is a word that could be a column — whether it *is* one, and
+/// whether ranges may be asked of it, is the store's own answer, since only the
+/// plugin's declaration knows that.
+///
+/// A pair that does not read as two numbers is left out rather than refused: a
+/// query is what a page asked for, and the answer to an unreadable ask is the
+/// rows without it rather than an error nobody will see.
+#[must_use]
+pub fn ranges(url: &str) -> Vec<(String, i64, i64)> {
+    let Some((_, query)) = url.split_once('?') else {
+        return Vec::new();
+    };
+
+    query
+        .split('&')
+        .filter_map(|pair| pair.split_once('='))
+        .filter(|(name, _)| is_stored_name(name))
+        .filter_map(|(name, said)| {
+            let (low, high) = said.split_once("..")?;
+            Some((name.to_owned(), low.parse().ok()?, high.parse().ok()?))
+        })
+        .collect()
 }
 
 /// `/tiles/{level}/{x}/{z}.png`. Level 0 is one block per pixel; each level above
@@ -217,6 +385,146 @@ mod tests {
         assert!(!is_stored_name(&"a".repeat(65)), "a name has to end somewhere");
         assert_eq!(icon_name("/icons/circle.png"), None, "only svg");
         assert_eq!(icon_name("/tiles/0/0/0.png"), None, "not a tile");
+    }
+
+    /// A plugin's own files, which are the only address with depth in it. What
+    /// makes the depth safe is that every segment is read to the rule a single
+    /// name already is, so this checks the ways somebody would try to leave the
+    /// directory rather than only the shapes that ought to work.
+    #[test]
+    fn a_plugin_asset_cannot_leave_its_own_directory() {
+        assert_eq!(
+            plugin_asset("/plugins/wl-heatmap/assets/icons/mountains.svg"),
+            Some(("wl-heatmap", "icons/mountains.svg"))
+        );
+        assert_eq!(
+            plugin_asset("/plugins/wl-heatmap/assets/legend.png"),
+            Some(("wl-heatmap", "legend.png")),
+            "a file at the top of assets is still a file"
+        );
+
+        for bad in [
+            // Climbing, spelled every way it is usually spelled.
+            "/plugins/wl-heatmap/assets/../../../etc/passwd",
+            "/plugins/wl-heatmap/assets/icons/../../../map.sqlite",
+            "/plugins/wl-heatmap/assets/..%2f..%2fmap.sqlite",
+            "/plugins/../map.sqlite",
+            "/plugins/wl-heatmap/../../map.sqlite",
+            // A segment that is only dots is not a name, however many there are.
+            "/plugins/wl-heatmap/assets/../icons/a.svg",
+            "/plugins/wl-heatmap/assets/./icons/a.svg",
+            // Separators the other way round, which a filesystem may still read.
+            "/plugins/wl-heatmap/assets/icons\\..\\..\\map.sqlite",
+            // An absolute path where a relative one was expected.
+            "/plugins/wl-heatmap/assets//etc/passwd",
+            // Outside the assets directory, where a plugin keeps its database.
+            "/plugins/wl-heatmap/data.sqlite",
+            "/plugins/wl-heatmap/viewer.js",
+            // A plugin named as a path rather than as a name.
+            "/plugins/../../assets/a.svg",
+            // Nothing to serve.
+            "/plugins/wl-heatmap/assets/",
+            "/plugins/wl-heatmap/assets",
+            "/plugins/wl-heatmap/",
+            "/plugins/",
+            // A directory, not a file: no extension on the last segment.
+            "/plugins/wl-heatmap/assets/icons",
+            // A hidden file is not a name.
+            "/plugins/wl-heatmap/assets/.env",
+            // Not this address at all.
+            "/icons/circle.svg",
+        ] {
+            assert_eq!(plugin_asset(bad), None, "{bad} must not be served");
+        }
+
+        assert_eq!(
+            plugin_asset("/plugins/wl-heatmap/assets/a/b/c/d/e.svg"),
+            None,
+            "a plugin has no reason to go that deep"
+        );
+        assert!(
+            !is_asset_path(&format!("icons/{}.svg", "a".repeat(130))),
+            "a path has to end somewhere"
+        );
+        assert!(
+            !is_asset_path("icons/Mountains.svg"),
+            "the same rule about case every other stored name follows"
+        );
+    }
+
+    /// A plugin's script is one name at its root, and the root is where its
+    /// database is — so this answers for that one name and nothing else there.
+    #[test]
+    fn a_plugin_script_is_the_only_thing_served_from_its_root() {
+        assert_eq!(plugin_script("/plugins/wl-heatmap/viewer.js"), Some("wl-heatmap"));
+
+        for bad in [
+            // The database lives beside the script. Nothing may ask for it.
+            "/plugins/wl-heatmap/data.sqlite",
+            "/plugins/wl-heatmap/data.sqlite-wal",
+            "/plugins/wl-heatmap/data.shape889b.bak",
+            // Nor anything else somebody guesses at.
+            "/plugins/wl-heatmap/viewer.js.map",
+            "/plugins/wl-heatmap/../map.sqlite",
+            "/plugins/../viewer.js",
+            "/plugins//viewer.js",
+            "/plugins/wl-heatmap/sub/viewer.js",
+            "/plugins/wl-heatmap/",
+            "/plugins/viewer.js",
+        ] {
+            assert_eq!(plugin_script(bad), None, "{bad} must not be served");
+        }
+
+        // The two rules do not overlap: what one answers the other refuses.
+        assert_eq!(plugin_asset("/plugins/wl-heatmap/viewer.js"), None, "the script is not an asset");
+        assert_eq!(
+            plugin_script("/plugins/wl-heatmap/assets/icons/a.svg"),
+            None,
+            "and an asset is not the script"
+        );
+    }
+
+    /// The rule above, asked of a real directory rather than of itself.
+    ///
+    /// What the validator is for is that a path joined onto the plugins directory
+    /// stays under it, and a test that only reads the validator's own answer back
+    /// cannot say whether that is true. So this builds the directory, joins what
+    /// was allowed through, and asks the filesystem where it landed — and asserts
+    /// that what was refused would have escaped, so a validator that started
+    /// accepting everything would fail here rather than pass quietly.
+    #[test]
+    fn what_a_plugin_asset_resolves_to_stays_under_its_plugin() {
+        let scratch = crate::files::testing::Scratch::new("urls-plugin-traversal");
+        let root = scratch.at();
+        let plugins = root.join("plugins");
+        std::fs::create_dir_all(plugins.join("wl-heatmap/assets/icons")).expect("the plugin");
+        std::fs::write(root.join("map.sqlite"), b"the map").expect("something worth stealing");
+        std::fs::write(plugins.join("wl-heatmap/assets/icons/mountains.svg"), b"<svg/>").expect("an asset");
+
+        let served = |url: &str| {
+            plugin_asset(url).map(|(plugin, asset)| plugins.join(plugin).join("assets").join(asset))
+        };
+
+        let good = served("/plugins/wl-heatmap/assets/icons/mountains.svg").expect("an asset is served");
+        assert_eq!(std::fs::read(&good).expect("it reads"), b"<svg/>");
+
+        for attack in [
+            "/plugins/wl-heatmap/assets/../../../map.sqlite",
+            "/plugins/wl-heatmap/assets/icons/../../../map.sqlite",
+            "/plugins/../map.sqlite",
+            "/plugins/wl-heatmap/data.sqlite",
+        ] {
+            assert!(served(attack).is_none(), "{attack} must not be served");
+        }
+
+        // The refusals above are load-bearing, not incidental: joined without one
+        // this is the map's own database, which is the whole reason for the rule.
+        let unguarded = plugins.join("wl-heatmap/assets/../../../map.sqlite");
+        assert_eq!(
+            std::fs::read(&unguarded).ok(),
+            Some(b"the map".to_vec()),
+            "an unchecked join reaches the map, which is what the validator is between"
+        );
     }
 
     /// A player's picture is filed under a name derived from their uid, and a uid

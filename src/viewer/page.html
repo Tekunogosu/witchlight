@@ -473,6 +473,12 @@
        can be switched off. Written from `hotkeys.js`. -->
   <div id="keys"></div>
   <div id="what"></div>
+  <!-- What a plugin has to say to the reader. The map has no toast and no
+       notification stack, and a plugin with something to report — a fetch that
+       failed, a long piece of work under way — had nowhere to say it but its own
+       window, which is usually shut. One line, in the corner the map already
+       uses for saying things. -->
+  <div id="plugin-said"></div>
   <div id="waiting">loading…</div>
   <div id="where">
     <div class="read"><span class="key">x, y, z</span><span class="triple"><b id="at-x" class="wide">0</b>, <b id="at-y">—</b>, <b id="at-z" class="wide">0</b></span></div>
@@ -484,7 +490,7 @@
 </div>
 <script>
 // What the server knew at the moment it served this page, so the first paint is
-// already in the right place rather than jumping once `/info.json` answers.
+// already in the right place rather than jumping once `/info` answers.
 // The only thing substituted into the page; everything else it needs is a file
 // of its own, served whole and cached under this build's number.
 window.witchlight = {

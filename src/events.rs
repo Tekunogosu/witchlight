@@ -24,7 +24,7 @@
 //! it the page is refused and falls back to its own clock.
 //!
 //! What is answered is exactly what the two polls would have answered — the
-//! `info.json` for that reader since their last, and their `live.json` — so
+//! `info` for that reader since their last, and their `live` — so
 //! the page handles both the same way whichever road they arrived by.
 
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};

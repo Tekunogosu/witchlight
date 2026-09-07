@@ -407,7 +407,16 @@ html, body { margin: 0; height: 100%; overflow: hidden; color-scheme: dark;
           box-shadow: 0 8px 28px #000000aa;
           font-size: var(--font-md); line-height: var(--lead);
           transform: scale(var(--scale-panel)); transform-origin: top left; }
-.window.open { display: block; }
+/* A column rather than a block, so the resize strip's `margin-top: auto` has
+   something to push against: in a block layout an auto top margin is zero, and
+   the strip stayed wherever the contents ended. The children are laid out in
+   the same order and at the same widths either way — what changes is only that
+   the last of them can be told to sink. */
+.window.open { display: flex; flex-direction: column; }
+/* Nothing in a window stretches to fill it just because the box is now a
+   column. Only the strip at the end is allowed to be pushed away from its
+   neighbours, and it is the one thing here that says so. */
+.window.open > * { flex: none; }
 /* The bar is the handle. Full bleed against the window's own padding, so what
    can be grabbed is the whole strip and not a word in the middle of it. */
 .window > .bar { display: flex; align-items: center; gap: var(--gap-2);
@@ -469,10 +478,36 @@ html, body { margin: 0; height: 100%; overflow: hidden; color-scheme: dark;
 /* The corner that resizes a window. Two rules rather than a mark of its own: it
    is what every desktop draws for the same job, so a reader who has met one
    before does not have to be told what it is. */
-.grip { position: absolute; right: 0; bottom: 0; width: 18px; height: 18px;
-        padding: 0; background: none; border: none;
-        cursor: nwse-resize; touch-action: none; }
-.grip::after { content: ''; position: absolute; right: 4px; bottom: 4px;
+/* Stuck to the bottom of what can be seen rather than absolutely placed, which
+   is not a nicety: a window scrolls its own contents, and an absolutely placed
+   child of a scrolling box is placed against the *scrolled* content — so the
+   grip drifted away up the window as a reader scrolled down, and sat a
+   scrollbar's width in from the corner whenever there was one. Sticky keeps it
+   in the corner of the box the reader is actually looking at.
+
+   A block of its own the full width of the content, with the mark drawn in its
+   right-hand end. Full width rather than eighteen pixels floated over there,
+   because a sticky box is stuck within the column it is laid out in and a
+   narrow one ends up wherever the text left it. `margin-bottom` is negative by
+   its own height so the strip costs the window no height, and the negative
+   bottom and left margins pull it down and out through the window's padding.
+
+   The strip spans the window's padding on both sides so the mark reaches the
+   corner. It stops at the content's own right edge rather than being stretched
+   further, because a scrolling window takes its scrollbar's width off the
+   inside: a strip pushed out past that would put the mark underneath the bar
+   instead of beside it.
+
+   `margin-top: auto` is what puts it at the bottom of a window taller than its
+   own contents — a window given a size by the reader, where the contents end
+   partway down. Sticky alone cannot do that: it holds a box within the flow it
+   is already in, and the flow had already ended. */
+.grip { position: sticky; bottom: calc(var(--gap-4) * -1); display: block;
+        width: calc(100% + var(--gap-4) * 2);
+        height: 18px; margin: auto calc(var(--gap-4) * -1) -18px; padding: 0;
+        background: none; border: none;
+        cursor: nwse-resize; touch-action: none; z-index: 1; }
+.grip::after { content: ''; position: absolute; right: 3px; bottom: 3px;
                width: 9px; height: 9px;
                background: repeating-linear-gradient(-45deg,
                  var(--line-edge) 0 1px, transparent 1px 3px); }
@@ -623,6 +658,8 @@ html, body { margin: 0; height: 100%; overflow: hidden; color-scheme: dark;
                     mask-image: url(/chrome/users-three.svg); }
 .mark-caret-up { -webkit-mask-image: url(/chrome/caret-up.svg);
                  mask-image: url(/chrome/caret-up.svg); }
+.mark-puzzle-piece { -webkit-mask-image: url(/chrome/puzzle-piece.svg);
+                     mask-image: url(/chrome/puzzle-piece.svg); }
 .mark-plus { -webkit-mask-image: url(/chrome/plus.svg); mask-image: url(/chrome/plus.svg); }
 .mark-minus { -webkit-mask-image: url(/chrome/minus.svg); mask-image: url(/chrome/minus.svg); }
 .mark-user { -webkit-mask-image: url(/chrome/user.svg); mask-image: url(/chrome/user.svg); }
@@ -1119,6 +1156,15 @@ button.seen[disabled]:hover { background: none; }
 #waiting { display: none; font-size: var(--font-md); color: var(--text-dim); }
 #hud.waiting #waiting { display: block; }
 #hud.waiting #where { display: none; }
+/* What a plugin has to say. Nothing to say is no line, on the same rule as the
+   picker's below: a corner that keeps an empty row moves about as things come
+   and go. A plugin that reports trouble gets the same red every window on the
+   page uses for it, rather than a colour of its own. */
+#plugin-said { display: none; color: var(--text-dim); margin-bottom: 7px;
+               padding-bottom: 6px; border-bottom: 1px solid var(--line-soft); }
+#plugin-said.saying { display: block; }
+#plugin-said span { display: block; }
+#plugin-said span.wrong { color: var(--warn); }
 /* What the picker is on, under where the pointer is. Nothing to say is no
    line at all, rather than a gap that moves the corner about. */
 #what { color: var(--text-dim); margin-bottom: 7px; padding-bottom: 6px;
@@ -1324,6 +1370,14 @@ body.show-marker-names .marker .tag { display: block; }
    `--tool-square` is: the number Leaflet sizes its own bar buttons at, said once
    so a gap meant to be one button tall stays one button tall. */
 #corner #access, #corner #mine, #corner #claims { margin-bottom: var(--tool-square); }
+/* A plugin's buttons are a subject of their own and not more of the map's, so
+   they sit a button's height below what the map itself offers. The gap is put
+   on every plugin bar and taken off again where one follows another, which
+   leaves it above the first alone — so several plugins stack as one group
+   rather than drifting a button apart from each other. Written against the id
+   every plugin button carries, so nothing here knows which plugins exist. */
+#corner [id^="plugin-"] { margin-top: var(--tool-square); }
+#corner [id^="plugin-"] + [id^="plugin-"] { margin-top: 0; }
 /* What moves the map, and what reads one block of it: Leaflet's own two, last in
    the column because they are the map's rather than the reader's. Apart from
    each other by the gap the top of the column uses, since they are two subjects
@@ -1385,3 +1439,47 @@ body.show-marker-names .marker .tag { display: block; }
 #claims.may-claim .claim-make { display: grid; }
 
 .leaflet-control-attribution { display: none; }
+
+/* What a plugin draws with.
+   A plugin ships its own pictures and cannot add a rule to this file, so the
+   mask is set from script and only the size and colour are said here — which is
+   what keeps a plugin's mark the same size as the map's own however it was
+   drawn. */
+.plugin-mark { display: block; width: 18px; height: 18px; background: var(--text);
+               -webkit-mask-size: contain; mask-size: contain;
+               -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+               -webkit-mask-position: center; mask-position: center; }
+.plugin-mark.plain { border-radius: 50%; background: var(--text); opacity: .8; }
+/* Centred on the position it names, the way a waypoint's own mark is: a pin
+   drawn from its corner sits down and to the right of the block it is about. */
+.plugin-pin .plugin-mark { transform: translate(-50%, -50%); }
+/* A plugin fills this itself. Only the room it has to fill is said here. */
+.plugin-body { padding: var(--gap-3); overflow: auto; }
+/* What a plugin's mark says when it is opened. The heading, the footer and the
+   rule between them are the map's own — `said-name`, `said-may`, `said-foot` —
+   so a plugin's popup and a claim's are the same object with different words in
+   it. Only the body of rows is new, because no popup on the map had one.
+
+   Four columns: a swatch, what the row is about, a word for how much of it, and
+   a number. The name takes what it needs and the popup grows to fit rather than
+   the name giving way — a row reading `N… high 19.51 ppt` has cut the one word
+   the reader opened the popup for and kept the two they could have guessed.
+   Leaflet holds a popup to a minimum width and not a maximum, so a box a little
+   wider is a box that fits. */
+.plugin-said-rows { display: grid;
+                    grid-template-columns: 12px max-content max-content max-content;
+                    gap: var(--gap-1) var(--gap-2); align-items: center;
+                    padding: 0 var(--gap-3) var(--gap-2); }
+.plugin-said-mark { width: 10px; height: 10px; border-radius: 3px; display: block; }
+/* A row that named no colour still keeps its column, so the names beside it
+   line up with the rows that did. */
+.plugin-said-mark.plain { background: none; }
+/* Kept on one line, and never cut. What a row is about is the reason the popup
+   was opened. */
+.plugin-said-what { white-space: nowrap; }
+.plugin-said-band { font-size: var(--font-sm); color: var(--text-dim); }
+.plugin-said-note { font-size: var(--font-sm); color: var(--text-dim);
+                    font-variant-numeric: tabular-nums; }
+/* The rows sit right under the heading, so the heading gives up the padding it
+   would otherwise put between them. */
+.plugin-said .said-name { padding-bottom: var(--gap-1); }

@@ -14,7 +14,7 @@ const markerFind = document.getElementById('marker-find');
 /**
  * The markers the service last sent.
  *
- * Kept rather than asked for again. `/live.json` already carries them every two
+ * Kept rather than asked for again. `/live` already carries them every two
  * seconds and has already decided which of them this person may see, so a window
  * with a question of its own would be a second answer to a question the page has
  * asked and had answered.

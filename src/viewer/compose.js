@@ -236,7 +236,16 @@ function buildCompose() {
 
   // A right click names the spot, and what is on it names the marker. The
   // marker hotkey does the same for the block under the pointer.
-  map.on('contextmenu', event => composeAt(event.latlng));
+  //
+  // Not while a plugin has a tool armed, and not on something a plugin drew. The
+  // handler is on the map itself, so a right click anywhere reached it: a plugin
+  // whose own overlay answers a right click had the marker form open over its
+  // own answer, and one with a cursor armed had it open on every press.
+  map.on('contextmenu', event => {
+    if (pluginToolArmed()) return;
+    if (event.originalEvent && drawnByAPlugin(event.originalEvent.target)) return;
+    composeAt(event.latlng);
+  });
 
   map.on('click', event => {
     if (placing) started(settle(event.latlng), 'taking the spot that was clicked');
@@ -382,7 +391,7 @@ async function nameBlock(place) {
   const code = place.Block;
   let found = [];
   try {
-    found = await (await fetch(`/blocks.json?q=${encodeURIComponent(code)}`)).json();
+    found = await (await fetch(`/blocks?q=${encodeURIComponent(code)}`)).json();
   } catch (error) {
     return;
   }

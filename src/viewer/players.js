@@ -332,6 +332,34 @@ function linger(marker) {
   box.addEventListener('mouseleave', closeHovered);
 }
 
+/**
+ * Wires one thing on the map into the reader's hover setting.
+ *
+ * The same five lines a marker and a claim each wire for themselves, in one
+ * place so that anything else — a plugin's own mark — joins the machinery rather
+ * than growing a sixth copy of it that behaves almost the same. There is one
+ * `hovered` at a time on purpose: crossing from a marker to a claim closes the
+ * first, and a plugin's mark now takes part in that rather than leaving two
+ * boxes open at once.
+ *
+ * Nothing happens while the reader has hover switched off, which is the whole
+ * point of doing it here: a plugin cannot see that setting.
+ */
+function hoverOpens(drawn) {
+  drawn.on('mouseover', () => {
+    if (!settings.hover.on) return;
+    keepHovered();
+    hovered = drawn;
+    drawn.openPopup();
+    linger(drawn);
+  });
+  drawn.on('mouseout', () => {
+    if (hovered === drawn) closeHovered();
+  });
+  drawn.on('click', forgetHovered);
+  return drawn;
+}
+
 /** Whose view the map is keeping, if anyone's. */
 let following = null;
 

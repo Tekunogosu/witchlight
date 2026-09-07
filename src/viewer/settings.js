@@ -403,6 +403,47 @@ const switchBoxes = new Map();
  * of those used to be spelled out at the checkbox, which was fine while a
  * checkbox was the only way to reach one.
  */
+/**
+ * Adds a switch of a plugin's own to the reader's display panel.
+ *
+ * The same table the map's own switches are in, so it is drawn, remembered and
+ * read back by exactly the code that does those things for the rest — rather
+ * than by a control inside the plugin's own window, which is not where anybody
+ * looks for a thing to turn a layer off.
+ *
+ * Added after `buildSettings` has run, since a plugin registers long after the
+ * panel is built, so the row is appended here rather than waiting for a pass
+ * that has already happened. What was remembered is read now for the same
+ * reason: `recall` ran before this setting existed.
+ */
+function addPluginSetting(plugin, name, { label, on = false, panel, apply }) {
+  const id = `${plugin}:${name}`;
+  if (settings[id]) throw new Error(`witchlight: ${plugin} asked for the switch ${name} twice`);
+
+  const setting = {
+    label: String(label || name),
+    on: Boolean(on),
+    ...(panel === 'access' ? { panel: 'access' } : {}),
+    apply: typeof apply === 'function' ? apply : () => {},
+  };
+  settings[id] = setting;
+
+  // What this reader last left it at, which `recall` could not have read.
+  try {
+    const state = JSON.parse(localStorage.getItem('witchlight.settings') || '{}');
+    if (typeof state[id] === 'boolean') setting.on = state[id];
+  } catch (error) {
+    /* a browser that will not say is a browser this starts at the default */
+  }
+
+  const into = document.getElementById(setting.panel === 'access' ? 'access-panel' : 'settings');
+  if (into) into.append(switchFor(id, setting));
+
+  // Applied now rather than left for the startup pass, which is over.
+  setting.apply(setting.on);
+  return id;
+}
+
 function setSetting(name, on) {
   const setting = settings[name];
   if (!setting || setting.on === on) return;

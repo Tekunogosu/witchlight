@@ -86,6 +86,65 @@ function accent() {
   return written.trim() || '#4dd2ff';
 }
 
+/**
+ * The tools a plugin has armed, by id, each with the way to put it down.
+ *
+ * Held here because this is where the map's own two already disarm each other.
+ * That was done pairwise and by hand — a rule each new tool had to be written
+ * into twice — and a plugin arming a cursor of its own could not be written into
+ * it at all: two cursors ended up lit and one click went to whichever wired
+ * first.
+ */
+const pluginTools = new Map();
+
+/** Whether any plugin has a tool armed, which the map's own right click yields to. */
+function pluginToolArmed() {
+  return pluginTools.size > 0;
+}
+
+/**
+ * Whether an element belongs to something a plugin drew.
+ *
+ * A plugin's shapes and marks live in panes of its own, all named for the
+ * plugin — so what drew a thing is a question about which pane it is in rather
+ * than about the thing itself.
+ */
+function drawnByAPlugin(target) {
+  if (!(target instanceof Element)) return false;
+  return Boolean(target.closest('.leaflet-pane[class*="leaflet-plugin-"]'));
+}
+
+/** Puts down every plugin tool but the one named, which may be none of them. */
+function dropPluginTools(except) {
+  for (const [id, drop] of pluginTools) {
+    if (id === except) continue;
+    try {
+      drop();
+    } catch (error) {
+      console.error(`witchlight: ${id} would not put its tool down`, error);
+    }
+  }
+}
+
+/**
+ * Arms a plugin's own click-mode, putting down whatever else was armed.
+ *
+ * The one place that knows what is armed, so a tool added later is a tool the
+ * others already disarm rather than one that has to be written into each of
+ * them.
+ */
+function armPluginTool(id, on, drop) {
+  if (on) {
+    pluginTools.set(id, drop);
+    if (picking) setPicking(false);
+    if (placing) setPlacing(false);
+    dropPluginTools(id);
+  } else {
+    pluginTools.delete(id);
+  }
+  map.getContainer().classList.toggle('picking', on || picking || placing);
+}
+
 function setPicking(on) {
   picking = on;
   // Two cursors claiming the same click is one of them being ignored, so arming
@@ -93,6 +152,9 @@ function setPicking(on) {
   // one direction and not the other, leaving both buttons lit and the click
   // going to whichever was asked for first.
   if (on && placing) setPlacing(false);
+  // And the same for anything a plugin has armed, which is why they are held in
+  // one place rather than disarmed pairwise.
+  if (on) dropPluginTools(null);
   picker.show(on);
   map.getContainer().classList.toggle('picking', on);
   if (!on) forget();
@@ -151,7 +213,7 @@ async function ask() {
 
 async function lookUp(x, z) {
   try {
-    const answer = await fetch(`/block.json?x=${x}&z=${z}`, { cache: 'no-store' });
+    const answer = await fetch(`/block?x=${x}&z=${z}`, { cache: 'no-store' });
     if (!answer.ok) throw new Error(answer.status);
     return await answer.json();
   } catch (error) {
@@ -253,6 +315,11 @@ map.on('dragstart', () => {
 map.on('zoomend', keepUp);
 map.on('moveend zoomend', writeAddress);
 addEventListener('hashchange', () => {
+  // What somebody pasted may carry more than a place — a plugin's own state
+  // rides here too — and taking it now is what stops the next pan overwriting
+  // it with what this page happened to be holding.
+  addressExtras = readAddressExtras();
   const asked = readAddress();
   if (asked) map.setView(at(asked.x, asked.z), asked.zoom);
+  pluginsRelinked();
 });

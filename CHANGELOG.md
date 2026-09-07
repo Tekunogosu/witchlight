@@ -9,6 +9,141 @@ which is where that rule is kept rather than in anybody's memory.
 A version that moved for the other half says so and lists nothing, which is not an
 omission: it is what "one release" looks like from the side that did not change.
 
+## 0.52.0
+
+**Deploy note:** both halves, upgraded together; nothing is cleared. A plugin
+written against 0.51 goes on working — everything here is added.
+
+The plugin API had a pane, a mark, a window and a button, and nothing else a
+reader would recognise as part of the map. A plugin could draw, and could not
+take part in anything the reader sets. That is what this changes.
+
+- **A plugin's keys are the reader's keys.** `wl.hotkey` puts an action in the
+  map's own table, so it is pressed, listed in the reminder under the map, and
+  rebound in the account window by the same code that does those for everything
+  else — and what the reader rebinds it to is kept with the rest. A key the map
+  already answers to is never taken over; such an action arrives unbound.
+- **A plugin's switch is in the reader's display panel.** `wl.setting` adds a
+  row where a reader actually looks to turn a layer off, remembered in this
+  browser with the map's own. `wl.reads` asks what they have set.
+- **The live beat carries what it read.** `onChange` is handed the players, the
+  markers, the claims, the world clock and the beat's own interval, rather than
+  a bare nudge that left a plugin fetching `/live` a second time to learn what
+  the page had just been told. `onTerrain` says the ground itself was
+  re-exported, which nothing said before.
+- **A plugin can say something to the reader.** `wl.say` writes one line in the
+  corner the map already says things in. A plugin's own window is usually shut,
+  so a plugin reporting trouble there reported it to nobody.
+- **One tool has the next click.** `wl.tool` arms a plugin's own click-mode and
+  puts down whatever else was armed. The map's two disarmed each other pairwise
+  and by hand, which a plugin could not be written into: two cursors ended up
+  lit and the click went to whichever wired first.
+- **A plugin's mark answers to the hover setting.** It joins the map's own hover
+  machinery rather than opening a second box beside a marker's and ignoring a
+  reader who asked for neither.
+- **A link carries what a plugin put in it.** `wl.linked` keeps a plugin's own
+  state in the address. The hash regex was anchored whole, so anything appended
+  made the map stop honouring links at all, and every pan overwrote the hash —
+  both fixed, and `onLink` says when the address changed underneath.
+- **A plugin remembers what a reader set.** `wl.kept` is a namespaced, bounded
+  slot beside the map's own settings rather than a corner of `localStorage` a
+  plugin picked for itself.
+- **A right click is not always the marker form.** The handler is on the map, so
+  a plugin's own overlay had the form open over its answer, and a plugin with a
+  cursor armed had it open on every press. It now yields to both.
+- `wl.pointing` says which block is under the pointer.
+
+## 0.51.4
+
+**Deploy note:** both halves, upgraded together; nothing is cleared.
+
+- **A window's resize grip stays in its corner.** The grip was placed absolutely
+  inside a box that scrolls its own contents, so it was placed against the
+  scrolled content rather than the window: it drifted up the window as a reader
+  scrolled down — two hundred pixels adrift in a shrunk window — and sat a
+  scrollbar's width in from the edge whenever there was one. It is stuck to the
+  bottom of what can be seen instead, and sinks to the foot of a window taller
+  than its own contents.
+- **A plugin's marks get the map's own popup.** `wl.popup` builds the heading,
+  the rule and the footer every popup on this map already wears, so a plugin
+  says what it wants said rather than rebuilding the furniture around it — and
+  follows the map when that furniture changes. A row is a swatch, a name, a
+  band and a figure, and the name is never cut to fit.
+
+## 0.51.3
+
+**Deploy note:** both halves, upgraded together; nothing is cleared. A plugin
+that declares a new column carries it onto the database it already has.
+
+- **A plugin's buttons sit in a group of their own**, a button's height below
+  what the map itself offers, rather than against the block inspector as though
+  they were more of it.
+- **Two buttons a plugin makes no longer share one id.** Every button was given
+  the plugin's own name, so a plugin with more than one produced a page with
+  repeated ids. The first keeps the bare name and the rest are numbered.
+- The preset list is repositioned when the window is resized. The listener that
+  did this sat after a `return` and had never been bound at all.
+
+## 0.51.2
+
+**Deploy note:** both halves, upgraded together. The database moves from schema 4
+to 5 and is backed up before it does. Nothing is cleared.
+
+- **A plugin's script is loaded, so a plugin draws.** The page loaded its own
+  scripts and never a plugin's: the service served `/plugins/{id}/viewer.js` and
+  nothing ever asked for it, so every plugin's `start` went uncalled and every
+  plugin drew nothing. The page now asks `/plugins` which have registered and
+  loads each one's script. Both halves of the plugin system were complete and
+  correct; the link between them was missing.
+- **A plugin is opened from the register when the service starts.** Only a shape's
+  fingerprint was kept, which says whether a shape has moved and cannot say what
+  it is — so nothing could be served until the mod registered again, and a map
+  opened before that answered `no plugin by that name has registered`. What a
+  plugin declares is now kept beside its fingerprint, and read at start.
+- **A plugin's script is never cached.** Its address carries no version, and its
+  contents change whenever the plugin is reinstalled — so an hour's caching meant
+  an updated plugin went on running its old script, and the only sign was a fix
+  that appeared not to have been installed. The files a plugin ships are still
+  cached; the script is not.
+- Rows a plugin could not send are logged as a warning rather than at debug, and
+  rows that went are said. Rows held back are rows the map does not have, which is
+  what an operator is looking for when a plugin draws nothing.
+
+## 0.51.1
+
+**Deploy note:** both halves, upgraded together; nothing is cleared.
+
+- A plugin's mark is built rather than written into an attribute. A `url()` in
+  markup is a string the browser resolves against the document, so a plugin that
+  named no picture asked the browser for the page itself — which a browser
+  reports as a failed `file:///` fetch. The path is quoted as well, so one with
+  a bracket or a space in it is still one address.
+
+## 0.51.0
+
+**Deploy note:** both halves, upgraded together; nothing is cleared. **Every
+data address loses its `.json`** — `/info.json` is now `/info`, and the same for
+`/live`, `/me`, `/colors`, `/icons`, `/blocks`, `/block` and
+`/me/preferences`. Tiles, icons and portraits keep their extensions, being
+files. Anything outside this project that read those addresses needs the new
+ones; the mod and the viewer are both updated here. The database moves from
+schema 3 to 4 and is backed up before it does.
+
+- Plugins. Another mod may now keep rows on the map, ship a script the page
+  runs and pictures for it to draw with, and share what it keeps with the same
+  groups a map is shared with. A plugin declares what its rows look like and the
+  service composes every statement, so no SQL a plugin wrote reaches the
+  database; each plugin gets a database of its own under `plugins/{id}/`, so one
+  plugin cannot make the map unreadable and uninstalling one is deleting a
+  folder. Nothing a plugin does can change a drawn tile: the map is rendered
+  without asking whether a plugin exists.
+- Who may see a plugin's rows is the service's answer, worked out from the
+  reader's session and from who has shared with which group — kept per plugin
+  rather than beside the map's own sharing, since showing where you have
+  explored is not the same as showing what you found there.
+- A plugin is told when the map is open rather than having to work out when that
+  is, which is a thing only the map can know.
+
 ## 0.50.2
 
 **Deploy note:** both halves, upgraded together; nothing is cleared.

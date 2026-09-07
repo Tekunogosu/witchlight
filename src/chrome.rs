@@ -112,6 +112,11 @@ const ICONS: &[(&str, &str)] = chrome![
     // descending is the same caret turned over, and a second file would be a
     // second thing to keep pointing the right way.
     "caret-up" @ "bold",
+    // What a plugin's button wears when it has not shipped a mark of its own.
+    // A plugin may name any of the marks above, or a file it shipped; this is
+    // what is drawn when it says nothing, so that a button with no picture is
+    // still a button rather than an empty square.
+    "puzzle-piece" @ "fill",
 ];
 
 /// The icon filed under a name, if the binary carries one.

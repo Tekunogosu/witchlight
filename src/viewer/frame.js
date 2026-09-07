@@ -6,7 +6,7 @@
 // functions here and nowhere else, which is why they are tested on their own.
 
 /** What the server knew when it served the page, so the first paint is already
- *  in the right place. Everything after that comes from `/info.json`. */
+ *  in the right place. Everything after that comes from `/info`. */
 const TILE = window.witchlight.tile;
 const bounds = { ...window.witchlight.bounds };
 

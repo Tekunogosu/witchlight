@@ -37,25 +37,32 @@ pub fn route(request: &mut Request, state: &State) -> Reply {
             http::redirect("/", Some(&crate::auth::unseat()))
         }
 
-        "/me.json" => http::json(&state.me(&http::cookies(request))),
+        "/me" => http::json(&state.me(&http::cookies(request))),
         // Whose markers these are depends on who is asking, and the answer is
         // worked out here rather than sent and filtered on the page: a browser
         // cannot be asked to hide what it has already been handed.
-        "/live.json" => {
+        "/live" => {
             let who = state.sessions.who(&http::cookies(request));
             http::json(&state.live.body(who.as_ref().map(|who| who.uid.as_str()), &state.preferences.colors()))
         }
-        "/colors.json" => http::json(&state.live.colors()),
-        "/icons.json" => http::json(&state.icons()),
-        "/info.json" => {
+        // Which plugins have registered, so the page can load each one's script.
+        // Named here rather than written into the page, because a plugin
+        // registers while the server runs and a page built once would not know
+        // about one that arrived after it was built.
+        "/plugins" => http::json(
+            &serde_json::to_string(&state.plugins.names()).unwrap_or_else(|_| "[]".to_owned()),
+        ),
+        "/colors" => http::json(&state.live.colors()),
+        "/icons" => http::json(&state.icons()),
+        "/info" => {
             let who = state.sessions.who(&http::cookies(request));
             let scope = state.scope_for(who.as_ref().map(|who| who.uid.as_str()));
             http::json(&state.info(&scope, urls::since_of(&url)))
         }
-        "/blocks.json" => {
+        "/blocks" => {
             http::json(&state.blocks_like(&urls::decoded(urls::param(&url, "q").unwrap_or_default())))
         }
-        "/block.json" => match urls::block_asked(&url).map(|(x, z)| {
+        "/block" => match urls::block_asked(&url).map(|(x, z)| {
             let who = state.sessions.who(&http::cookies(request));
             state.block(&state.scope_for(who.as_ref().map(|who| who.uid.as_str())), x, z)
         }) {
@@ -66,7 +73,7 @@ pub fn route(request: &mut Request, state: &State) -> Reply {
 
         "/markers" => made(request, state),
         "/claims" => claimed(request, state),
-        "/me/preferences.json" | "/me/preferences" => preferences(request, state),
+        "/me/preferences" => preferences(request, state),
 
         _ => stored(request, state, path),
     }
@@ -104,6 +111,104 @@ fn stored(request: &mut Request, state: &State, path: &str) -> Reply {
             Method::Put => claim_changed(request, state, key),
             Method::Delete => claim_removed(request, state, key),
             _ => http::text(405, "a claim is changed with a PUT and given up with a DELETE"),
+        };
+    }
+
+    // A plugin's own rows, as this reader may see them. Whose those are is
+    // worked out here from the session, exactly as `/live` works it out for
+    // markers: a plugin says what shape its rows are and never who may read one.
+    if let Some(name) = urls::plugin_data(path) {
+        let Some(plugin) = state.plugins.get(name) else {
+            return http::text(404, "no plugin by that name has registered");
+        };
+        let who = state.sessions.who(&http::cookies(request));
+        // This plugin's own sharing, and not the terrain's: a reader who may see
+        // where somebody has been has not thereby been shown what they found
+        // there. See `State::plugin_sources`.
+        let sources = state.plugin_sources(name, who.as_ref().map(|who| who.uid.as_str()));
+        // The whole address rather than the path, because what ranges were asked
+        // for is in the query and this is the one address here that reads one.
+        let asked = urls::ranges(&request.url().to_owned());
+        return match plugin.read(&sources, &asked) {
+            Ok(body) => http::json(&body),
+            // The one thing a reader can get wrong here is asking for a range of
+            // a column the plugin never said could be asked of, and the answer
+            // says which rather than failing quietly.
+            Err(error) => http::text(400, &error.to_string()),
+        };
+    }
+
+    // Who this reader shares one plugin's rows with. Read before a row's own
+    // address, which is a longer path of the same shape.
+    if let Some(name) = urls::plugin_shares(path) {
+        if state.plugins.get(name).is_none() {
+            return http::text(404, "no plugin by that name has registered");
+        }
+        let Some(who) = state.sessions.who(&http::cookies(request)) else {
+            return http::text(401, "only somebody signed in shares anything");
+        };
+        return match *request.method() {
+            Method::Get => match state.store.plugin_shared_with(name, &who.uid) {
+                Ok(groups) => http::json(&serde_json::to_string(&groups).unwrap_or_else(|_| "[]".to_owned())),
+                Err(error) => http::text(500, &error.to_string()),
+            },
+            // The whole set at once, because this is one answer to one question
+            // and a half-written one is somebody sharing with a group they took
+            // the tick out of.
+            Method::Put => {
+                let Some(body) = http::body(request) else {
+                    return http::text(400, "unreadable body");
+                };
+                let Ok(groups) = serde_json::from_str::<Vec<i32>>(&body) else {
+                    return http::text(400, "expected an array of group ids");
+                };
+                match state.keep_plugin_shares(name, &who.uid, &groups) {
+                    Ok(()) => http::text(204, ""),
+                    Err(error) => http::text(500, &error.to_string()),
+                }
+            }
+            _ => http::text(405, "sharing is read with a GET and set with a PUT"),
+        };
+    }
+
+    // One row of a plugin's, taken away by whoever it belongs to.
+    if let Some((name, key)) = urls::plugin_row(path) {
+        if *request.method() != Method::Delete {
+            return http::text(405, "a plugin's row is taken away with a DELETE");
+        }
+        let Some(plugin) = state.plugins.get(name) else {
+            return http::text(404, "no plugin by that name has registered");
+        };
+        let Some(who) = state.sessions.who(&http::cookies(request)) else {
+            return http::text(401, "only somebody signed in may take a row away");
+        };
+        return match plugin.forget(&who.uid, &key) {
+            Ok(true) => http::text(204, ""),
+            Ok(false) => http::text(404, "no row of yours by that key"),
+            Err(error) => http::text(500, &error.to_string()),
+        };
+    }
+
+    // The script a plugin runs on the page, which is the plugin itself rather
+    // than something it ships for the page to show — so it sits at the plugin's
+    // own root beside its database, and only this one name is answered for.
+    if let Some(plugin) = urls::plugin_script(path) {
+        let root = crate::plugins::plugins_dir(&state.data);
+        return match crate::plugins::bundle(&root, plugin) {
+            Some(body) => http::plugin_script(body.as_bytes()),
+            None => http::text(404, "that plugin ships no script"),
+        };
+    }
+
+    // A file a plugin shipped for the page to show. Read off the disk rather
+    // than compiled in, which is the one place this service does that for
+    // something it did not write — a plugin cannot be compiled into a binary
+    // that shipped before it existed.
+    if let Some((plugin, asset)) = urls::plugin_asset(path) {
+        let at = crate::plugins::plugins_dir(&state.data).join(plugin).join("assets").join(asset);
+        return match std::fs::read(&at) {
+            Ok(bytes) => http::plugin_asset(&bytes, asset_type(asset)),
+            Err(_) => http::text(404, "no such file in that plugin"),
         };
     }
 
@@ -396,6 +501,27 @@ fn asked(
         return Err(http::text(400, "unreadable body"));
     };
     Ok((who, body))
+}
+
+/// What a file a plugin shipped is served as.
+///
+/// A table rather than a guess, and a plugin's own word is never one of the
+/// answers. What it is called decides what it is served as, and a name this does
+/// not know is served as bytes nobody will run: a plugin is a picture and a
+/// script this page already asked for, and anything else arriving under its own
+/// chosen type is a way to serve something that was never meant to be served.
+fn asset_type(name: &str) -> &'static str {
+    match name.rsplit_once('.').map(|(_, end)| end) {
+        Some("svg") => "image/svg+xml",
+        Some("png") => "image/png",
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("webp") => "image/webp",
+        Some("gif") => "image/gif",
+        Some("js") => "application/javascript",
+        Some("css") => "text/css",
+        Some("json") => "application/json",
+        _ => "application/octet-stream",
+    }
 }
 
 fn unknown(doing: &str) -> Reply {

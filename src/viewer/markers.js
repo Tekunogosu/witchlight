@@ -86,6 +86,7 @@ function pictureButton(name, colour, chosen, chose) {
 function setPlacing(on) {
   placing = on;
   if (on && picking) setPicking(false);
+  if (on) dropPluginTools(null);
   markerPick.classList.toggle('armed', on);
   markerPick.setAttribute('aria-pressed', String(on));
   map.getContainer().classList.toggle('picking', on || picking);

@@ -84,6 +84,29 @@ pub fn svg(bytes: &[u8]) -> Reply {
     cached(bytes, "image/svg+xml", keep::AN_HOUR)
 }
 
+/// A file a plugin shipped.
+///
+/// An hour rather than forever, the way a marker's icon is kept: these arrive
+/// with a plugin rather than with a build, so their address carries no build
+/// number to change when one of them does. An operator who has just installed a
+/// new version of a plugin should not have to explain to their players why the
+/// old picture is still there tomorrow.
+pub fn plugin_asset(bytes: &[u8], kind: &str) -> Reply {
+    cached(bytes, kind, keep::AN_HOUR)
+}
+
+/// The script a plugin runs on the page.
+///
+/// Never kept, unlike the files a plugin ships beside it. Its address carries no
+/// version — a plugin is installed by dropping a mod in a folder, so there is no
+/// build number in the path to change — and its contents change every time the
+/// plugin is reinstalled. Kept for an hour, as the assets are, an updated plugin
+/// went on running its old script in every browser that had already seen it, and
+/// the only sign was a fix that appeared not to have been installed.
+pub fn plugin_script(bytes: &[u8]) -> Reply {
+    cached(bytes, "application/javascript", keep::NEVER)
+}
+
 pub fn portrait(bytes: &[u8]) -> Reply {
     cached(bytes, "image/png", keep::A_MINUTE)
 }

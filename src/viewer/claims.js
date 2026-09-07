@@ -173,17 +173,8 @@ function answerFor(drawn, claim) {
     if (mineToChange(claim)) editClaim(claim);
     else viewClaim(claim);
   });
-  drawn.on('mouseover', () => {
-    if (!settings.hover.on) return;
-    keepHovered();
-    hovered = drawn;
-    drawn.openPopup();
-    linger(drawn);
-  });
-  drawn.on('mouseout', () => {
-    if (hovered === drawn) closeHovered();
-  });
-  drawn.on('click', forgetHovered);
+  // The reader's own hover setting, wired the one way it is wired everywhere.
+  hoverOpens(drawn);
 }
 
 /**
@@ -929,7 +920,7 @@ function showClaimsToggle() {
 /**
  * Says who may do what with the claims, on the buttons that offer it.
  *
- * Read from the live poll rather than from `/me.json`: whether somebody may draw
+ * Read from the live poll rather than from `/me`: whether somebody may draw
  * a claim is the mod's answer and arrives with the claims themselves, so a page
  * opened before the game server was up learns it on the next beat instead of
  * needing a reload.

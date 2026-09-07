@@ -246,6 +246,17 @@ impl Memory {
         self.lock().shares.insert(uid.to_owned(), groups.into_iter().collect());
     }
 
+    /// Whether one group has one person in it.
+    ///
+    /// The one question a plugin's sharing has to ask, and asked here because
+    /// which groups exist and who is in them is the mod's answer, arriving with
+    /// the player feed — already filtered of the game's own chat channels, which
+    /// every player shares and which would otherwise make every group everybody.
+    #[must_use]
+    pub fn group_holds(&self, group: i32, uid: &str) -> bool {
+        self.lock().groups.get(&group).is_some_and(|group| group.members.contains(uid))
+    }
+
     /// The groups one person is in, by id and name, for a settings form to offer.
     #[must_use]
     pub fn groups_of(&self, uid: &str) -> Vec<(i32, String)> {

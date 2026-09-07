@@ -53,8 +53,63 @@ const hotkeys = {
   },
 };
 
-/** Whether a control is on the page: hidden by a class is as absent as missing. */
+/**
+ * Adds one action a plugin has asked to answer to a key.
+ *
+ * The same table the map's own keys are in, so a plugin's key is pressed,
+ * listed under the map and rebound in the account window by exactly the code
+ * that does those things for everything else — rather than by a second
+ * implementation that would drift from it.
+ *
+ * The name is the plugin's own id and the action's, joined, because what a
+ * person rebinds is kept by name and two plugins choosing `toggle` would
+ * otherwise be one row overwriting the other's binding.
+ *
+ * A key already taken is left alone. The map's own keys are the ones a reader
+ * knows, and a plugin installed later must not quietly take one over — it is
+ * given no default instead, and the account window is where somebody gives it
+ * one.
+ */
+function addPluginHotkey(plugin, name, { label, key, offered, act }) {
+  const id = `${plugin}:${name}`;
+  if (hotkeys[id]) throw new Error(`witchlight: ${plugin} asked for the key ${name} twice`);
+
+  const wanted = typeof key === 'string' ? key : '';
+  const taken = wanted !== ''
+    && Object.values(hotkeys).some(action => action.key === wanted);
+
+  hotkeys[id] = {
+    label: String(label || name),
+    key: taken ? '' : wanted,
+    // A plugin that named nothing is offered whenever it is registered. What
+    // gates the map's own keys is a button being on the page, and a plugin that
+    // has one may say so the same way.
+    offered: typeof offered === 'function' ? offered : () => true,
+    act: typeof act === 'function' ? act : () => {},
+  };
+
+  if (taken) {
+    console.warn(
+      `witchlight: ${plugin} asked for ${keyName(wanted)}, which is already taken — `
+      + `${label || name} has no key until one is set in the account window`,
+    );
+  }
+
+  // The reminder under the map lists what is offered, and this was not offered
+  // when it was last written.
+  showHotkeys();
+  return id;
+}
+
+/**
+ * Whether a control is on the page: hidden by a class is as absent as missing.
+ *
+ * A plain `true` is an answer in itself, which is what a plugin gating its key
+ * on something other than a button returns — there is no element to measure and
+ * measuring one is not what was asked.
+ */
 function onThePage(control) {
+  if (typeof control === 'boolean') return control;
   return Boolean(control) && control.getClientRects().length > 0;
 }
 
@@ -232,12 +287,27 @@ function drawHotkeyRows(named, keepDraft) {
   // its action after it, so every key in a section stands in one column and
   // each row reads the way the reminder under the map does.
   let section = null;
-  Object.entries(hotkeys).forEach(([name, action], index) => {
-    if (index % 3 === 0) {
-      section = document.createElement('div');
-      section.className = 'keys-section';
-      rows.append(section);
+  // Which plugin's keys the open section is holding, or null while it is holding
+  // the map's own. A plugin's keys are one subject and stay together however
+  // many there are: counted off in threes with the map's own, one plugin's keys
+  // were cut across two columns with another plugin's underneath them.
+  let holding = null;
+  let ownPlaced = 0;
+  const newSection = () => {
+    section = document.createElement('div');
+    section.className = 'keys-section';
+    rows.append(section);
+  };
+
+  Object.entries(hotkeys).forEach(([name, action]) => {
+    const whose = name.includes(':') ? name.slice(0, name.indexOf(':')) : null;
+    if (whose === null) {
+      if (ownPlaced % 3 === 0) newSection();
+      ownPlaced++;
+    } else if (whose !== holding) {
+      newSection();
     }
+    holding = whose;
     const line = document.createElement('div');
     line.className = 'line';
     const label = document.createElement('span');
