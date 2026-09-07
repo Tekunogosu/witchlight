@@ -13,22 +13,22 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const viewer = join(here, '..', 'src', 'viewer');
-const read = name => readFileSync(join(here, '..', 'src', name), 'utf8');
+const viewer = join(here, '..', 'src', 'page', 'assets');
+const read = where => readFileSync(join(here, '..', 'src', where), 'utf8');
 
 // The scripts as the page runs them: one scope, in the order `viewer.rs` joins
 // them. Read from that list rather than from a copy of it, so a file added to
 // the page is a file these tests see without anyone remembering to say so.
-const order = [...read('viewer.rs').matchAll(/include_str!\("viewer\/(\w+\.js)"\)/g)]
+const order = [...read('page/viewer.rs').matchAll(/include_str!\("assets\/(\w+\.js)"\)/g)]
   .map(found => found[1]);
 if (order.length === 0) throw new Error('viewer.rs no longer lists the page scripts');
 const source = order.map(name => readFileSync(join(viewer, name), 'utf8')).join('\n');
 
 const page = readFileSync(join(viewer, 'page.html'), 'utf8');
 const style = readFileSync(join(viewer, 'style.css'), 'utf8');
-const pyramid = read('pyramid.rs');
-const pending = read('pending.rs');
-const preferences = read('preferences.rs');
+const pyramid = read('render/pyramid.rs');
+const pending = read('protocol/pending.rs');
+const preferences = read('protocol/preferences.rs');
 
 /** Lifts one function out of the viewer, brace-matched, so nothing is duplicated. */
 function lift(name) {

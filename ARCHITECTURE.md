@@ -302,12 +302,12 @@ Older versions of Witchlight stored the map as a directory of region files
 (`columns/r.{x}.{z}.msqr`), written by the mod and watched by the service. A
 service that starts with an empty database and finds those files performs a
 one-time import into the database; the format is still documented at the
-head of `src/columns.rs` for that purpose. Those files may be deleted once
+head of `src/render/columns.rs` for that purpose. Those files may be deleted once
 the import is logged as complete.
 
 **Personal maps**, in detail: under `personal_maps`, what a given player sees
 is derived from two facts the database tracks about them — see
-`src/memory.rs`. Every chunk within sight of anywhere they've stood is
+`src/mapdata/memory.rs`. Every chunk within sight of anywhere they've stood is
 *discovered*, tracked one bit per chunk. A discovered chunk that changed
 while the player was away becomes a *divergence*: a stored pointer to the
 version they last saw, kept in the database as long as anyone still points
@@ -418,8 +418,8 @@ than loaded from a CDN, so the service ships as one file that works offline
 and doesn't expose visitor information to a third party. UI icons come from
 [Phosphor](https://phosphoricons.com/), also vendored: filled silhouettes,
 matching the style of the game's own waypoint icons. Only the icons actually
-used are compiled in; see `src/chrome.rs` for that list, and
-`src/vendor/README.md` for exact vendored versions and how to update them.
+used are compiled in; see `src/page/chrome.rs` for that list, and
+`src/page/vendor/README.md` for exact vendored versions and how to update them.
 
 ### Block inspector
 
@@ -559,31 +559,30 @@ exploration stops is one of its main uses.
 
 ## Codebase layout
 
-One module per subject; shared utilities live outside anything that first
-needed them. Roughly outside-in reading order:
+Source is grouped into one directory per tier. `main`, `config`, `server` and
+`state` stay at the top: the entry point and the state every tier reaches.
 
 | | |
 |---|---|
 | `main.rs` | CLI entry point and subcommand dispatch |
-| `config.rs` | settings file plus CLI flag overrides |
+| `config.rs` `config/template.rs` | settings file plus CLI flag overrides, and the commented file it writes |
 | `server.rs` | startup: load state, bind, spawn worker threads |
-| `routes.rs` | public HTTP route table |
-| `apiport.rs` `api.rs` | the private API channel the mod posts to, and its published address |
 | `state.rs` | shared state across request threads |
-| `store.rs` | the map's own database: chunks, remembered versions, per-player exploration state |
-| `memory.rs` | per-player exploration memory and sharing rules |
-| `scope.rs` | what a given viewer is shown: full map or personal memory |
-| `events.rs` | push notifications to connected browsers |
-| `watch.rs` | detecting new palette or block-name data from the mod |
-| `feeds.rs` | JSON responses served to the page |
-| `viewer.rs` `viewer/` | the page itself: markup, styling, and script bundling |
-| `chrome.rs` | which vendored icons are compiled into the binary |
-| `columns.rs` `pyramid.rs` `render.rs` `palette.rs` `color.rs` | rendering pipeline: region files to pixels |
-| `live.rs` `pending.rs` `preferences.rs` `auth.rs` `facts.rs` `wire.rs` | protocol between the mod and the service |
-| `http.rs` `urls.rs` `cache.rs` `net.rs` `files.rs` `random.rs` `error.rs` | generic utilities with no map-specific knowledge |
+| `util/` | generic helpers with no map-specific knowledge: `error` `log` `files` `http` `urls` `cache` `net` `random` `history` `wire` |
+| `render/` | the pipeline from stored records to pixels: `columns` `palette` `color` `tiles` `pyramid` `levels` |
+| `mapdata/` | what the map holds and who sees it: `store` `memory` `scope` `facts` `stored` `plugins` |
+| `protocol/` | the channel to the server mod: `apiport` `api` `pull` `live` `pending` `preferences` `auth` `watch` |
+| `web/` | the public HTTP interface: `routes` `feeds` `events` |
+| `page/` | the page itself: `viewer` `chrome`, with `assets/` and `vendor/` beside them |
 
-The last row imports nothing from the rows above it. That's what keeps those
-modules reusable, and it's worth preserving when adding new code.
+`util/` imports nothing from the tiers above it. That is what keeps those
+modules reusable, and `tests/layers.rs` checks it by reading the directory
+rather than a list anyone has to maintain.
+
+The grid arithmetic every tier shares — which region a chunk is in, which slot
+a chunk takes in its region, and the bitset those slots index — lives in
+`render/columns.rs` beside the `REGION_CHUNKS` constant it is arithmetic over.
+`mapdata/store.rs` re-exports it for its own callers.
 
 ## Testing
 
@@ -594,11 +593,11 @@ node tests/viewer.mjs          # just the viewer tests, with verbose output
 ```
 
 The viewer is plain JavaScript and is tested as JavaScript: `tests/viewer.mjs`
-imports the functions directly from `src/viewer/*.js` and exercises them,
+imports the functions directly from `src/page/assets/*.js` and exercises them,
 rather than maintaining a separate reimplementation to test against — a
 reimplementation can pass while the real page is broken, which is how a
 missing clamp once shipped in `draw` undetected. The test file list is read
-from `src/viewer.rs`, so any script added to the page is automatically
+from `src/page/viewer.rs`, so any script added to the page is automatically
 covered. `cargo test` shells out to `node` for this and reports clearly if
 it's missing.
 

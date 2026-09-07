@@ -1,14 +1,15 @@
-//! The map as it currently stands.
+//! Holds the map's current state.
 //!
-//! One value the request threads share, holding what has been loaded off disk
-//! and what has been drawn from it. Everything that changes it is behind a lock
-//! of its own, because the parts move on different clocks: the world when the
-//! mod exports, the palette when an admin joins, the tiles whenever either does.
+//! [`State`] is the one value the request threads share. It holds what was
+//! loaded off disk and what has been drawn from it. Each mutable part sits
+//! behind its own lock, because the parts change on different schedules: the
+//! world when the mod exports, the palette when an admin joins, and the tiles
+//! whenever either does.
 //!
-//! What it holds is here. Terrain arrives through [`State::take_chunks`] from
-//! [`crate::apiport`] and [`crate::pull`]; noticing that the palette or the
-//! names on disk have moved is in [`crate::watch`], and what the page is told is
-//! in [`crate::feeds`].
+//! Terrain arrives through [`State::take_chunks`] from
+//! [`crate::protocol::apiport`] and [`crate::protocol::pull`].
+//! [`crate::protocol::watch`] notices when the palette or the block names on
+//! disk change. [`crate::web::feeds`] builds what the page is told.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -18,108 +19,125 @@ use std::time::SystemTime;
 
 use image::RgbImage;
 
-use crate::auth::{Keeping, Sessions};
-use crate::cache::{At, Cache};
-use crate::columns::{Chunk, World, columns_dir};
-use crate::events::Events;
+use crate::protocol::auth::{Keeping, Sessions};
+use crate::util::cache::{At, Cache};
+use crate::render::columns::{Chunk, World, columns_dir};
+use crate::web::events::Events;
 use crate::config::Rules;
-use crate::error::{Error, Result};
-use crate::files;
-use crate::history::History;
-use crate::levels::Levels;
-use crate::live::Live;
-use crate::memory::Memory;
-use crate::palette::Palette;
-use crate::pending::Pending;
-use crate::preferences::Preferences;
-use crate::pyramid::{self, TILE, TileFormat};
-use crate::render::{Renderer, UNMAPPED};
-use crate::store::{self, Arrived, Store, Stored, Version};
-use crate::log::{say, warn};
+use crate::util::error::{Error, Result};
+use crate::util::files;
+use crate::util::history::History;
+use crate::render::levels::Levels;
+use crate::protocol::live::Live;
+use crate::mapdata::memory::Memory;
+use crate::render::palette::Palette;
+use crate::protocol::pending::Pending;
+use crate::protocol::preferences::Preferences;
+use crate::render::pyramid::{self, TILE, TileFormat};
+use crate::render::tiles::{Renderer, UNMAPPED};
+use crate::mapdata::store::{self, Arrived, Store, Stored, Version};
+use crate::util::log::{say, warn};
 
-/// Which tiles one generation changed, as level and coordinates. `None` means
-/// every tile: a new palette recolours the lot, and so does a gap in the history.
+/// Lists the tiles one generation changed, as level and coordinates. `None`
+/// means every tile, which is what a new palette or a gap in the history causes.
 pub type Changed = Option<Vec<At>>;
+
+/// One drawn chunk in the patch cache: where it is, which version it shows, and
+/// the season it was drawn in. All three decide the picture, so all three key it.
+pub type PatchKey = ((i32, i32), Version, u8);
+
+/// A chunk together with the coordinate it sits at.
+type PlacedChunk<'a> = ((i32, i32), &'a Chunk);
 
 pub struct State {
     pub data: PathBuf,
     /// The zoom levels above the finest, in memory and on disk.
     pub levels: Levels,
-    /// The map on disk: every chunk, every remembered version, and what each
-    /// person has seen. What `world` holds is this, read at start.
+    /// The map on disk, holding every chunk, every remembered version, and
+    /// what each person has seen. `world` is this, read at startup.
     pub store: Arc<Store>,
-    /// What each person remembers of the map, and who shares it with whom.
+    /// Records what each person remembers of the map, and who shares it with
+    /// whom.
     pub memory: Arc<Memory>,
     pub world: RwLock<World>,
-    /// Reloaded like the world is. A palette can arrive long after start-up —
-    /// an admin's client sends one when the server cannot build its own — and
-    /// waiting for a restart to notice would make the map look broken.
+    /// The block colour palette, reloaded like the world is. A palette can
+    /// arrive long after startup, because an admin's client sends one when the
+    /// server cannot build its own. Waiting for a restart to notice would leave
+    /// the map looking broken.
     pub palette: RwLock<Palette>,
-    /// Who is online and every marker, posted by the mod rather than read from a
-    /// file it rewrote every couple of seconds.
+    /// Holds who is online and every marker. The mod posts these rather than
+    /// rewriting a file every couple of seconds.
     pub live: Arc<Live>,
-    /// Who has followed a login link. Memory only — see [`crate::auth`].
+    /// Tracks who has followed a login link. Held in memory only. See
+    /// [`crate::protocol::auth`].
     pub sessions: Arc<Sessions>,
-    /// Markers asked for on the map and waiting for the mod to collect them.
+    /// Holds markers asked for on the map that the mod has not yet collected.
     pub pending: Arc<Pending>,
-    /// Every plugin holding rows here. Empty until one registers, which is the
-    /// only thing that ever puts anything in it — nothing is loaded from disk
-    /// and no plugin code runs in this process.
-    pub plugins: Arc<crate::plugins::Plugins>,
-    /// Which groups each person shares each plugin's rows with, by plugin. Read
-    /// from the database when a plugin registers and kept, so that answering
-    /// "whose rows may this reader see" costs a lookup rather than a query.
+    /// Holds every plugin keeping rows here. It is empty until a plugin
+    /// registers. Registration is the only thing that adds to it. Nothing is
+    /// loaded from disk and no plugin code runs in this process.
+    pub plugins: Arc<crate::mapdata::plugins::Plugins>,
+    /// Records which groups each person shares each plugin's rows with, keyed
+    /// by plugin. It is read from the database when a plugin registers and then
+    /// held, so deciding whose rows a reader may see costs a lookup rather than
+    /// a query.
     plugin_shares: Mutex<HashMap<String, HashMap<String, HashSet<i32>>>>,
-    /// What each person has set for themselves — their presets, and where their
-    /// new markers start. Kept against a uid and written to a file of its own.
+    /// Holds each person's own settings, such as their presets and where their
+    /// new markers start. Keyed by uid and written to its own file.
     pub preferences: Arc<Preferences>,
-    /// What the game calls each block, so that marking something can start from
-    /// its name. Empty until the mod has exported one, and reloaded when it does.
+    /// Maps each block code to the name the game shows, so marking something
+    /// can start from its name. It is empty until the mod exports the names, and
+    /// is reloaded when the mod rewrites them.
     pub names: RwLock<HashMap<String, String>>,
-    /// The names file's own timestamp, which is the whole signal that it moved.
+    /// The block names file's modification time. A change to it is the only
+    /// signal that the names were rewritten.
     pub named: Mutex<Option<SystemTime>>,
-    /// What the operator has said about who markers belong to. Read here only to
-    /// tell the page which controls to offer; the mod is what enforces either.
+    /// Holds the operator's visibility and ownership settings. This service
+    /// reads them only to decide which controls the page offers. The mod
+    /// enforces them.
     pub rules: Rules,
     /// The palette file's own timestamp.
     pub painted: Mutex<Option<SystemTime>>,
-    /// When the ground in each region last changed, read from the database and
-    /// moved as terrain arrives. What decides whether the stored zoom levels
-    /// above a region are behind it.
+    /// Records when the ground in each region last changed. It is read from the
+    /// database and updated as terrain arrives. Comparing it against a stored
+    /// zoom level decides whether that level is behind its region.
     pub regions: Mutex<HashMap<(i32, i32), SystemTime>>,
-    /// Bumped whenever the world actually changes. The viewer watches this and
-    /// it versions tile URLs, which is what gets a new map past the browser cache.
-    /// Where the world's oceans sit, as the mod last said.
+    /// The height of the world's oceans, as the mod last reported it.
     ///
-    /// Held rather than read, because every tile drawn asks for it and it changes
-    /// only when a different world is loaded. Refreshed on the same beat the
-    /// regions are.
+    /// Held in memory rather than read per use, because every tile drawn asks
+    /// for it and it changes only when a different world is loaded. It is
+    /// refreshed on the same schedule as the region times.
     sea_level: std::sync::atomic::AtomicI32,
+    /// Increments whenever the world changes. The viewer watches this, and it
+    /// versions tile URLs so a new map gets past the browser cache.
     generation: AtomicU64,
-    /// Which tiles each generation changed, so a viewer that has fallen a few
-    /// generations behind can repaint those and leave the rest of the map alone.
+    /// Records which tiles each generation changed, so a viewer a few
+    /// generations behind repaints only those and leaves the rest alone.
     history: Mutex<History<Changed>>,
-    /// Level 0 tiles whose levels above are out of date. Drained by the builder,
-    /// so many changes in one window cost one rebuild rather than many.
+    /// Holds level 0 tiles whose levels above are out of date. The builder
+    /// drains it, so many changes in one window cost one rebuild.
     pub stale: Mutex<HashSet<(i32, i32)>>,
-    /// Tiles served since the last report, and how many of them had to be
-    /// drawn or encoded rather than handed out of the cache — see
+    /// Counts tiles served since the last report, and how many had to be drawn
+    /// or encoded rather than served from the cache. See
     /// [`report_serving`](Self::report_serving).
     served: AtomicU64,
     drawn: AtomicU64,
-    /// Level 0 tiles that changed and no browser has been told of yet.
+    /// Holds level 0 tiles that changed and that no browser has been told of.
     unannounced: Mutex<HashSet<At>>,
-    /// Regions in which each person's own memory changed and they have not
-    /// been told of yet — announced on the same beat as the tiles.
+    /// Holds, per person, the regions in which their own memory changed and
+    /// they have not been told. These are announced with the tiles.
     unannounced_of: Mutex<HashMap<String, HashSet<(i32, i32)>>>,
     pub cache: Mutex<Cache>,
-    /// Remembered chunks as pictures, by chunk, version and season: a reader
-    /// away from ground that changed is shown the version they last saw, and a
-    /// coarse tile over a long absence holds a hundred of those. Rendering each
-    /// from the database on every request was most of what such a tile cost;
-    /// a patch is a few kilobytes and the version it shows never changes.
-    pub patches: Mutex<HashMap<((i32, i32), Version, u8), Arc<RgbImage>>>,
-    /// Every browser waiting to be told of a change. See [`crate::events`].
+    /// Caches remembered chunks as images, keyed by chunk, version and season.
+    ///
+    /// A reader away from ground that changed sees the version they last saw,
+    /// and a coarse tile over a long absence holds a hundred such versions.
+    /// Rendering each from the database per request dominated the cost of such a
+    /// tile. A cached image is a few kilobytes and the version it shows never
+    /// changes.
+    pub patches: Mutex<HashMap<PatchKey, Arc<RgbImage>>>,
+    /// Holds every browser waiting to be told of a change. See
+    /// [`crate::web::events`].
     pub events: Events,
 }
 
@@ -130,12 +148,12 @@ impl State {
 
         let store = Store::open(data)?;
         let world = if store.is_empty()? {
-            // A database with nothing in it and region files beside it is a
-            // server upgraded from a build whose map lived in those files. They
-            // are read once, in full, and become the database; from then on the
-            // database is the map and the files are what the mod last wrote.
-            // Each region is dated by its file, so the zoom levels already built
-            // from it are not rebuilt for having been imported.
+            // An empty database with region files beside it means a server
+            // upgraded from a build whose map lived in those files. Read them
+            // once in full into the database. From then on the database is the
+            // map and the files are only what the mod last wrote. Each region
+            // keeps its file's date, so zoom levels already built from it are
+            // not rebuilt just because it was imported.
             let world = World::load(data)?;
             let times = region_times(&columns);
             for (at, chunks) in by_region(&world) {
@@ -180,15 +198,15 @@ impl State {
             world: RwLock::new(world),
             palette: RwLock::new(palette),
             regions: Mutex::new(regions),
-            painted: Mutex::new(files::modified(&crate::palette::path_in(data))),
+            painted: Mutex::new(files::modified(&crate::render::palette::path_in(data))),
             live,
             sessions,
             pending: Arc::new(Pending::new()),
-            plugins: Arc::new(crate::plugins::Plugins::default()),
+            plugins: Arc::new(crate::mapdata::plugins::Plugins::default()),
             plugin_shares: Mutex::new(HashMap::new()),
             preferences,
-            names: RwLock::new(crate::watch::block_names(data).unwrap_or_default()),
-            named: Mutex::new(files::modified(&crate::watch::names_path(data))),
+            names: RwLock::new(crate::protocol::watch::block_names(data).unwrap_or_default()),
+            named: Mutex::new(files::modified(&crate::protocol::watch::names_path(data))),
             rules,
             generation: AtomicU64::new(1),
             history: Mutex::new(History::default()),
@@ -200,7 +218,7 @@ impl State {
             cache: Mutex::new(Cache::new(cache_bytes)),
             patches: Mutex::new(HashMap::new()),
             events: Events::default(),
-            sea_level: std::sync::atomic::AtomicI32::new(crate::facts::read(data).sea_level),
+            sea_level: std::sync::atomic::AtomicI32::new(crate::mapdata::facts::read(data).sea_level),
             data: data.to_path_buf(),
             levels: Levels::new(data),
         };
@@ -209,17 +227,15 @@ impl State {
         Ok(state)
     }
 
-    /// Opens every plugin the register says is installed, as it last declared
-    /// itself.
+    /// Opens every plugin the register lists, using the shape it last declared.
     ///
-    /// Done at start rather than left to the mod. A plugin registers when the
-    /// game server tells it to, which is after the map is already serving — so a
-    /// reader who opened the map first was told no such plugin had registered
-    /// and was shown nothing, for as long as it took the other half to get
-    /// around to it.
+    /// This runs at startup rather than waiting for the mod. A plugin registers
+    /// only when the game server tells it to, which happens after the map is
+    /// already serving, so a reader who opened the map first would see nothing
+    /// from that plugin until then.
     ///
-    /// A plugin that will not open is said and skipped. The map is the service's
-    /// and serves whether or not a plugin does.
+    /// A plugin that fails to open is logged and skipped. The map serves either
+    /// way.
     fn recall_plugins(&self) {
         let declared = match self.store.declared_plugins() {
             Ok(found) => found,
@@ -229,15 +245,15 @@ impl State {
             }
         };
 
-        let root = crate::plugins::plugins_dir(&self.data);
+        let root = crate::mapdata::plugins::plugins_dir(&self.data);
         for (id, was, declaration) in declared {
-            let Ok(shape) = serde_json::from_str::<crate::plugins::Shape>(&declaration) else {
+            let Ok(shape) = serde_json::from_str::<crate::mapdata::plugins::Shape>(&declaration) else {
                 warn!("plugin {id}: what it declared is not a shape this build reads");
                 continue;
             };
 
-            // `was` is its own fingerprint, so opening it here is never read as a
-            // shape that moved: nothing has changed since it last registered.
+            // `was` is the plugin's own fingerprint, so opening it here is
+            // never read as a shape that changed.
             if let Err(error) = self.plugins.register(&root, &id, &shape, Some(was.as_str())) {
                 warn!("plugin {id}: {error}");
                 continue;
@@ -248,43 +264,35 @@ impl State {
         }
     }
 
-    /// Whose rows of one plugin a reader may be shown: their own, and those of
-    /// everybody who has shared that plugin with a group the reader is in.
+    /// Returns whose rows of one plugin a reader may see: their own, plus those
+    /// of everyone who shared that plugin with a group the reader is in.
     ///
-    /// The same shape [`Memory::view`] answers for terrain, and deliberately not
-    /// the same answer: sharing where you have explored is not sharing what you
-    /// found there, and a reader who may see one may not see the other. Reading
-    /// this from the terrain's shares would have made a shared map leak
-    /// somebody's ore.
+    /// [`Memory::view`] answers the same question for terrain, and the two
+    /// answers are kept separate on purpose. Sharing where you explored is not
+    /// sharing what you found there, so deriving this from the terrain shares
+    /// would let a shared map leak someone's ore.
     ///
-    /// Empty for a reader with no session, which is what a stranger is shown.
+    /// Returns empty for a reader with no session, which is what a stranger
+    /// sees.
     #[must_use]
     pub fn plugin_sources(&self, plugin: &str, uid: Option<&str>) -> Vec<String> {
         let Some(uid) = uid.filter(|uid| !uid.is_empty()) else {
             return Vec::new();
         };
 
-        let mut sources = vec![uid.to_owned()];
-        if let Ok(held) = self.plugin_shares.lock() {
-            if let Some(shares) = held.get(plugin) {
-                for (sharer, groups) in shares {
-                    if sharer == uid {
-                        continue;
-                    }
-                    // Whether a group the sharer named has this reader in it is
-                    // the mod's answer, already filtered of the game's own chat
-                    // channels — see `PlayerFeed.Joined` in the mod.
-                    if groups.iter().any(|group| self.memory.group_holds(*group, uid)) {
-                        sources.push(sharer.clone());
-                    }
-                }
-            }
+        // The mod decides group membership and has already filtered out the
+        // game's own chat channels. See `PlayerFeed.Joined` in the mod.
+        let holds = |group: &i32| self.memory.group_holds(*group, uid);
+        match self.plugin_shares.lock() {
+            Ok(held) => match held.get(plugin) {
+                Some(shares) => crate::mapdata::memory::sources_from(shares, uid, holds),
+                None => vec![uid.to_owned()],
+            },
+            Err(_) => vec![uid.to_owned()],
         }
-        sources.sort();
-        sources
     }
 
-    /// Takes what one person has said about sharing one plugin, and keeps it.
+    /// Stores one person's sharing settings for one plugin.
     pub fn keep_plugin_shares(&self, plugin: &str, uid: &str, groups: &[i32]) -> Result<()> {
         self.store.keep_plugin_shares(plugin, uid, groups)?;
         if let Ok(mut held) = self.plugin_shares.lock() {
@@ -295,9 +303,10 @@ impl State {
         Ok(())
     }
 
-    /// Reads one plugin's shares off the database into memory, which is done
-    /// when it registers and never again — every later change goes through
-    /// [`State::keep_plugin_shares`], which writes both.
+    /// Reads one plugin's shares from the database into memory.
+    ///
+    /// This runs once, when the plugin registers. Every later change goes
+    /// through [`State::keep_plugin_shares`], which writes both copies.
     pub fn recall_plugin_shares(&self, plugin: &str) {
         match self.store.plugin_shares(plugin) {
             Ok(shares) => {
@@ -309,32 +318,32 @@ impl State {
         }
     }
 
-    /// Where the world's oceans sit.
+    /// Returns the height of the world's oceans.
     #[must_use]
     pub fn sea_level(&self) -> i32 {
         self.sea_level.load(Ordering::Relaxed)
     }
 
-    /// Takes the sea level again, for a world that has said it since start-up.
+    /// Re-reads the sea level, for a world that reported it after startup.
     pub fn resettle_sea_level(&self) {
-        self.sea_level.store(crate::facts::read(&self.data).sea_level, Ordering::Relaxed);
+        self.sea_level.store(crate::mapdata::facts::read(&self.data).sea_level, Ordering::Relaxed);
         self.forget_patches();
     }
 
-    /// Forgets every rendered patch: the colours changed under them.
+    /// Drops every cached patch image, because the colours under them changed.
     pub fn forget_patches(&self) {
         if let Ok(mut patches) = self.patches.lock() {
             patches.clear();
         }
     }
 
-    /// Takes chunks that arrived, wherever from: into the database first and
-    /// then into the world, so that what is served is never ahead of what is
-    /// kept. Says what each did to the map, for whoever remembers the ground.
+    /// Stores chunks that arrived, into the database first and then into the
+    /// world, so what is served is never ahead of what is kept. Returns what
+    /// each chunk did to the map.
     ///
-    /// The one door terrain comes in by. A record the mod pushed and a column
-    /// the puller fetched both pass through here, which is what makes the
-    /// database the map rather than one more copy of it.
+    /// All terrain enters through this function. A record the mod pushed and a
+    /// column the puller fetched both pass through here, which keeps the
+    /// database authoritative.
     pub fn take_chunks(&self, edge: usize, arrived: &[Arrived], at: SystemTime) -> Vec<Stored> {
         if arrived.is_empty() {
             return Vec::new();
@@ -364,8 +373,8 @@ impl State {
         stored
     }
 
-    /// Moves a chunk's season: the year turning under ground that has not.
-    /// Says whether anything moved, which is whether the tile wants drawing.
+    /// Changes a chunk's season, leaving its terrain alone. Returns true when
+    /// the season actually changed, which means the tile needs redrawing.
     pub fn take_season(&self, cx: i32, cz: i32, season: u8) -> bool {
         match self.store.set_season(cx, cz, season) {
             Ok(false) => return false,
@@ -383,19 +392,19 @@ impl State {
         true
     }
 
-    /// Says that the ground in these tiles has changed, so that a browser is
-    /// told at once and the levels above are rebuilt on their own beat.
+    /// Records that the ground in these tiles changed, so browsers are told and
+    /// the levels above are rebuilt on their own schedule.
     ///
-    /// A region is a level 0 tile, and slope shading reads the column to the
-    /// west and north of each pixel — so a region drawn also changes the western
+    /// A region is a level 0 tile. Slope shading reads the column to the west
+    /// and north of each pixel, so redrawing a region also changes the western
     /// edge of the tile east of it and the northern edge of the tile below.
     ///
-    /// Level 0 is forgotten here and now, so the next request for it draws the
-    /// world as it is — and announced on the next beat of [`announce`](Self::announce),
-    /// so that ground arriving a few chunks at a time costs a browser one
-    /// repaint of a tile per beat rather than one per arrival. The levels above
-    /// are announced by the builder when it has made them, so a viewer is never
-    /// sent a coarse tile that is older than the fine one under it.
+    /// Level 0 is dropped from the cache immediately, so the next request for it
+    /// draws the world as it is. It is announced on the next call to
+    /// [`announce`](Self::announce), so terrain arriving a few chunks at a time
+    /// costs a browser one repaint per beat rather than one per arrival. The
+    /// builder announces the levels above once it has built them, so a viewer is
+    /// never sent a coarse tile older than the fine one under it.
     pub fn tiles_changed(&self, regions: impl IntoIterator<Item = (i32, i32)>) {
         let mut repaint: Vec<(i32, i32)> =
             regions.into_iter().flat_map(|(rx, rz)| [(rx, rz), (rx + 1, rz), (rx, rz + 1)]).collect();
@@ -413,13 +422,13 @@ impl State {
         }
     }
 
-    /// Tells every browser what has changed since it last said so — which
-    /// level 0 tiles for everybody, and which regions for each person alone —
-    /// once per beat, however many arrivals and discoveries the beat held.
-    /// Nothing is said on a beat where nothing moved, so the map's clock never
-    /// turns for nothing. One generation for the lot: forty people exploring
-    /// used to turn the clock forty times as often, and every turn was one more
-    /// address a browser could not find in its cache.
+    /// Tells every browser what changed since the last call: which level 0
+    /// tiles for everybody, and which regions for each person alone.
+    ///
+    /// One call announces everything the interval accumulated, under a single
+    /// generation. A beat where nothing moved announces nothing, so the
+    /// generation counter never advances for nothing. Each advance invalidates
+    /// every browser's cached tile addresses, so batching matters.
     pub fn announce(&self) {
         let changed: Vec<At> = {
             let Ok(mut unannounced) = self.unannounced.lock() else { return };
@@ -447,19 +456,20 @@ impl State {
         }
     }
 
-    /// The same, for chunks that were just stored — and everybody who was not
-    /// there keeps the version they last saw.
+    /// Announces chunks that were just stored. Anyone who was not there keeps
+    /// the version they last saw.
     pub fn terrain_changed(&self, stored: &[Stored]) {
         self.tiles_changed(stored.iter().map(|one| store::region_of(one.cx, one.cz)));
-        // What moved for each person alone, beside what moved for everybody.
+        // Record what moved for each person alone, beside what moved for
+        // everybody.
         for (uid, regions) in self.memory.changed(stored) {
             self.memory_changed(&uid, regions);
         }
     }
 
-    /// Notes that one person's own memory changed in these regions: their
-    /// composed tiles there are forgotten now, and they are told on the next
-    /// beat — see [`announce`](Self::announce).
+    /// Records that one person's own memory changed in these regions. Their
+    /// composed tiles there are dropped now, and they are told on the next call
+    /// to [`announce`](Self::announce).
     fn memory_changed(&self, uid: &str, regions: Vec<(i32, i32)>) {
         self.drop_remembered(uid, &regions);
         if let Ok(mut unannounced) = self.unannounced_of.lock() {
@@ -467,10 +477,10 @@ impl State {
         }
     }
 
-    /// Takes what one person has set for themselves, and what follows from it:
-    /// whom their map is shared with is read from here by everything that draws
-    /// one, so it moves the moment the setting does.
-    pub fn keep_person(&self, uid: &str, person: crate::preferences::Person) -> bool {
+    /// Stores one person's own settings and applies what follows from them.
+    /// Everything that draws a map reads the share list from here, so a change
+    /// takes effect at once.
+    pub fn keep_person(&self, uid: &str, person: crate::protocol::preferences::Person) -> bool {
         let shares: Vec<i32> = person.share_map_with.clone();
         if !self.preferences.set(uid, person) {
             return false;
@@ -479,12 +489,12 @@ impl State {
         true
     }
 
-    /// Takes where somebody is standing: everything within `radius` chunks is
-    /// theirs to see, now and from now on.
+    /// Records where somebody is standing. Everything within `radius` chunks
+    /// becomes theirs to see, from now on.
     pub fn seen_from(&self, uid: &str, x: i32, z: i32, radius: i32) {
         let edge = self.chunk_edge().max(1) as i32;
         let (cx, cz) = (x.div_euclid(edge), z.div_euclid(edge));
-        let sight: Vec<(i32, i32)> = crate::columns::disc_of((cx, cz), radius).collect();
+        let sight: Vec<(i32, i32)> = crate::render::columns::disc_of((cx, cz), radius).collect();
         if let Some(regions) = self.memory.saw(uid, &sight) {
             self.memory_changed(uid, regions);
         }
@@ -504,11 +514,11 @@ impl State {
         generation
     }
 
-    /// What a viewer last at `since` needs to repaint.
+    /// Returns the tiles a viewer last at generation `since` needs to repaint.
     ///
-    /// `None` means everything: either the palette changed, or the viewer has
-    /// fallen further behind than the history goes and there is no honest way to
-    /// tell it which tiles it missed.
+    /// Returns `None` to mean every tile. That happens when the palette changed,
+    /// or when the viewer has fallen further behind than the history reaches and
+    /// there is no way to tell which tiles it missed.
     pub fn changes_since(&self, since: u64) -> Changed {
         if since >= self.generation() {
             return Some(Vec::new());
@@ -532,13 +542,13 @@ impl State {
         self.world.read().map_or(0, |world| world.chunks.len())
     }
 
-    /// Blocks along a chunk's edge, which is what the viewer draws its grid on.
-    /// Zero until something has been exported.
+    /// Returns the number of blocks along a chunk's edge, which the viewer
+    /// draws its grid on. Returns zero until something has been exported.
     pub fn chunk_edge(&self) -> usize {
         self.world.read().map_or(0, |world| world.edge)
     }
 
-    /// How many levels this world is wide enough to need.
+    /// Returns how many zoom levels this world is wide enough to need.
     pub fn levels(&self) -> u32 {
         let (min_x, min_z, max_x, max_z) = self.bounds();
         let tile = i64::from(TILE);
@@ -547,7 +557,7 @@ impl State {
         pyramid::levels_for(across, down)
     }
 
-    /// Says how the terrain resolves against whatever palette is loaded now.
+    /// Logs how much of the terrain the currently loaded palette can colour.
     pub fn report_coverage(&self) {
         let (Ok(world), Ok(palette)) = (self.world.read(), self.palette.read()) else {
             return;
@@ -555,12 +565,13 @@ impl State {
         say!("surface {}", Renderer::new(&world, &palette, self.sea_level()).coverage().summary());
     }
 
-    /// One tile as PNG bytes, drawn or read as its level requires.
+    /// Returns one tile as PNG bytes, drawing or reading it as its level
+    /// requires.
     pub fn tile(&self, at: At) -> Result<Arc<[u8]>> {
         self.tile_as(at, TileFormat::Png)
     }
 
-    /// One tile as everybody sees it, encoded as one reader asked for.
+    /// Returns one tile as everybody sees it, in the requested encoding.
     pub fn tile_as(&self, at: At, format: TileFormat) -> Result<Arc<[u8]>> {
         let key = Self::cache_key("", format);
         if let Ok(mut cache) = self.cache.lock()
@@ -573,8 +584,8 @@ impl State {
 
         let bytes: Arc<[u8]> = match (at.0, format) {
             (0, _) => pyramid::encode_as(&self.finest(at.1, at.2)?, format)?,
-            // The stored levels are PNG already, so the exact picture is the
-            // bytes as they lie; any other picture of them is made from them.
+            // The stored levels are already PNG, so serve the bytes as they
+            // lie. Any other encoding is derived from them.
             (_, TileFormat::Png) => self.stored(at)?,
             (level, _) => {
                 let image = self.levels.image(at).ok_or_else(|| {
@@ -591,8 +602,8 @@ impl State {
         Ok(bytes)
     }
 
-    /// What a tile is cached under: whose it is, and how it is encoded. Two
-    /// encodings of one picture never answer for each other.
+    /// Returns the cache key for a tile, combining whose it is with how it is
+    /// encoded. Two encodings of one picture never answer for each other.
     #[must_use]
     pub fn cache_key(whose: &str, format: TileFormat) -> String {
         match format {
@@ -601,18 +612,17 @@ impl State {
         }
     }
 
-    /// Level 0, which is drawn from the world rather than stored.
+    /// Renders one level 0 tile from the world. Level 0 is never stored.
     ///
-    /// A palette with no colours in it would blank the finest level while the
-    /// rest of the pyramid went on showing the world, which reads as a map that
-    /// breaks when you zoom in — it was taken for that three times. Growing the
-    /// level above instead is what makes the viewer fall back to a coarse map
-    /// rather than an empty one.
+    /// A palette with no colours would blank the finest level while the rest of
+    /// the pyramid still showed the world, which reads as a map that breaks when
+    /// you zoom in. Scaling up the level above instead makes the viewer fall
+    /// back to a coarse map rather than an empty one.
     fn finest(&self, tx: i32, tz: i32) -> Result<RgbImage> {
-        // Scoped, and the guards let go before anything else is asked of the
-        // world. `levels()` reads it too, and a thread that takes a second read
-        // lock while holding one may deadlock against a writer that arrived in
-        // between — which on this lock is the watcher, every time the mod
+        // Scope the guards so they drop before anything else reads the world.
+        // `levels()` also takes a read lock, and taking a second read lock while
+        // holding one can deadlock against a writer that arrived in between. On
+        // this lock the writer is the watcher, which runs every time the mod
         // exports.
         {
             let (Ok(world), Ok(palette)) = (self.world.read(), self.palette.read()) else {
@@ -633,17 +643,18 @@ impl State {
         )
     }
 
-    /// A level above zero, which the builder has already drawn.
+    /// Returns a level above zero, which the builder has already drawn.
     ///
-    /// Never made on demand: a coarse tile is four of the level below, so making
-    /// one here would make every tile beneath it — a thousand renders for a level
-    /// five, while somebody waits. Wherever the builder's picture is held right
-    /// now is [`Levels`]' business.
+    /// These are never built on demand. A coarse tile is four of the level
+    /// below, so building one here would build every tile beneath it, which is a
+    /// thousand renders for a level five while a request waits. [`Levels`]
+    /// decides where the builder's image is held.
     fn stored(&self, at: At) -> Result<Vec<u8>> {
         self.levels.bytes(at)
     }
 
-    /// One level 0 tile as an image, or nothing where the world has no chunks.
+    /// Returns one level 0 tile as an image, or `None` where the world has no
+    /// chunks.
     fn level_zero(&self, tx: i32, tz: i32, mapped: &HashSet<(i32, i32)>) -> Option<RgbImage> {
         if !mapped.contains(&(tx, tz)) {
             return None;
@@ -654,12 +665,12 @@ impl State {
         Some(Renderer::new(&world, &palette, self.sea_level()).render(tx * TILE as i32, tz * TILE as i32, TILE))
     }
 
-    /// Rebuilds every level above zero for whatever has changed since last time.
+    /// Rebuilds every level above zero for whatever changed since the last call.
     ///
-    /// Bottom up, one level at a time: the tiles that changed at a level decide
-    /// which tiles change at the level above, and four of the former make one of
-    /// the latter. A region changing therefore costs one tile per level, not one
-    /// tile per level per region.
+    /// Works bottom up, one level at a time. The tiles that changed at a level
+    /// decide which tiles change at the level above, and four of the former make
+    /// one of the latter. A region changing therefore costs one tile per level,
+    /// not one tile per level per region.
     pub fn build_levels(&self) {
         let Some(mut changed) = self.take_stale() else {
             return;
@@ -667,13 +678,13 @@ impl State {
 
         let levels = self.levels();
 
-        // A world that has grown past a power of two gains a coarsest level that
-        // has never been built. Walking up from what changed builds exactly one
-        // tile there and leaves the rest of the level missing — and that level is
-        // the one a viewer opens on, so the map reads as empty until something
-        // else marks every region stale. The whole pyramid is measured against the
-        // world whenever it is shorter than the world needs, which is once per
-        // doubling and never in the steady state.
+        // A world that has grown past a power of two gains a coarsest level
+        // that was never built. Walking up from what changed would build exactly
+        // one tile there and leave the rest of the level missing. That level is
+        // the one a viewer opens on, so the map would read as empty until
+        // something else marked every region stale. Measure the whole pyramid
+        // against the world whenever it is shorter than the world needs, which
+        // happens once per doubling and never in the steady state.
         if self.levels.built() < levels
             && let Ok(regions) = self.regions.lock()
         {
@@ -687,8 +698,8 @@ impl State {
             return;
         };
 
-        // The level 0 tiles were announced when the ground arrived; what is
-        // announced here is only the levels this built.
+        // The level 0 tiles were announced when the ground arrived. Announce
+        // only the levels this call built.
         let mut repainted: Vec<At> = Vec::new();
         let now = SystemTime::now();
 
@@ -735,10 +746,10 @@ impl State {
         }
     }
 
-    /// Says how many tiles went out since it last said, and how many of them
-    /// cost a render or an encode. Once a minute, and only where anything did:
-    /// the number that says whether a server is serving its cache or drawing
-    /// the same tiles over and over.
+    /// Logs how many tiles went out since the last call, and how many cost a
+    /// render or an encode. Called once a minute, and logs nothing when no tile
+    /// was served. The ratio shows whether a server is serving its cache or
+    /// redrawing the same tiles.
     pub fn report_serving(&self) {
         let served = self.served.swap(0, Ordering::Relaxed);
         let drawn = self.drawn.swap(0, Ordering::Relaxed);
@@ -747,8 +758,8 @@ impl State {
         }
     }
 
-    /// Writes the level tiles that have waited long enough — see
-    /// [`Levels::flush`] for what long enough is.
+    /// Writes the level tiles that have waited long enough. [`Levels::flush`]
+    /// defines the wait.
     pub fn flush_levels(&self) {
         let written = self.levels.flush(SystemTime::now());
         if written > 0 {
@@ -756,14 +767,14 @@ impl State {
         }
     }
 
-    /// The level 0 tiles waiting to have their levels rebuilt, and none left
-    /// behind. `None` when there is nothing to do, which is the common tick.
+    /// Takes and clears the level 0 tiles waiting to have their levels rebuilt.
+    /// Returns `None` when there is nothing to do, which is the common case.
     fn take_stale(&self) -> Option<HashSet<(i32, i32)>> {
         let mut stale = self.stale.lock().ok()?;
         (!stale.is_empty()).then(|| std::mem::take(&mut *stale))
     }
 
-    /// Forgets tiles that have been drawn again.
+    /// Drops redrawn tiles from the cache.
     pub fn drop_tiles(&self, tiles: &[At]) {
         if let Ok(mut cache) = self.cache.lock() {
             for at in tiles {
@@ -772,7 +783,7 @@ impl State {
         }
     }
 
-    /// Notes level 0 tiles whose levels above need building again.
+    /// Marks level 0 tiles whose levels above need rebuilding.
     pub fn mark_stale(&self, tiles: impl IntoIterator<Item = (i32, i32)>) {
         if let Ok(mut stale) = self.stale.lock() {
             stale.extend(tiles);
@@ -780,31 +791,31 @@ impl State {
     }
 }
 
-/// A world's chunks gathered by the region each sits in.
-fn by_region(world: &World) -> HashMap<(i32, i32), Vec<((i32, i32), &Chunk)>> {
-    let mut grouped: HashMap<(i32, i32), Vec<((i32, i32), &Chunk)>> = HashMap::new();
+/// Groups a world's chunks by the region each sits in.
+fn by_region(world: &World) -> HashMap<(i32, i32), Vec<PlacedChunk<'_>>> {
+    let mut grouped: HashMap<(i32, i32), Vec<PlacedChunk<'_>>> = HashMap::new();
     for (&at, chunk) in &world.chunks {
         grouped.entry(store::region_of(at.0, at.1)).or_default().push((at, chunk));
     }
     grouped
 }
 
-/// When each region file on disk was last written. Read once, on the start
-/// that imports them.
+/// Returns when each region file on disk was last written. Read once, on the
+/// startup that imports them.
 fn region_times(dir: &Path) -> HashMap<(i32, i32), SystemTime> {
-    let Ok(paths) = crate::columns::region_files(dir) else {
+    let Ok(paths) = crate::render::columns::region_files(dir) else {
         return HashMap::new();
     };
 
     paths
         .into_iter()
-        .filter_map(|path| Some((crate::columns::region_coords(&path)?, files::modified(&path)?)))
+        .filter_map(|path| Some((crate::render::columns::region_coords(&path)?, files::modified(&path)?)))
         .collect()
 }
 
-/// What a test needs to stand a map up: a palette with a colour in it, and
-/// rules that say nothing surprising. Shared between the modules that build a
-/// `State`, so a rule added is a rule every one of them gets.
+/// Provides what a test needs to stand a map up: a palette with colours in it
+/// and a default set of rules. Shared between the modules that build a `State`,
+/// so a rule added here reaches all of them.
 #[cfg(test)]
 pub mod testing {
     use super::*;
@@ -812,7 +823,7 @@ pub mod testing {
     /// Writes a palette naming block 11 grey and block 22 red, and loads it.
     pub fn palette_in(at: &Path) -> Palette {
         std::fs::write(
-            crate::palette::path_in(at),
+            crate::render::palette::path_in(at),
             r##"{"Version":1,"GameVersion":"1.22.7","Source":"client","Fingerprint":"abc",
                 "Blocks":{"game:air":{"Id":0,"Rgb":null,"Invisible":true},
                           "game:rock":{"Id":11,"Rgb":"#646464"},
@@ -838,7 +849,8 @@ pub mod testing {
         }
     }
 
-    /// A map of this build's chunk edge, read from a fresh scratch directory.
+    /// Builds a map with this build's chunk edge, from a fresh scratch
+    /// directory.
     pub fn state_in(at: &Path, personal_maps: bool) -> State {
         State::load(at, palette_in(at), 1 << 20, rules(personal_maps)).expect("a start")
     }
@@ -848,11 +860,11 @@ pub mod testing {
 mod tests {
     use super::testing::{palette_in, rules};
     use super::*;
-    use crate::files::testing::Scratch;
+    use crate::util::files::testing::Scratch;
 
-    /// The upgrade path: a server whose map lived in region files starts this
-    /// build, and the files become the database. The next start reads the
-    /// database alone, so the files may go.
+    /// Checks the upgrade path. A server whose map lived in region files starts
+    /// this build, and the files become the database. The next start reads the
+    /// database alone, so the files can be deleted.
     #[test]
     fn region_files_are_imported_once_and_the_database_is_the_map_after() {
         let held = Scratch::new("state-import");
@@ -861,7 +873,7 @@ mod tests {
         std::fs::create_dir_all(&columns).unwrap();
         std::fs::write(
             columns.join("r.2.-3.msqr"),
-            crate::columns::testing::filed((2, -3), 4, &[(0, 7, 11), (17, 9, 11)], None),
+            crate::render::columns::testing::filed((2, -3), 4, &[(0, 7, 11), (17, 9, 11)], None),
         )
         .unwrap();
 
@@ -870,7 +882,7 @@ mod tests {
         assert_eq!(first.store.counts().unwrap().chunks, 2, "and into the database");
         drop(first);
 
-        // The files go, and the map is still there.
+        // Delete the files. The map must still be there.
         std::fs::remove_dir_all(&columns).unwrap();
         let second = State::load(at, palette_in(at), 1 << 20, rules(false)).expect("a second start");
         assert_eq!(second.chunks(), 2);
@@ -880,15 +892,15 @@ mod tests {
         assert_eq!(world.column_at(33 * 4, -47 * 4).map(|c| c.season), Some(9), "the season came back too");
     }
 
-    /// The door every chunk comes in by: what is stored is what is served, and a
-    /// chunk that arrives again unchanged is reported as unchanged.
+    /// Checks that what is stored is what is served, and that a chunk arriving
+    /// again unchanged is reported as unchanged.
     #[test]
     fn a_chunk_taken_is_in_the_database_and_the_world_alike() {
         let held = Scratch::new("state-take");
         let at = held.at();
         let state = State::load(at, palette_in(at), 1 << 20, rules(false)).expect("an empty start");
 
-        let record = Chunk::filled_with(crate::columns::Column { block: 11, height: 3, temperature: 1, rainfall: 2, season: 5 }, 4).record();
+        let record = Chunk::filled_with(crate::render::columns::Column { block: 11, height: 3, temperature: 1, rainfall: 2, season: 5 }, 4).record();
         let stored = state.take_chunks(2, &[Arrived { cx: 1, cz: 1, season: 5, record: record.clone() }], SystemTime::now());
         assert_eq!(stored.len(), 1);
         assert!(stored[0].surface_moved());
@@ -899,7 +911,7 @@ mod tests {
         assert!(!again[0].surface_moved(), "the same bytes are not a change");
     }
 
-    /// Ground arriving in several pieces is one announcement, on the beat.
+    /// Checks that ground arriving in several pieces produces one announcement.
     #[test]
     fn changed_tiles_are_announced_once_per_beat() {
         let held = Scratch::new("state-announce");

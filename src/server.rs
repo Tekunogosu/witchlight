@@ -1,33 +1,33 @@
-//! Bringing the map up.
+//! Starts the map service.
 //!
-//! Everything here happens once: read what is on disk, say what was found, bind
-//! the two ports, and hand the request threads a [`State`] to answer from. What
-//! they answer is [`crate::routes`]; what keeps the state current is
-//! [`crate::watch`].
+//! This module runs once at startup. It reads what is on disk, logs what it
+//! found, binds both ports, and hands the request threads a [`State`] to answer
+//! from. [`crate::web::routes`] answers the requests.
+//! [`crate::protocol::watch`] keeps the state current.
 //!
-//! Tiles are rendered when asked for and kept, so starting up costs nothing and
-//! only the part of the world someone actually looks at is ever drawn.
+//! Tiles are rendered on demand and cached, so startup draws nothing and only
+//! the part of the world someone looks at is ever rendered.
 
 use std::path::Path;
 use std::sync::Arc;
 
 use tiny_http::Server;
 
-use crate::api::Api;
-use crate::error::{Error, Result};
-use crate::facts;
-use crate::net;
-use crate::pyramid;
-use crate::routes;
+use crate::protocol::api::Api;
+use crate::util::error::{Error, Result};
+use crate::mapdata::facts;
+use crate::util::net;
+use crate::render::pyramid;
+use crate::web::routes;
 use crate::state::State;
-use crate::watch;
-use crate::log::{say, warn};
+use crate::protocol::watch;
+use crate::util::log::{say, warn};
 
-/// How many threads take requests when the setting says to decide here.
+/// The upper limit on request threads.
 ///
-/// The cap is deliberate: this shares a machine with the game server, which has
-/// the better claim on its cores, and past a handful of threads a cold map is
-/// bound by the tile cache rather than by rendering.
+/// This service usually shares a machine with the game server, which has the
+/// better claim on its cores. Past a handful of threads a cold map is bound by
+/// the tile cache rather than by rendering.
 const MAX_WORKERS: usize = 64;
 
 pub fn serve(
@@ -38,11 +38,11 @@ pub fn serve(
     backfill_radius_chunks: i32,
 ) -> Result<()> {
     let data = state.data.as_path();
-    let puller = Arc::new(crate::pull::Puller::new(Arc::clone(&state.store), data, backfill_radius_chunks));
+    let puller = Arc::new(crate::protocol::pull::Puller::new(Arc::clone(&state.store), data, backfill_radius_chunks));
 
-    // The map is the product and live data is a garnish, so an API channel that
-    // will not bind is said out loud and stepped over rather than taken as fatal.
-    if let Err(error) = crate::apiport::serve(api, Arc::clone(&state), data) {
+    // An API channel that will not bind is logged and stepped over. The map
+    // still serves without live data.
+    if let Err(error) = crate::protocol::apiport::serve(api, Arc::clone(&state), data) {
         warn!(
             "{error} — nobody will show on the map. Set `api_bind` to an address \
              this machine has free."
@@ -68,7 +68,7 @@ pub fn serve(
 
     start_frontier(&puller, &state);
     start_collecting(&state);
-    crate::pull::start(Arc::clone(&puller), Arc::clone(&state));
+    crate::protocol::pull::start(Arc::clone(&puller), Arc::clone(&state));
 
     let mut others = Vec::with_capacity(threads - 1);
     for _ in 1..threads {
@@ -77,7 +77,7 @@ pub fn serve(
         others.push(std::thread::spawn(move || answer(&server, &state)));
     }
 
-    // This thread works too, rather than standing over the others.
+    // This thread answers requests as well, rather than only supervising.
     answer(&server, &state);
     for thread in others {
         let _ = thread.join();
@@ -86,25 +86,24 @@ pub fn serve(
     Ok(())
 }
 
-/// How often the map's own edge is re-offered to the puller.
+/// The interval between re-offering the map's edge to the puller.
 ///
-/// Slower than a pull step: this walks every chunk currently held to find its
-/// edge, which is worth doing far less often than the puller drains what it
-/// already has queued.
+/// Finding the edge walks every chunk currently held, so this runs far less
+/// often than the puller drains its queue.
 const FRONTIER_EVERY: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// How often a player's own position is re-offered.
+/// The interval between re-offering each player's position.
 ///
-/// The mod posts a position every couple of seconds — see `LiveIntervalMs` on
-/// its side — so asking more often than that would only ever see the same
-/// answer twice.
+/// The mod posts a position every couple of seconds, set by `LiveIntervalMs` on
+/// its side. Polling faster would read the same answer twice.
 const NEAR_EVERY: std::time::Duration = std::time::Duration::from_secs(2);
 
-/// How far one player sees, in chunks: the operator's setting where one is
-/// set, else the view distance the game granted that player, else what the
-/// mod says the server loads for anybody. Zero where none of them is known
-/// yet, which is nothing recorded for them this beat.
-fn sight_of(state: &State, puller: &crate::pull::Puller, granted: i32) -> i32 {
+/// Returns how far one player sees, in chunks.
+///
+/// Prefers the operator's setting, then the view distance the game granted that
+/// player, then the radius the mod says the server loads for anybody. Returns
+/// zero when none of the three is known, which records nothing for that player.
+fn sight_of(state: &State, puller: &crate::protocol::pull::Puller, granted: i32) -> i32 {
     if state.rules.sight_radius_chunks > 0 {
         state.rules.sight_radius_chunks
     } else if granted > 0 {
@@ -114,9 +113,9 @@ fn sight_of(state: &State, puller: &crate::pull::Puller, granted: i32) -> i32 {
     }
 }
 
-/// Starts the two clocks that keep the puller's frontier fed: a player's own
-/// position, fast and first, and the map's own edge, slow and behind it.
-fn start_frontier(puller: &Arc<crate::pull::Puller>, state: &Arc<State>) {
+/// Starts the two threads that keep the puller's frontier fed. One posts player
+/// positions on a fast interval. The other posts the map's edge on a slow one.
+fn start_frontier(puller: &Arc<crate::protocol::pull::Puller>, state: &Arc<State>) {
     {
         let puller = Arc::clone(puller);
         let state = Arc::clone(state);
@@ -128,8 +127,8 @@ fn start_frontier(puller: &Arc<crate::pull::Puller>, state: &Arc<State>) {
                     continue;
                 }
 
-                // What each of them can see from there is theirs to remember,
-                // and where the map may ask the game for ground beside them.
+                // Record what each player can see from where they stand, and
+                // offer the puller the ground beside them.
                 let edge = state.chunk_edge().max(1) as i32;
                 let mut stood: Vec<((i32, i32), i32)> = Vec::with_capacity(whereabouts.len());
                 for at in &whereabouts {
@@ -142,9 +141,9 @@ fn start_frontier(puller: &Arc<crate::pull::Puller>, state: &Arc<State>) {
                 }
                 puller.visit(stood.iter().copied());
 
-                // Asked of the world in place rather than copied out of it: a
-                // set of everything held is a set as big as the map, twice a
-                // second, for a question the map answers in one lookup.
+                // Query the world in place. Copying out the set of held chunks
+                // would allocate a map-sized set twice a second for a question
+                // answered by one lookup.
                 let Ok(world) = state.world.read() else { continue };
                 let held = |at: (i32, i32)| world.chunks.contains_key(&at);
                 puller.seed_near(stood.iter().map(|(chunk, _)| *chunk), &held);
@@ -164,10 +163,10 @@ fn start_frontier(puller: &Arc<crate::pull::Puller>, state: &Arc<State>) {
     });
 }
 
-/// How often remembered chunk versions nothing points at are freed.
+/// The interval between sweeps that free unreferenced chunk versions.
 const COLLECT_EVERY: std::time::Duration = std::time::Duration::from_secs(60);
 
-/// Starts the clock that frees what nobody remembers any more.
+/// Starts the thread that frees chunk versions nobody references.
 fn start_collecting(state: &Arc<State>) {
     let state = Arc::clone(state);
     std::thread::spawn(move || {
@@ -178,17 +177,16 @@ fn start_collecting(state: &Arc<State>) {
     });
 }
 
-/// Reconciles the stored zoom levels with the world and the palette in hand, and
-/// says out loud anything that would otherwise show as a map that looks broken.
+/// Reconciles the stored zoom levels with the world and palette in hand, and
+/// logs anything that would otherwise show as a broken-looking map.
 ///
-/// Whatever is still current is kept. Only regions with a level above them
+/// Levels that are still current are kept. Only regions whose level above is
 /// missing or older than the region itself are rebuilt, so a run whose levels
-/// are already current starts with nothing to do rather than redrawing a world
-/// that has not moved.
+/// are already current has nothing to do.
 fn settle(state: &State, data: &Path) {
-    // Said out loud, because the alternative is a map whose coordinates quietly
-    // disagree with every number the player can read off their own screen — and
-    // nothing on either side would look wrong.
+    // Logged, because the alternative is a map whose coordinates disagree with
+    // every number the player reads off their own screen while nothing on
+    // either side looks wrong.
     if !facts::written(data) {
         say!(
             "no world.json — coordinates will be absolute rather than \
@@ -197,18 +195,18 @@ fn settle(state: &State, data: &Path) {
     }
 
     // Levels built from a region format this build no longer reads would show
-    // terrain that has since been cleared, and levels painted by a build that
-    // painted differently would show the right ground in the wrong colours. Both
-    // go; both are redrawn from region files that are not in question.
-    if pyramid::reset_unless_built_from(data, crate::columns::VERSION) {
+    // terrain that has since been cleared. Levels painted by an earlier renderer
+    // would show the right ground in the wrong colours. Both are cleared and
+    // redrawn from the region files.
+    if pyramid::reset_unless_built_from(data, crate::render::columns::VERSION) {
         say!(
             "the stored levels were built by a different format or renderer, so they have been cleared — the map redraws as it is asked for"
         );
     }
 
-    // A palette with no colours in it draws bare ground everywhere. Said before
-    // anything is served, because the map that follows is not broken — its
-    // colours are missing, and those are two different things to go and fix.
+    // A palette with no colours draws bare ground everywhere. Logged before
+    // anything is served, so the operator knows the map is missing colours
+    // rather than broken.
     let blank = state.palette.read().is_ok_and(|palette| palette.paints_nothing());
     if blank {
         say!(
@@ -218,9 +216,9 @@ fn settle(state: &State, data: &Path) {
         );
     }
 
-    // Levels drawn with a different palette than the one in use disagree with the
-    // level below them, which is a map that changes as it is zoomed. Redrawing
-    // them settles it — but only when there is something to redraw them with.
+    // Levels drawn with a different palette than the one in use disagree with
+    // the level below them, so the map changes as it is zoomed. Redraw them,
+    // but only when there is a usable palette to redraw them with.
     let drawn_with = pyramid::palette_built_from(data);
     let painting = state.palette.read().ok().map(|palette| palette.fingerprint.clone());
     let repaint = !blank && matches!((&drawn_with, &painting), (Some(was), Some(now)) if was != now);
@@ -241,14 +239,13 @@ fn settle(state: &State, data: &Path) {
     }
 }
 
-/// Takes requests until the server stops. Every thread runs this, and `recv`
-/// hands each request to whichever is free — the whole reason a cold map no
-/// longer arrives one tile at a time.
+/// Takes requests until the server stops. Every request thread runs this, and
+/// `recv` hands each request to whichever thread is free.
 fn answer(server: &Server, state: &Arc<State>) {
     while let Ok(mut request) = server.recv() {
-        // The one response that waits: handed a thread of its own, so that
-        // this one goes back to taking requests. See `crate::events`.
-        if crate::urls::path(request.url()) == "/events" {
+        // `/events` holds its response open, so it gets a thread of its own
+        // and this one goes back to taking requests. See `crate::web::events`.
+        if crate::util::urls::path(request.url()) == "/events" {
             let state = Arc::clone(state);
             std::thread::spawn(move || wait_for_events(request, &state));
             continue;
@@ -261,30 +258,28 @@ fn answer(server: &Server, state: &Arc<State>) {
     }
 }
 
-/// Answers `/events`: waits until the map or the live feed has moved past
-/// what the page last saw, then says what moved. The whole wait is on the
-/// thread this was handed.
+/// Answers `/events`. Waits until the map or the live feed has moved past what
+/// the page last saw, then reports what changed. The wait happens on the thread
+/// this function was given.
 fn wait_for_events(request: tiny_http::Request, state: &State) {
     let url = request.url().to_owned();
-    let since = crate::urls::param(&url, "since").and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
-    let live = crate::urls::param(&url, "live").and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
-    let who = state.sessions.who(&crate::http::cookies(&request));
+    let since = crate::util::urls::param(&url, "since").and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+    let live = crate::util::urls::param(&url, "live").and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+    let who = state.sessions.who(&crate::util::http::cookies(&request));
     let uid = who.map(|who| who.uid);
 
     let waited = state.events.wait(|| state.generation() > since || state.events.live_seq() > live);
     let reply = match waited {
-        None => crate::http::text(503, "too many clients waiting — retry later"),
+        None => crate::util::http::text(503, "too many clients waiting — retry later"),
         Some(_) => {
             let scope = state.scope_for(uid.as_deref());
             let generation = state.generation();
             let live_now = state.events.live_seq();
-            // Only what moved is carried: the map's changes since the page's
-            // generation, and the feed where the feed moved. A page told the
-            // map moved forty times a second must not be sent forty copies of
-            // where everybody is standing.
+            // Carry only what changed. A page told the map moved forty times a
+            // second must not receive forty copies of every player's position.
             let info = if generation > since { state.info(&scope, Some(since)) } else { "null".to_owned() };
             let feed = if live_now > live { state.live.body(uid.as_deref(), &state.preferences.colors()) } else { "null".to_owned() };
-            crate::http::json(&format!(
+            crate::util::http::json(&format!(
                 r#"{{"generation":{generation},"liveSeq":{live_now},"info":{info},"live":{feed}}}"#
             ))
         }
@@ -292,7 +287,8 @@ fn wait_for_events(request: tiny_http::Request, state: &State) {
     let _ = request.respond(reply);
 }
 
-/// How many threads take requests. Zero means decide here.
+/// Returns the number of request threads to run. A setting of zero picks a
+/// count from the CPU count.
 fn workers(setting: usize) -> usize {
     if setting > 0 {
         return setting.min(MAX_WORKERS);
@@ -309,8 +305,8 @@ mod tests {
     fn what_the_operator_asks_for_is_what_runs() {
         assert_eq!(workers(1), 1);
         assert_eq!(workers(12), 12);
-        // A setting past the cap is a typo or a very large machine, and either
-        // way this shares a box with the game server.
+        // A setting past the cap is a typo or a very large machine. Either way
+        // this service shares a box with the game server.
         assert_eq!(workers(10_000), MAX_WORKERS);
     }
 

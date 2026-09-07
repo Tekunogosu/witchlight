@@ -1,47 +1,18 @@
-//! witchlight — renders and serves a browsable map from a Vintage Story world
-//! export written by the Witchlight server mod.
+//! Renders and serves a browsable map from a Vintage Story world export written
+//! by the Witchlight server mod.
 //!
-//! The mod knows the game; this knows pixels. Nothing here reads a save file or
-//! needs the game installed.
+//! Nothing in this binary reads a save file or requires the game to be
+//! installed. The mod exports the world data; this service draws it.
 
-mod api;
-mod apiport;
-mod auth;
-mod cache;
-mod chrome;
-mod color;
-mod columns;
 mod config;
-mod error;
-mod events;
-mod facts;
-mod feeds;
-mod files;
-mod history;
-mod http;
-mod live;
-mod levels;
-mod log;
-mod memory;
-mod net;
-mod palette;
-mod pending;
-mod plugins;
-mod preferences;
-mod pull;
-mod pyramid;
-mod random;
+mod mapdata;
+mod page;
+mod protocol;
 mod render;
-mod routes;
-mod scope;
 mod server;
 mod state;
-mod store;
-mod stored;
-mod urls;
-mod viewer;
-mod watch;
-mod wire;
+mod util;
+mod web;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -49,10 +20,11 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 
 use crate::config::Config;
-use crate::error::Result;
-use crate::palette::Palette;
-use crate::render::Renderer;
+use crate::protocol::api;
+use crate::render::palette::Palette;
+use crate::render::tiles::Renderer;
 use crate::state::State;
+use crate::util::error::{self, Result};
 
 #[derive(Debug, Parser)]
 #[command(name = "witchlight", version, about = "Serve a Vintage Story world map")]
@@ -61,14 +33,14 @@ struct Args {
     #[arg(short, long, value_name = "FILE")]
     config: Option<PathBuf>,
 
-    /// The Vintage Story data directory — the server's --dataPath. Exports are
-    /// read from the `witchlight` folder inside it.
+    /// The Vintage Story data directory, which is the server's --dataPath.
+    /// Exports are read from the `witchlight` folder inside it.
     #[arg(short = 'd', long, value_name = "DIR")]
     vs_data: Option<PathBuf>,
 
-    /// The exported map directory to serve. The server mod passes this to say
-    /// which world's map this is; by hand it is only needed where the settings keep a
-    /// directory per world and more than one has been exported.
+    /// The exported map directory to serve. The server mod passes this to name
+    /// the world. Set it by hand only when the settings keep a directory per
+    /// world and more than one world has been exported.
     #[arg(short = 'e', long, value_name = "DIR")]
     exports: Option<PathBuf>,
 
@@ -76,7 +48,8 @@ struct Args {
     #[arg(short, long, value_name = "ADDR")]
     bind: Option<String>,
 
-    /// Where the server mod posts live data. Empty means loopback on a free port.
+    /// The address the server mod posts live data to. An empty value means
+    /// loopback on a free port.
     #[arg(short = 'a', long, value_name = "ADDR")]
     api_bind: Option<String>,
 
@@ -84,9 +57,9 @@ struct Args {
     #[arg(short = 't', long, value_name = "N")]
     threads: Option<usize>,
 
-    /// Whether each world's map goes in a directory of its own. The mod passes
-    /// this when it writes the settings, because it is the half that can tell
-    /// singleplayer from a dedicated server.
+    /// Puts each world's map in a directory of its own. The mod passes this
+    /// when it writes the settings, because only the mod can tell singleplayer
+    /// from a dedicated server.
     #[arg(long, value_name = "BOOL")]
     per_world: Option<bool>,
 
@@ -98,7 +71,7 @@ struct Args {
     #[arg(short, long)]
     print_config: bool,
 
-    /// What to do. Serves the map when omitted.
+    /// The subcommand to run. Serves the map when omitted.
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -107,7 +80,7 @@ struct Args {
 enum Command {
     /// Render the whole exported world to a single PNG.
     Render {
-        /// Where to write it.
+        /// The path to write the PNG to.
         #[arg(short, long, value_name = "FILE", default_value = "map.png")]
         out: PathBuf,
     },
@@ -144,9 +117,9 @@ fn run() -> Result<()> {
         return Ok(());
     }
 
-    // Written on a first run so the settings are there to edit. It holds the
-    // defaults, not this run's flags: a one-off --vs-data must not quietly
-    // become permanent. That is what --save-config is for.
+    // Write a settings file on a first run so there is one to edit. It holds
+    // the defaults, not this run's flags, so that a one-off --vs-data does not
+    // become permanent. --save-config does that instead.
     if args.config.is_none() && !config_path.exists() {
         match Config::default().write(&config_path) {
             Ok(()) => say!("wrote default settings to {}", config_path.display()),
@@ -156,10 +129,8 @@ fn run() -> Result<()> {
 
     let exports = config.exports(args.exports.as_deref())?;
     let palette = Palette::load(&exports)?;
-    // The map is opened once, here, for both the banner and whatever is done
-    // with it after. It used to be opened twice — once for the banner and once
-    // more inside `serve` — which was two reads of every region file, and is
-    // now two openings of one database.
+    // Open the map once here. The banner and the command that follows share
+    // this handle rather than each opening the database.
     let state = std::sync::Arc::new(State::load(
         &exports,
         palette,
@@ -167,8 +138,8 @@ fn run() -> Result<()> {
         config.rules(),
     )?);
 
-    // Printed first and on every run: the quickest way to tell a deployed binary
-    // from the one you meant to deploy.
+    // Print the version first on every run so a deployed binary can be
+    // identified from its log.
     println!("witchlight {}", env!("CARGO_PKG_VERSION"));
     say!("reading {}", exports.display());
     banner(&state);
@@ -201,8 +172,8 @@ fn run() -> Result<()> {
     }
 }
 
-/// Says what was found, so somebody reading the log can tell an empty map from
-/// a broken one and a palette that paints from one that does not.
+/// Logs what was loaded, so a reader can tell an empty map from a broken one
+/// and a working palette from one that paints nothing.
 fn banner(state: &State) {
     let (Ok(world), Ok(palette)) = (state.world.read(), state.palette.read()) else {
         return;
@@ -231,9 +202,8 @@ fn banner(state: &State) {
         palette.game_version
     );
     if palette.uncoloured > 0 {
-        // Said, not warned about. Nothing here can fix it — the colours come off
-        // a client's assets — and the mod goes and asks for them on its own, so
-        // this is the line that lets somebody watching the log see it happen
+        // Logged at info rather than warn. The colours come from a client's
+        // assets and the mod requests them on its own, so this reports progress
         // rather than a fault to act on.
         say!(
             "{} of them draw something this palette has no colour for, \
@@ -253,7 +223,7 @@ fn banner(state: &State) {
     }
 }
 
-/// Settings from the file, with any flags laid over the top.
+/// Loads the settings file and applies any command-line flags over it.
 fn resolve(args: &Args) -> Result<(Config, PathBuf)> {
     let path = args.config.clone().unwrap_or_else(config::default_path);
     let mut config = Config::load(&path)?;

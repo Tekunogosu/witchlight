@@ -9,6 +9,38 @@ which is where that rule is kept rather than in anybody's memory.
 A version that moved for the other half says so and lists nothing, which is not an
 omission: it is what "one release" looks like from the side that did not change.
 
+## 0.52.1
+
+**Deploy note:** both halves, upgraded together; nothing is cleared. No setting,
+no address and no stored file changes. This release only moves code and rewrites
+what it says about itself.
+
+- **Source is grouped into tiers.** The forty modules that sat flat in `src/` are
+  now `util/`, `render/`, `mapdata/`, `protocol/`, `web/` and `page/`, with
+  `main`, `config`, `server` and `state` left at the top. The groupings were
+  already written down in `ARCHITECTURE.md`; they are now directories.
+- **The shared grid arithmetic has one owner.** `region_of`, `slot_of` and the
+  bitset helpers were in `store.rs`, so `columns.rs` could not call them and
+  wrote the chunk-to-region conversion out three more times. They now live in
+  `render/columns.rs` beside the constant they are arithmetic over.
+- **The utility tier is checked rather than listed.** `tests/layers.rs` reads
+  `src/util/` off the directory, so a module added there is checked without
+  anyone remembering to name it.
+- **Repeated database boilerplate is one helper.** Ten query bodies in
+  `store.rs` each named the same work three times for the three steps that can
+  fail; `Store::rows` names it once. `Error::database` went from 86 call sites
+  to 54.
+- **The settings template moved out of `config.rs`.** Two hundred lines of
+  operator-facing prose and the test that keeps it in step with the settings are
+  now `config/template.rs`.
+- **Hovering has one owner on the page.** `hoverOpens` was written to hold the
+  hover wiring for every kind of thing on the map, and the marker path had a
+  sixth copy of it inline. Markers now go through it, as claims and plugin marks
+  already did.
+- **Comments state what the code does.** Doc comments across both halves are
+  plain declarative sentences. Descriptions of what the code used to be have
+  been removed; measured facts and design reasons stay.
+
 ## 0.52.0
 
 **Deploy note:** both halves, upgraded together; nothing is cleared. A plugin

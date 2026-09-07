@@ -1,4 +1,4 @@
-//! The settings file: where it lives, what it holds, and how it is written.
+//! Defines the settings file, its location, and how it is read and written.
 //!
 //! Settings are read from a TOML file. Command-line flags override the file. On
 //! the first run the file is written with the defaults, so there is always a file
@@ -14,9 +14,9 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::{Error, Result};
+use crate::util::error::{Error, Result};
 
-/// The settings the web page and the live feeds need from the config.
+/// Holds the settings the web page and the live feeds need from the config.
 ///
 /// This is the subset of `Config` that decides which controls the page offers and
 /// how the service scopes what each viewer is sent. The values are copied out of
@@ -39,7 +39,7 @@ pub struct Rules {
     /// clamped to the range `REFRESH_FLOOR_MS..=REFRESH_CEILING_MS`.
     pub live_refresh_ms: u64,
     /// When true, each player sees only the terrain they have explored. When
-    /// false, every viewer sees the whole map. See [`crate::memory`].
+    /// false, every viewer sees the whole map. See [`crate::mapdata::memory`].
     pub personal_maps: bool,
     /// When true and `personal_maps` is on, the terrain around spawn is shown to
     /// every viewer, including a browser that is not signed in.
@@ -91,7 +91,7 @@ pub struct Commands {
     pub service: String,
 }
 
-/// What the map does with land claims.
+/// Controls what the map does with land claims.
 ///
 /// `view` and `create` are privilege codes, written the same way as `[commands]`.
 /// `worldgen` is a switch. The mod enforces all three by deciding what it sends
@@ -173,7 +173,7 @@ impl Default for Commands {
     }
 }
 
-/// Every setting in the configuration file.
+/// Holds every setting in the configuration file.
 ///
 /// The doc comment on each field describes the setting. The text written into the
 /// operator's file comes from `NOTES`, and a test checks that every field has a
@@ -359,11 +359,11 @@ pub struct Config {
     /// the tables below it are the last fields.
     pub commands: Commands,
 
-    /// Who may see land claims, who may draw one, and whether generated claims
-    /// are drawn.
+    /// Controls who may see land claims, who may draw one, and whether
+    /// generated claims are drawn.
     pub claims: Claims,
 
-    /// Extra bars on each player's card, beside health and food.
+    /// Defines extra bars on each player's card, beside health and food.
     ///
     /// A mod that gives players a resource such as mana or stamina stores it as
     /// attributes on the player entity. Each entry here names those attributes,
@@ -479,18 +479,19 @@ fn maps_inside(base: &Path) -> Vec<PathBuf> {
     listing
         .flatten()
         .map(|found| found.path())
-        .filter(|path| crate::palette::path_in(path).exists())
+        .filter(|path| crate::render::palette::path_in(path).exists())
         .collect()
 }
 
-/// The game's default data directory.
+/// Returns the game's default data directory.
 fn default_vs_data() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("VintagestoryData")
 }
 
-/// The default configuration file, `~/.config/witchlight/config.toml`.
+/// Returns the default configuration file path,
+/// `~/.config/witchlight/config.toml`.
 #[must_use]
 pub fn default_path() -> PathBuf {
     dirs::config_dir()
@@ -547,7 +548,8 @@ impl Config {
             .map_err(|error| Error::io(format!("writing {}", path.display()), error))
     }
 
-    /// The directory that holds the map data, before any per-world subdirectory.
+    /// Returns the directory that holds the map data, before any per-world
+    /// subdirectory.
     #[must_use]
     pub fn map_data_dir(&self) -> PathBuf {
         if self.map_data.as_os_str().is_empty() {
@@ -570,13 +572,13 @@ impl Config {
         }
 
         let base = self.map_data_dir();
-        if crate::palette::path_in(&base).exists() {
+        if crate::render::palette::path_in(&base).exists() {
             return Ok(base);
         }
 
-        // A map directory copied off a server and passed straight to
-        // `--vs-data`, rather than the data path it was copied out of.
-        if self.map_data.as_os_str().is_empty() && crate::palette::path_in(&self.vs_data).exists() {
+        // Handles a map directory copied off a server and passed as
+        // `--vs-data` instead of the data path it came from.
+        if self.map_data.as_os_str().is_empty() && crate::render::palette::path_in(&self.vs_data).exists() {
             return Ok(self.vs_data.clone());
         }
 
@@ -598,291 +600,21 @@ impl Config {
             ))),
         }
     }
-
-    /// Renders the configuration as a TOML file with a note above each setting.
-    ///
-    /// The values come from serde and the notes from `NOTES`. The test
-    /// `every_setting_written_says_what_it_is_for` checks that every written
-    /// setting has a note and that every note matches a written setting.
-    #[must_use]
-    pub fn to_template(&self) -> String {
-        let body = toml::to_string_pretty(self).unwrap_or_else(|error| format!("# {error}\n"));
-        let mut file = String::from(HEADER);
-
-        // The table the current line belongs to, so a key inside `[commands]` is
-        // looked up as `commands.export` rather than as a top-level `export`.
-        let mut table = String::new();
-
-        for line in body.lines() {
-            let text = line.trim();
-            if text.is_empty() {
-                continue;
-            }
-
-            if let Some(name) = text.strip_prefix('[').and_then(|rest| rest.strip_suffix(']')) {
-                table = format!("{name}.");
-                file.push_str(&noted(text));
-            } else {
-                let key = text.split('=').next().unwrap_or_default().trim();
-                file.push_str(&noted(&format!("{table}{key}")));
-            }
-
-            file.push_str(text);
-            file.push('\n');
-        }
-
-        file
-    }
 }
 
-/// The comment block at the top of the written configuration file.
-const HEADER: &str = "\
-# Witchlight configuration
-#
-# This file is written by the map service and read by both the map service and
-# the server mod. Each note says which half acts on the setting.
-";
+mod template;
 
-/// The note written above each setting in the configuration file.
-///
-/// Keys match the names serde writes. A setting inside a table is keyed as
-/// `table.key`, and a table itself by its bracketed name. The keys under `[bars]`
-/// are the operator's own labels and have no notes; the note on the table
-/// describes them all.
-const NOTES: &[(&str, &str)] = &[
-    (
-        "vs_data",
-        "The Vintage Story data directory (the game server's --dataPath).\n\
-         Map data is read from the `witchlight` folder inside it unless map_data\n\
-         is set.",
-    ),
-    (
-        "map_data",
-        "The directory that holds the map data. Empty means the `witchlight`\n\
-         folder inside vs_data. Set it to keep the map on another disk or in a\n\
-         directory a web server already serves.",
-    ),
-    (
-        "per_world",
-        "true: each world's map is kept in its own subdirectory of map_data.\n\
-         false: the map is kept directly in map_data.\n\
-         Default: true. Every singleplayer save shares one data path, and without\n\
-         this a second world would overwrite the first world's map. Turning it on\n\
-         moves an existing map into its own subdirectory. Read by the mod.",
-    ),
-    (
-        "bind",
-        "The address and port the map is served on. 0.0.0.0:8080 listens on every\n\
-         interface. 127.0.0.1:8080 serves only this machine.",
-    ),
-    (
-        "api_bind",
-        "The address and port the mod posts live data to (player positions,\n\
-         markers and claims). Empty means loopback on a free port, published in\n\
-         api.json beside the map so the mod finds it on its own. Set a host:port\n\
-         only when the mod runs on another machine.",
-    ),
-    (
-        "api_token",
-        "The token the mod must present when posting live data. Empty means a new\n\
-         token is generated on each start and written to api.json for the mod to\n\
-         read. Set it only when the mod runs on another machine, and set the same\n\
-         value on both sides.",
-    ),
-    (
-        "allow_public_markers",
-        "Controls who can see a new marker when its owner has not chosen.\n\
-         true: new markers are visible to everyone. false: only their owner sees\n\
-         them. Default: false. Read by both the mod and the map service.",
-    ),
-    (
-        "allow_editing_public_markers",
-        "true: any signed-in player may edit a public marker. false: only the\n\
-         owner may edit it. A private marker can only ever be edited by its\n\
-         owner. Default: false. Enforced by the mod.",
-    ),
-    (
-        "show_players_to_everyone",
-        "true: every player's position is shown to every viewer. false: a\n\
-         player's position is shown only to members of their own player group.\n\
-         The number of players online is shown to everyone either way.\n\
-         Default: true. While personal_maps is on, positions are always\n\
-         restricted to the player's own group. Enforced by the mod.",
-    ),
-    (
-        "hidden_groups",
-        "Player group names the map ignores. A group listed here is never offered\n\
-         for sharing a map and never shown in the Group tab of the player list.\n\
-         Some mods (xlib, for example) put every player into one group, and a\n\
-         group that contains everyone is not useful for sharing. Names are\n\
-         compared case-insensitively.",
-    ),
-    (
-        "personal_maps",
-        "true: each player sees only the terrain they have explored, as it looked\n\
-         when they last saw it. false: every viewer sees the whole map as it is\n\
-         now. Default: true. Read by both halves. While it is on, the mod\n\
-         restricts each player's position to their own group regardless of\n\
-         show_players_to_everyone.",
-    ),
-    (
-        "show_spawn_to_guests",
-        "Applies only while personal_maps is on. true: the terrain around spawn\n\
-         is shown to every viewer, including a browser that is not signed in.\n\
-         false: a browser that is not signed in sees nothing. Default: true.",
-    ),
-    (
-        "spawn_radius_chunks",
-        "The radius of the spawn area that show_spawn_to_guests reveals, in\n\
-         chunks. Default: 8, which is a square about half a kilometre across.",
-    ),
-    (
-        "sight_radius_chunks",
-        "The radius a player reveals around themselves as they move, in chunks.\n\
-         0 means the view distance the game granted that player. Default: 0.",
-    ),
-    (
-        "session_hours",
-        "How long a browser session stays valid after its last request, in hours.\n\
-         0 means sessions never expire: a session lasts until the browser signs\n\
-         out or invalidate_sessions_on_restart clears it. Default: 0.",
-    ),
-    (
-        "invalidate_sessions_on_restart",
-        "true: every browser session is invalidated when the map service starts,\n\
-         and every viewer must sign in again. false: sessions are kept in the\n\
-         map's database and survive a restart. Default: false.",
-    ),
-    (
-        "live_refresh_ms",
-        "The interval between live polls from the web page, in milliseconds. The\n\
-         page is normally told of changes as they happen and polls on this\n\
-         interval only when that connection is unavailable, for example behind\n\
-         a proxy that does not hold requests open. Values below 250 are treated\n\
-         as 250 and values above 60000 as 60000. Default: 1000.",
-    ),
-    (
-        "export_interval_ms",
-        "The interval between terrain exports, in milliseconds. A chunk that\n\
-         changes several times within one interval is written once, so a larger\n\
-         value means less disk activity and a less current map. Values below 1000\n\
-         are treated as 1000 and values above 600000 as 600000. A world save\n\
-         exports immediately. Default: 10000. Read by the mod.",
-    ),
-    (
-        "backfill_radius_chunks",
-        "The radius around a player that the map may fill in, in chunks, when the\n\
-         mod has not reported that player's view distance. 0 means the game\n\
-         server's MaxChunkRadius, so the map never draws ground no in-game map\n\
-         could have shown. Set it above 0 to draw wider than the game shows its\n\
-         players. Default: 0.",
-    ),
-    (
-        "threads",
-        "The number of threads that render tiles. 0 picks a count from the CPU\n\
-         count, leaving cores for the game server that usually shares the\n\
-         machine. Default: 0.",
-    ),
-    (
-        "tile_cache_mb",
-        "The memory budget for rendered tiles, in megabytes. When it is exceeded,\n\
-         the least recently used tiles are dropped and rendered again on demand.\n\
-         Default: 256.",
-    ),
-    (
-        "autostart",
-        "true: the server mod starts and stops the map service itself. false: run\n\
-         `witchlight serve` by hand, which lets the map outlive the game server.\n\
-         Default: true. Read by the mod.",
-    ),
-    (
-        "announce",
-        "true: the mod tells each player the map's address in chat when they\n\
-         join. false: it does not. Default: true. Read by the mod.",
-    ),
-    (
-        "announce_url",
-        "The address the mod announces. Empty means the address the map service\n\
-         works out for itself, which is correct on a LAN and wrong behind a\n\
-         proxy, a domain name or NAT. Set it to the address players actually use.",
-    ),
-    (
-        "[commands]",
-        "The privilege required to run each /witchlight command in game. `admin`\n\
-         and `player` cover most servers. Any privilege code the game knows also\n\
-         works, such as controlserver, chat or commandplayer. A code the game does\n\
-         not know locks the command to admins. Read by the mod.",
-    ),
-    ("commands.login", "/witchlight login: sends you a link that signs your browser in."),
-    ("commands.mark", "/witchlight mark: places a marker on the block you are looking at."),
-    ("commands.portrait", "/witchlight portrait: asks a client for a picture of its player."),
-    ("commands.palette", "/witchlight palette: asks a client for the block colour palette."),
-    ("commands.icons", "/witchlight icons: asks a client for the marker icons."),
-    ("commands.export", "/witchlight export: writes the surface of every loaded chunk."),
-    ("commands.status", "/witchlight status: reports the state of the map and the service."),
-    ("commands.service", "/witchlight service: starts and stops the map service."),
-    (
-        "[claims]",
-        "What the map does with land claims. view and create are privilege codes,\n\
-         written the same way as [commands]. Read and enforced by the mod.",
-    ),
-    (
-        "claims.view",
-        "The privilege required to see claims on the map. Default: player, because\n\
-         the game already sends every claim to every client.",
-    ),
-    (
-        "claims.create",
-        "The privilege required to draw a new claim on the map. Default: claimland,\n\
-         the same privilege the game requires for /land claim.",
-    ),
-    (
-        "claims.worldgen",
-        "true: the map draws the claims the world generator created, such as the\n\
-         perimeters around trader camps and story structures. false: it does not.\n\
-         Default: false, because those claims reveal the location of every trader\n\
-         on the server.",
-    ),
-    (
-        "[bars]",
-        "Extra bars on each player's card, beside health and food. Each entry names\n\
-         attributes on the player entity that a mod stores a resource in, such as\n\
-         mana or stamina. The value format is:\n\
-         name | value attribute | maximum attribute | colour | group\n\
-         The key is only a label for the entry. The group is the heading the bar\n\
-         is filed under; left out, the mod uses the id of an installed mod that\n\
-         appears in the attribute's name. A bar is drawn only for a player who has\n\
-         the attribute with a maximum above zero, so an entry for a mod that is\n\
-         not installed draws nothing. The two entries below are for Rustbound\n\
-         Magic.",
-    ),
-];
-
-/// Formats the note for `key` as comment lines with a blank line before them.
-/// Returns an empty string when the key has no note.
-fn noted(key: &str) -> String {
-    let Some((_, note)) = NOTES.iter().find(|(name, _)| *name == key) else {
-        return String::new();
-    };
-
-    let mut said = String::from("\n");
-    for line in note.lines() {
-        said.push_str("# ");
-        said.push_str(line);
-        said.push('\n');
-    }
-    said
-}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::files::testing::Scratch;
+    use crate::util::files::testing::Scratch;
 
-    /// A directory holding a palette, which is what makes one a map.
+    /// Creates a directory holding a palette. A palette is what makes a
+    /// directory a map.
     fn map(held: &Scratch, at: &str) -> PathBuf {
         let path = if at.is_empty() { held.at().to_path_buf() } else { held.at().join(at) };
         std::fs::create_dir_all(&path).expect("a map directory");
-        std::fs::write(crate::palette::path_in(&path), "{}").expect("a palette");
+        std::fs::write(crate::render::palette::path_in(&path), "{}").expect("a palette");
         path
     }
 
@@ -909,96 +641,38 @@ mod tests {
         // The game sends every claim to every client, so a map that hid them
         // would tell players less than the game does.
         assert_eq!(held.view, PLAYER, "where a claim is, is already everybody's");
-        // And the map must never be a way round a rule the server already has.
+        // The map must never be a way round a rule the server already has.
         assert_eq!(
             held.create,
             Privilege::CLAIM_LAND,
             "taking land through the map asks what `/land claim` asks"
         );
-        // The one of the three that starts closed, because it is the one the
-        // game does not already give: a client is told about the claim it is
-        // standing near, never about every trader camp at once.
+        // This one starts closed. The game tells a client about the claim it
+        // is standing near, never about every trader camp at once.
         assert!(!held.worldgen, "the world's own perimeters are not drawn unless asked for");
     }
 
-    /// The one setting here that lands in a browser's timer.
+    /// Checks the clamp on the only setting here that becomes a browser timer.
     #[test]
     fn the_live_beat_is_held_to_a_gap_a_browser_can_keep_up_with() {
         let told = |ms| Config { live_refresh_ms: ms, ..Config::default() }.rules().live_refresh_ms;
         assert_eq!(Config::default().live_refresh_ms, 1000, "one second: the clock the page falls back to");
         assert_eq!(told(500), 500, "what an operator asked for is what the page is told");
-        // A gap of nothing is a browser asking again the instant it is answered.
+        // A gap of nothing makes the browser ask again the instant it is
+        // answered.
         assert_eq!(told(0), REFRESH_FLOOR_MS);
-        // And somebody who typed the number in seconds gets a fast map rather
-        // than that.
+        // A number typed in seconds by mistake gives a fast map instead.
         assert_eq!(told(2), REFRESH_FLOOR_MS);
-        // Past a minute the form has given up on a marker before the beat that
-        // would have confirmed it.
+        // Past a minute the marker form gives up before the poll that would
+        // have confirmed it.
         assert_eq!(told(600_000), REFRESH_CEILING_MS);
-    }
-
-    /// Every setting an operator is handed says what it is for, and nothing says
-    /// what it is for about a setting they are not handed.
-    ///
-    /// The two halves of the file — the values serde writes and the notes written
-    /// beside them — are held apart, which is what lets each be edited without the
-    /// other. This is what stops them drifting: a field added to `Config` reaches
-    /// an operator unexplained, and a note left behind by a setting that has gone
-    /// is a note that will never again be read by anyone but its author.
-    ///
-    /// The names under `[bars]` are the exception, and the only one. They are the
-    /// operator's own words rather than settings this program has ever heard of,
-    /// so there is nothing here that could have a note about them; the note on the
-    /// table itself says what all of them are.
-    #[test]
-    fn every_setting_written_says_what_it_is_for() {
-        let template = Config::default().to_template();
-        let mut table = String::new();
-        let mut unexplained = Vec::new();
-        let mut explained = Vec::new();
-        let mut previous = "";
-
-        for line in template.lines() {
-            let text = line.trim();
-            if text.is_empty() || text.starts_with('#') {
-                previous = text;
-                continue;
-            }
-
-            let name = match text.strip_prefix('[').and_then(|rest| rest.strip_suffix(']')) {
-                Some(named) => {
-                    table = format!("{named}.");
-                    text.to_owned()
-                }
-                None => format!("{table}{}", text.split('=').next().unwrap_or_default().trim()),
-            };
-
-            if previous.starts_with('#') {
-                explained.push(name);
-            } else if table != "bars." {
-                unexplained.push(name);
-            }
-            previous = text;
-        }
-
-        assert!(
-            unexplained.is_empty(),
-            "these reach an operator with nothing said about them: {unexplained:?}"
-        );
-
-        let stale: Vec<_> = NOTES
-            .iter()
-            .map(|(name, _)| *name)
-            .filter(|name| !explained.iter().any(|written| written == name))
-            .collect();
-        assert!(stale.is_empty(), "these notes are about nothing the file holds: {stale:?}");
     }
 
     #[test]
     fn the_written_template_reads_back_as_what_wrote_it() {
-        // The table has to serialise after every plain setting, or the settings
-        // below it are read as part of it. This is the check that keeps the
-        // field last rather than a comment asking the next person to.
+        // The tables must serialise after every plain setting, or the settings
+        // below them are read as part of the table. This test enforces that
+        // field order.
         let held = Config {
             commands: Commands { export: "commandplayer".to_owned(), ..Commands::default() },
             claims: Claims { view: ADMIN.to_owned(), ..Claims::default() },
@@ -1022,8 +696,8 @@ mod tests {
 
     #[test]
     fn a_named_directory_is_served_whatever_else_is_on_disk() {
-        // The mod names it, because the mod is the half that knows which world is
-        // running. Nothing here may talk it out of that.
+        // The mod names the directory, because only the mod knows which world
+        // is running. Nothing here may override it.
         let scratch = Scratch::new("config-told");
         map(&scratch, "one");
         map(&scratch, "two");
@@ -1050,7 +724,7 @@ mod tests {
         let scratch = Scratch::new("config-two-worlds");
         map(&scratch, "Ashlands-0c4419ae");
         map(&scratch, "New World-3f8a1c04");
-        // A folder that is not a map is not offered as one.
+        // A folder that is not a map must not be offered as one.
         std::fs::create_dir_all(scratch.at().join("tiles")).expect("a folder");
 
         let complaint = at(scratch.at()).exports(None).expect_err("a question").to_string();
@@ -1061,8 +735,8 @@ mod tests {
 
     #[test]
     fn nothing_exported_yet_is_the_directory_the_mod_will_fill() {
-        // Every server is here on a first run, and refusing to start then is a
-        // map service that is down exactly when somebody is watching it.
+        // Every server is in this state on a first run. Refusing to start then
+        // would take the map service down exactly when it is being watched.
         let scratch = Scratch::new("config-empty");
         assert_eq!(at(scratch.at()).exports(None).expect("somewhere to look"), scratch.at());
     }
