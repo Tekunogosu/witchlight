@@ -32,6 +32,15 @@ a release only changes one side.
 See [ARCHITECTURE.md](ARCHITECTURE.md) for how any of this works internally,
 the full configuration reference, and the HTTP interface.
 
+## Plugins
+
+Another mod can keep rows on the map and draw them on the web map. It declares
+what its rows look like, sends them, and ships a script the page runs. The
+service stores the rows and decides who may see each one.
+
+See [docs/PLUGINS.md](docs/PLUGINS.md) for how to write one, and
+[docs/witchlight.d.ts](docs/witchlight.d.ts) for the page API an editor reads.
+
 ## Installing
 
 Most users don't need to build or run this directly. Install the

@@ -9,6 +9,24 @@ which is where that rule is kept rather than in anybody's memory.
 A version that moved for the other half says so and lists nothing, which is not an
 omission: it is what "one release" looks like from the side that did not change.
 
+## 0.52.2
+
+**Deploy note:** both halves, upgraded together; nothing is cleared. No setting,
+no address and no stored file changes. This release adds documentation and
+changes no behaviour.
+
+- **The plugin API is documented.** `docs/PLUGINS.md` describes how another mod
+  keeps rows on the map and draws them: the `plugin/` directory a mod ships, the
+  shape it declares and what happens when that shape changes, the four hooks its
+  script answers to, who the service decides may see a row, and the addresses
+  behind all of it. The plugin system was complete and had nothing written about
+  it outside the source.
+- **An editor can read the page API.** `docs/witchlight.d.ts` declares what a
+  plugin's script is handed, and `docs/jsconfig.json` is a template that turns on
+  completion and checking. Neither is compiled and neither ships. A plugin is
+  written in plain JavaScript, and `src/page/assets/plugins.js` stays the source
+  of truth.
+
 ## 0.52.1
 
 **Deploy note:** both halves, upgraded together; nothing is cleared. No setting,

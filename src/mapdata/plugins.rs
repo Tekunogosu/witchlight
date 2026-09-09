@@ -29,7 +29,7 @@ use std::sync::Mutex;
 use rusqlite::Connection;
 
 use crate::util::error::{Error, Result};
-use crate::util::log::say;
+use crate::util::log::{say, warn};
 
 /// The schema version of a plugin's own database.
 ///
@@ -89,6 +89,32 @@ pub enum Scope {
     World,
 }
 
+/// Decides what becomes of the rows already kept when a plugin's shape no
+/// longer fits them.
+///
+/// Only the plugin knows whether its old rows still mean anything under a new
+/// shape. A column added is carried either way; this decides the changes that
+/// cannot be carried, where the alternative to the plugin saying what it wants
+/// is an operator with a SQL prompt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Reshape {
+    /// Refuses the change and leaves every row where it is.
+    ///
+    /// What a plugin that says nothing gets. A plugin whose old rows are worth
+    /// keeping reads them with Query and writes them back with StoreMany.
+    #[default]
+    Refuse,
+
+    /// Keeps a copy, then builds the table again at the declared shape.
+    ///
+    /// For a shape whose old rows measure something the new one does not, where
+    /// there is nothing to carry forward and refusing only leaves the plugin
+    /// unable to store anything at all. The copy is written first and the table
+    /// is dropped only once it is safely on disk.
+    Rebuild,
+}
+
 /// Describes what a plugin says its rows look like.
 ///
 /// Columns are ordered rather than hashed, so the same declaration always
@@ -107,6 +133,11 @@ pub struct Shape {
     #[serde(default)]
     pub ranged: Vec<String>,
     pub scope: Scope,
+    /// Says what to do with the rows already kept when this shape no longer
+    /// fits them. A plugin that says nothing is refused, which is what every
+    /// plugin written before this field got.
+    #[serde(default)]
+    pub on_reshape: Reshape,
 }
 
 impl Shape {
@@ -182,6 +213,10 @@ impl Shape {
             Scope::World => b"world",
         });
 
+        // `on_reshape` is deliberately not eaten. It says how to get from one
+        // shape to the next, not what the table looks like, so folding it in
+        // would make a plugin changing only its mind about migration look like
+        // a plugin that changed its columns.
         format!("{hash:016x}")
     }
 
@@ -243,7 +278,6 @@ impl Plugin {
             .map_err(|error| Error::io(format!("making {}", directory.display()), error))?;
 
         let path = directory.join("data.sqlite");
-        let fresh = !path.exists();
 
         let connection = Connection::open(&path)
             .map_err(|error| Error::database(format!("opening {}", path.display()), error))?;
@@ -253,10 +287,16 @@ impl Plugin {
 
         let plugin = Self { id: id.to_owned(), shape: shape.clone(), connection: Mutex::new(connection) };
 
-        if fresh {
+        // What decides this is the table, not the file. Opening the database
+        // above created the file if it was missing, and the service may have
+        // already remade the folder to copy the plugin's shipped files into, so
+        // the file says nothing about whether there are rows to reconcile.
+        if plugin.has_table()? {
+            if was != Some(shape.fingerprint().as_str()) {
+                plugin.change(&path, was)?;
+            }
+        } else {
             plugin.create(&path)?;
-        } else if was != Some(shape.fingerprint().as_str()) {
-            plugin.change(&path, was)?;
         }
 
         Ok(plugin)
@@ -284,10 +324,22 @@ impl Plugin {
         let lost: Vec<&String> = held.iter().filter(|name| !self.shape.columns.contains_key(*name)).collect();
 
         if !lost.is_empty() {
+            if self.shape.on_reshape == Reshape::Rebuild {
+                return self.rebuild(
+                    path,
+                    was,
+                    &format!(
+                        "it drops {}",
+                        lost.iter().map(|name| name.as_str()).collect::<Vec<_>>().join(", ")
+                    ),
+                );
+            }
+
             return Err(Error::config(format!(
                 "plugin {} declares a shape that drops {} — this service will not \
                  decide what happens to rows that no longer fit. Read the old rows with \
-                 Query, write them back with StoreMany, or register under a new name. \
+                 Query, write them back with StoreMany, register under a new name, or \
+                 declare it rebuilding to have them replaced with a copy kept first. \
                  Its data is untouched at {}",
                 self.id,
                 lost.iter().map(|name| name.as_str()).collect::<Vec<_>>().join(", "),
@@ -299,10 +351,15 @@ impl Plugin {
             // Nothing was added and nothing was lost, so what changed is a
             // key, a type or the scope. None of those can be altered under
             // existing rows.
+            if self.shape.on_reshape == Reshape::Rebuild {
+                return self.rebuild(path, was, "a key, a type or who may see them moved");
+            }
+
             return Err(Error::config(format!(
                 "plugin {} declares the same columns in a different shape — a key, a type \
                  or who may see them. None of those can be changed under rows that are \
-                 already there. Its data is untouched at {}",
+                 already there. Declare it rebuilding to have them replaced with a copy \
+                 kept first. Its data is untouched at {}",
                 self.id,
                 path.display()
             )));
@@ -329,13 +386,72 @@ impl Plugin {
         Ok(())
     }
 
+    /// Builds the table again at the declared shape, keeping a copy first.
+    ///
+    /// Only reached where the plugin declared itself rebuilding. The copy is
+    /// written before anything is dropped and the `?` on it means a copy that
+    /// will not write leaves the rows alone, so there is no path here that
+    /// destroys the only copy of somebody's data.
+    ///
+    /// `why` says what about the shape could not be carried, so the log names
+    /// the reason rather than only the outcome. This is logged as a warning
+    /// rather than a notification: rows people earned have just been set aside,
+    /// and an operator reading the log should see that plainly.
+    fn rebuild(&self, path: &Path, was: Option<&str>, why: &str) -> Result<()> {
+        self.back_up(path, was)?;
+        let backup = self.backup_path(path, was);
+
+        self.lock()
+            .execute_batch(&format!(
+                "DROP INDEX IF EXISTS data_ranged;\nDROP TABLE IF EXISTS data;\n{}",
+                self.shape.create()
+            ))
+            .map_err(|error| Error::database(format!("rebuilding {}'s table", self.id), error))?;
+
+        warn!(
+            "plugin {}: {why}, so its table was built again empty at the shape it now \
+             declares. What was there is at {}",
+            self.id,
+            backup.display()
+        );
+        Ok(())
+    }
+
+    /// Names the copy kept for a given registration.
+    ///
+    /// Shared by the copying and by whatever reports where the copy went, so
+    /// the two can never name different files.
+    fn backup_path(&self, path: &Path, was: Option<&str>) -> PathBuf {
+        path.with_extension(format!("shape{}.bak", was.unwrap_or("unknown")))
+    }
+
+    /// Says whether this database already holds a table to keep rows in.
+    ///
+    /// Asked of the database rather than of the file, because the file existing
+    /// is not the same question. The service creates a plugin's folder to copy
+    /// its shipped files into, and opening a database makes the file whether or
+    /// not anything is in it — so a plugin whose folder was deleted arrives here
+    /// with a file present and nothing inside it. Asking what is inside makes
+    /// deleting a plugin's folder the reset it reads as, and heals a database
+    /// whose table was lost without its registration being.
+    fn has_table(&self) -> Result<bool> {
+        self.lock()
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'data'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|found| found > 0)
+            .map_err(|error| Error::database(format!("looking for {}'s table", self.id), error))
+    }
+
     /// Copies a plugin's database before its shape is changed.
     ///
     /// It uses `VACUUM INTO` rather than a file copy, for the same reason the
     /// map's own backup does. The database is in WAL mode, so the bytes of the
     /// file alone are not the database until the log is folded in.
     fn back_up(&self, path: &Path, was: Option<&str>) -> Result<()> {
-        let backup = path.with_extension(format!("shape{}.bak", was.unwrap_or("unknown")));
+        let backup = self.backup_path(path, was);
         if backup.exists() {
             return Ok(());
         }
@@ -725,6 +841,7 @@ mod tests {
             key: vec!["x".to_owned(), "y".to_owned(), "z".to_owned()],
             ranged: vec!["x".to_owned(), "z".to_owned()],
             scope: Scope::Owner,
+            on_reshape: Reshape::Refuse,
         }
     }
 
@@ -739,6 +856,7 @@ mod tests {
             key: vec![name.to_owned()],
             ranged: vec![],
             scope: Scope::World,
+            on_reshape: Reshape::Refuse,
         };
 
         // Each of these would otherwise be written into a CREATE TABLE exactly
@@ -857,6 +975,126 @@ mod tests {
         let untouched = Plugin::open(&root, "wl-heatmap", &wider, Some(&wider.fingerprint()))
             .expect("the shape it actually has");
         assert_eq!(untouched.rows().expect("still there"), 1, "a refusal costs no rows");
+    }
+
+    /// Checks that a plugin declaring itself rebuilding gets the shape it asked
+    /// for, and that what it had is kept rather than lost.
+    #[test]
+    fn a_shape_that_cannot_be_carried_is_rebuilt_where_the_plugin_asked() {
+        let scratch = Scratch::new("plugins-rebuild");
+        let root = plugins_dir(scratch.at());
+        let first = shape();
+
+        let plugin = Plugin::open(&root, "wl-heatmap", &first, None).expect("a new plugin");
+        plugin
+            .lock()
+            .execute("INSERT INTO data (owner_uid, x, y, z, code) VALUES ('uid1', 1, 2, 3, 'copper')", [])
+            .expect("a row from the old shape");
+        drop(plugin);
+
+        // A shape measuring something else entirely: different columns, a
+        // different key. Nothing here can be carried from the rows above.
+        let mut next = Shape {
+            columns: BTreeMap::new(),
+            key: vec!["chunk_x".to_owned(), "chunk_z".to_owned()],
+            ranged: vec!["chunk_x".to_owned(), "chunk_z".to_owned()],
+            scope: Scope::Owner,
+            on_reshape: Reshape::Rebuild,
+        };
+        next.columns.insert("chunk_x".to_owned(), Kind::Int);
+        next.columns.insert("chunk_z".to_owned(), Kind::Int);
+        next.columns.insert("grid".to_owned(), Kind::Text);
+
+        let rebuilt = Plugin::open(&root, "wl-heatmap", &next, Some(&first.fingerprint()))
+            .expect("a plugin that asked to be rebuilt is not refused");
+        assert_eq!(rebuilt.rows().expect("readable"), 0, "the old rows do not fit and are not kept");
+
+        // The new shape must really be in place, not merely the old one emptied.
+        rebuilt
+            .lock()
+            .execute(
+                "INSERT INTO data (owner_uid, chunk_x, chunk_z, grid) VALUES ('uid1', 4, 5, 'AA==')",
+                [],
+            )
+            .expect("the declared shape is what the table now has");
+        drop(rebuilt);
+
+        // Nothing is destroyed without a copy: what was there must still be
+        // readable, under the fingerprint of the shape that held it.
+        let backup = root.join("wl-heatmap").join(format!("data.shape{}.bak", first.fingerprint()));
+        assert!(backup.exists(), "a copy is kept before the table is dropped");
+        let kept = Connection::open(&backup).expect("the copy opens");
+        let held: i64 =
+            kept.query_row("SELECT count(*) FROM data", [], |row| row.get(0)).expect("its rows");
+        assert_eq!(held, 1, "the row that no longer fits is in the copy");
+    }
+
+    /// Checks that refusing stays the default, so a plugin that says nothing
+    /// about migrating is treated exactly as it was before rebuilding existed.
+    #[test]
+    fn a_shape_that_says_nothing_is_still_refused() {
+        let scratch = Scratch::new("plugins-refuse-default");
+        let root = plugins_dir(scratch.at());
+        let first = shape();
+        assert_eq!(first.on_reshape, Reshape::Refuse, "saying nothing means refusing");
+
+        drop(Plugin::open(&root, "wl-heatmap", &first, None).expect("a new plugin"));
+
+        let mut narrower = first.clone();
+        narrower.columns.remove("code");
+        assert!(
+            Plugin::open(&root, "wl-heatmap", &narrower, Some(&first.fingerprint())).is_err(),
+            "a column lost is refused where the plugin did not ask otherwise"
+        );
+    }
+
+    /// Checks that the JSON the mod actually sends is read as asking to
+    /// rebuild. This is the seam between the two repositories: the mod
+    /// serialises `PluginShape` and this deserialises `Shape`, and nothing but
+    /// a test spanning both spellings would catch them drifting apart.
+    #[test]
+    fn the_declaration_the_mod_sends_asks_to_rebuild() {
+        let sent = r#"{"columns":{"chunk_x":"int","chunk_z":"int","grid":"text"},
+                       "key":["chunk_x","chunk_z"],"ranged":["chunk_x","chunk_z"],
+                       "scope":"owner","on_reshape":"rebuild"}"#;
+        let shape: Shape = serde_json::from_str(sent).expect("what the mod sends is a shape");
+        assert_eq!(shape.on_reshape, Reshape::Rebuild, "the mod's word for it is read");
+        assert!(shape.check().is_ok(), "and it is a shape this service can make");
+    }
+
+    /// Checks that a shape read from what a plugin sent defaults to refusing,
+    /// so a plugin written before this field existed keeps its old behaviour.
+    #[test]
+    fn a_declaration_without_the_field_refuses() {
+        let older = r#"{"columns":{"x":"int"},"key":["x"],"scope":"owner"}"#;
+        let shape: Shape = serde_json::from_str(older).expect("a shape from before the field");
+        assert_eq!(shape.on_reshape, Reshape::Refuse, "an older declaration is unchanged");
+    }
+
+    /// Checks that deleting a plugin's folder resets it, which is what the
+    /// module says uninstalling a plugin is.
+    ///
+    /// The folder is remade before the table is looked for, standing in for the
+    /// service copying a plugin's shipped files into it on start. What decides
+    /// whether there is anything to reconcile has to be the table, or a plugin
+    /// whose folder was deleted is refused over rows that are no longer there.
+    #[test]
+    fn deleting_a_plugins_folder_resets_it() {
+        let scratch = Scratch::new("plugins-folder-reset");
+        let root = plugins_dir(scratch.at());
+        let first = shape();
+
+        drop(Plugin::open(&root, "wl-heatmap", &first, None).expect("a new plugin"));
+        std::fs::remove_dir_all(root.join("wl-heatmap")).expect("uninstalled");
+        std::fs::create_dir_all(root.join("wl-heatmap")).expect("its files copied back");
+
+        // A shape the old table could not have become, registered as though the
+        // registry still remembered the old one.
+        let mut narrower = first.clone();
+        narrower.columns.remove("code");
+        let started = Plugin::open(&root, "wl-heatmap", &narrower, Some(&first.fingerprint()))
+            .expect("a plugin whose rows are gone is not refused over them");
+        assert_eq!(started.rows().expect("readable"), 0, "and starts empty");
     }
 
     /// Checks that a reader is answered with what they may see and nothing

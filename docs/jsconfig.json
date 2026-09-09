@@ -1,0 +1,13 @@
+{
+  "//": "Copy this into a plugin's own plugin/ directory, beside viewer.js, and put witchlight.d.ts next to it. It turns on completion for the Witchlight page API. Nothing here compiles anything and the plugin ships as the plain JavaScript it is written in.",
+  "//checkJs": "Set checkJs to true to have the editor report mistakes in the plugin's own JavaScript as well. It reports every untyped parameter, so a plugin written without annotations gets a long list that says nothing about the map API. Completion on the handle works either way.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "checkJs": false,
+    "noEmit": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler"
+  },
+  "include": ["viewer.js", "scripts/**/*.js", "witchlight.d.ts"]
+}
