@@ -33,6 +33,24 @@ use crate::state::State;
 /// dropped column is offered again by the next thing drawn beside it.
 const MAX_QUEUED: usize = 4096;
 
+/// What came of asking the game to load a column.
+enum Loadable {
+    /// The savegame has no such column, so nothing will ever answer for it.
+    Absent,
+    /// The game was asked to load it, so a later step may find it answerable.
+    Asked,
+}
+
+/// How many times one column is asked for before the service stops asking.
+///
+/// A column the mod cannot answer for is asked again after the game has been
+/// told to load it, because the load is what makes the next ask answerable. A
+/// column that is still unanswered after this many rounds is one the game
+/// cannot produce, and asking forever would poll a chunk that is never coming
+/// for as long as the service runs. The count is per column and only rises on a
+/// round that failed, so ordinary ground costs one attempt.
+const MOST_ATTEMPTS: u32 = 5;
+
 /// How many columns to ask about, and how many to ask the server to load, in
 /// one step. A chunk load is real work for the game's own chunk thread, and this
 /// is a fraction of what the game generates on its own in a tick.
@@ -224,7 +242,16 @@ pub struct Puller {
     exports: PathBuf,
     near: Mutex<VecDeque<(i32, i32)>>,
     far: Mutex<VecDeque<(i32, i32)>>,
-    tried: Mutex<HashSet<(i32, i32)>>,
+    /// How many times each column has been asked for, and never answered.
+    ///
+    /// This is what stops one column being asked for forever, and what lets a
+    /// column be asked again at all: an entry is what `offer` reads to decide
+    /// whether a column is new, in flight or given up on. A column that arrives
+    /// is removed, so the map growing over it costs nothing.
+    tried: Mutex<HashMap<(i32, i32), u32>>,
+    /// The columns already reported as given up on, so the log says so once
+    /// rather than on every pass that offers them again.
+    said: Mutex<HashSet<(i32, i32)>>,
     visited: Visited,
     /// The reach an operator set. Zero means to ask the mod, and the answer is
     /// cached in `radius` below once heard.
@@ -244,7 +271,8 @@ impl Puller {
             exports: exports.to_path_buf(),
             near: Mutex::new(VecDeque::new()),
             far: Mutex::new(VecDeque::new()),
-            tried: Mutex::new(HashSet::new()),
+            tried: Mutex::new(HashMap::new()),
+            said: Mutex::new(HashSet::new()),
             visited: Visited::load(store),
             configured_radius,
             radius: std::sync::atomic::AtomicI32::new(configured_radius),
@@ -293,10 +321,57 @@ impl Puller {
             return;
         }
         let Ok(mut tried) = self.tried.lock() else { return };
-        if !tried.insert(at) {
-            return;
+        // A column is queued once per round of asking. An entry means it is
+        // already queued or has been asked for and not answered; `retry` is what
+        // puts one back after the game has been told to load it, and that is the
+        // only way a column asked for once is asked for again. Past the cap it
+        // is left alone, so a column the game cannot produce stops costing a
+        // request on every pass that draws something beside it.
+        match tried.get(&at) {
+            Some(&attempts) if attempts >= MOST_ATTEMPTS => return,
+            Some(_) => return,
+            None => {
+                tried.insert(at, 0);
+            }
         }
         queue.push_back(at);
+    }
+
+    /// Puts a column back on the queue after the game has been asked to load it,
+    /// unless it has been asked for too many times already.
+    ///
+    /// The load is what makes the next ask answerable, so a column dropped
+    /// without this is a hole nothing fills: `offer` refuses a column it has an
+    /// entry for, so nothing beside it can put it back either.
+    ///
+    /// Returns false once the column has been given up on, so the caller can say
+    /// so.
+    fn retry(&self, at: (i32, i32)) -> bool {
+        let Ok(mut tried) = self.tried.lock() else { return false };
+        let attempts = tried.entry(at).or_insert(0);
+        *attempts += 1;
+        if *attempts >= MOST_ATTEMPTS {
+            return false;
+        }
+        drop(tried);
+        let Ok(mut queue) = self.far.lock() else { return true };
+        if queue.len() < MAX_QUEUED {
+            queue.push_back(at);
+        }
+        true
+    }
+
+    /// Forgets that a column was ever asked for, so it is offered afresh.
+    ///
+    /// A column that arrived is no longer owed anything, and one that the map
+    /// later loses is asked for again like ground nobody has drawn.
+    fn arrived(&self, at: (i32, i32)) {
+        if let Ok(mut tried) = self.tried.lock() {
+            tried.remove(&at);
+        }
+        if let Ok(mut said) = self.said.lock() {
+            said.remove(&at);
+        }
     }
 
     /// Returns how far a player sees when their own view distance is unknown.
@@ -343,9 +418,9 @@ impl Puller {
     /// columns, and applies whatever it can.
     ///
     /// Columns the mod cannot answer for right now, because they are not loaded
-    /// or not saved, are dropped rather than retried immediately. `tried` keeps
-    /// them from being asked again until something beside them is drawn and
-    /// offers them afresh.
+    /// or not saved, are asked for again on a later step, once the game has been
+    /// told to load them. `tried` counts those rounds so a column the game
+    /// cannot produce is given up on rather than asked for forever.
     pub fn step(&self, state: &State) {
         let Some(endpoint) = discover(&self.exports) else { return };
 
@@ -359,22 +434,42 @@ impl Puller {
         let mut arrived = Vec::new();
         for (cx, cz) in self.next_batch(PER_STEP) {
             match self.fetch_column(&endpoint, cx, cz) {
-                Ok(Some((edge, chunk))) => {
-                    // A pull carries no season, so the chunk keeps whatever it
-                    // had. For ground never drawn before that is the year's
-                    // start, until the mod's next season pass says otherwise.
-                    let season = state
-                        .world
-                        .read()
-                        .ok()
-                        .and_then(|world| world.chunks.get(&(cx, cz)).map(Chunk::season))
-                        .unwrap_or(0);
+                Ok(Some((edge, told, chunk))) => {
+                    // The season the mod read off its own calendar for this
+                    // column. A mod too old to send one leaves the chunk with
+                    // whatever it had, which for ground never drawn before is
+                    // the year's start until the mod's next season pass says
+                    // otherwise — the behaviour before the season was carried.
+                    let season = told.unwrap_or_else(|| {
+                        state
+                            .world
+                            .read()
+                            .ok()
+                            .and_then(|world| world.chunks.get(&(cx, cz)).map(Chunk::season))
+                            .unwrap_or(0)
+                    });
+                    self.arrived((cx, cz));
                     arrived.push((edge, crate::mapdata::store::Arrived { cx, cz, season, record: chunk.record() }));
                 }
                 Ok(None) => {
-                    // The mod does not have this column loaded. Ask it to load
-                    // one, so a later step can try again once it has.
-                    self.request_load(&endpoint, cx, cz);
+                    // The mod does not have this column loaded. Ask the game for
+                    // it and queue the column again, because the load is what
+                    // makes the next ask answerable.
+                    match self.request_load(&endpoint, cx, cz) {
+                        // The savegame has no such column. No amount of asking
+                        // makes one, so this is not a failure to retry: it is
+                        // ground the world does not have, and the map is right
+                        // to leave it blank. Said at debug rather than as a
+                        // warning, because the edge of a world is not a fault.
+                        Loadable::Absent => {
+                            self.given_up((cx, cz));
+                        }
+                        Loadable::Asked => {
+                            if !self.retry((cx, cz)) {
+                                self.gave_up(cx, cz);
+                            }
+                        }
+                    }
                 }
                 Err(error) => {
                     warn!("terrain pull for ({cx}, {cz}) failed: {error}");
@@ -388,11 +483,43 @@ impl Puller {
         state.terrain_changed(&stored);
     }
 
+    /// Stops a column being asked for again, saying nothing.
+    ///
+    /// For a column the savegame does not have: the map is right to leave it
+    /// blank and an operator has nothing to fix, so this is bookkeeping rather
+    /// than a report.
+    fn given_up(&self, at: (i32, i32)) {
+        if let Ok(mut tried) = self.tried.lock() {
+            tried.insert(at, MOST_ATTEMPTS);
+        }
+    }
+
+    /// Says once that a column has been given up on, and what to do about it.
+    ///
+    /// This is the only sign an operator gets that a square of the map will stay
+    /// unexplored-looking with nobody near it, so it names the column, says why
+    /// it stopped, and says the one thing that fixes it. Said once per column:
+    /// the queue offers a given-up column again whenever something is drawn
+    /// beside it, and a warning per pass would bury the first one.
+    fn gave_up(&self, cx: i32, cz: i32) {
+        if let Ok(mut said) = self.said.lock() {
+            if !said.insert((cx, cz)) {
+                return;
+            }
+        }
+        warn!(
+            "gave up asking for the ground at chunk ({cx}, {cz}) after {MOST_ATTEMPTS} tries: \
+             the game server would not load it, so it stays blank on the map. \
+             Walking a player through it draws it. If it stays blank after that, \
+             the column is not in the game's own save."
+        );
+    }
+
     /// Fetches one column, or returns `None` when the mod has nothing loaded to
     /// answer with.
     fn fetch_column(
         &self, endpoint: &Endpoint, cx: i32, cz: i32,
-    ) -> Result<Option<(usize, Chunk)>, String> {
+    ) -> Result<Option<(usize, Option<u8>, Chunk)>, String> {
         let url = format!("{}/column/{cx}/{cz}", endpoint.base);
         let mut response = match self
             .agent
@@ -418,7 +545,7 @@ impl Puller {
         let edge = Chunk::edge_of(bytes.len())
             .ok_or_else(|| format!("a column of {} bytes is not a square number of entries", bytes.len()))?;
         let chunk = Chunk::from_record(&bytes, edge, 0).ok_or_else(|| "a record too short to read".to_owned())?;
-        Ok(Some((edge, chunk)))
+        Ok(Some((edge, parsed.season, chunk)))
     }
 
     /// Asks the mod to load a column it does not currently hold, so the game's
@@ -427,13 +554,16 @@ impl Puller {
     ///
     /// This only asks for a column the savegame already has. Loading one it does
     /// not have would generate it, and the map must never make the world bigger.
-    fn request_load(&self, endpoint: &Endpoint, cx: i32, cz: i32) {
+    fn request_load(&self, endpoint: &Endpoint, cx: i32, cz: i32) -> Loadable {
         match self.exists(endpoint, cx, cz) {
             Ok(true) => {}
-            Ok(false) => return,
+            Ok(false) => return Loadable::Absent,
             Err(error) => {
                 warn!("could not ask the mod whether ({cx}, {cz}) exists: {error}");
-                return;
+                // Whether the world has this column is unknown, so this is not
+                // an answer that it has none. Counted as an attempt like any
+                // other, which is what bounds the asking.
+                return Loadable::Asked;
             }
         }
 
@@ -446,6 +576,7 @@ impl Puller {
         {
             warn!("could not ask the mod to load ({cx}, {cz}): {error}");
         }
+        Loadable::Asked
     }
 
     /// Reports whether the savegame holds this column at all.
@@ -474,6 +605,11 @@ struct ExistsResponse {
 struct ColumnResponse {
     #[serde(rename = "Record")]
     record: String,
+    /// Where the column sits in the year, as the mod read it off the game's own
+    /// calendar. Absent from a mod older than the field, and a column with no
+    /// season keeps whatever the map had for it.
+    #[serde(rename = "Season", default)]
+    season: Option<u8>,
 }
 
 /// Starts the thread that steps the puller on its own interval. An older mod
@@ -522,6 +658,68 @@ mod tests {
         let batch = puller.next_batch(1);
         // This is a neighbour of (5, 5), not of (0, 0) or (10, 10).
         assert!(batch[0].0.abs_diff(5) <= 1 && batch[0].1.abs_diff(5) <= 1);
+    }
+
+    #[test]
+    fn a_column_the_mod_cannot_answer_for_is_asked_again() {
+        let puller = Puller::new(Arc::new(Store::in_memory()), Path::new("/nonexistent"), 0);
+        puller.visit([((0, 0), 100)]);
+        puller.seed_near([(0, 0)], &nothing_held);
+        let queued = puller.waiting();
+        assert!(queued > 0, "the column is queued to begin with");
+
+        // Draining the queue is what a step does before asking. Nothing may be
+        // re-offered from outside, which is the bug this guards: `offer` refuses
+        // a column it has already seen, so only `retry` can put one back.
+        let batch = puller.next_batch(queued);
+        assert_eq!(puller.waiting(), 0, "and drained by the asking");
+        puller.seed_near([(0, 0)], &nothing_held);
+        assert_eq!(puller.waiting(), 0, "a fresh offer alone does not put it back");
+
+        assert!(puller.retry(batch[0]), "a column not yet given up on goes back on the queue");
+        assert_eq!(puller.waiting(), 1, "so a later step asks for it again");
+    }
+
+    #[test]
+    fn a_column_nothing_answers_for_is_given_up_on() {
+        let puller = Puller::new(Arc::new(Store::in_memory()), Path::new("/nonexistent"), 0);
+        puller.visit([((0, 0), 100)]);
+        let at = (0, 0);
+        puller.seed_near([at], &nothing_held);
+        puller.next_batch(puller.waiting());
+
+        // Every round after the first drains the queue again, the way a step
+        // does. The last one must refuse, or an unanswerable column is asked
+        // for as long as the service runs.
+        let mut answered = 0;
+        for _ in 0..MOST_ATTEMPTS * 2 {
+            if !puller.retry(at) {
+                break;
+            }
+            answered += 1;
+            puller.next_batch(puller.waiting());
+        }
+        assert!(answered < (MOST_ATTEMPTS * 2) as usize, "the asking stops");
+        assert_eq!(answered, (MOST_ATTEMPTS - 1) as usize, "after the attempts it is allowed");
+        assert_eq!(puller.waiting(), 0, "and nothing is left queued for it");
+
+        // And it stays given up on however much is drawn beside it.
+        puller.seed_near([at], &nothing_held);
+        puller.seed_edge([at], &nothing_held);
+        assert_eq!(puller.waiting(), 0, "a given-up column is not offered again");
+    }
+
+    #[test]
+    fn a_column_that_arrives_is_asked_for_again_if_the_map_loses_it() {
+        let puller = Puller::new(Arc::new(Store::in_memory()), Path::new("/nonexistent"), 0);
+        puller.visit([((0, 0), 100)]);
+        let at = (0, 0);
+        puller.seed_near([at], &nothing_held);
+        puller.next_batch(puller.waiting());
+
+        puller.arrived(at);
+        puller.seed_near([at], &nothing_held);
+        assert!(puller.waiting() > 0, "ground the map lost is asked for like ground never drawn");
     }
 
     #[test]

@@ -292,6 +292,134 @@ function pluginHandle(id) {
       return box;
     },
 
+    /**
+     * Puts this plugin's own markers in the map's marker list.
+     *
+     * They are drawn on the map and listed in the marker window beside the
+     * game's own, under the same all/public/private tabs, the same search, the
+     * same ordering and the same per-marker "show on map" box — which is the
+     * whole point of putting them there rather than drawing a second set.
+     *
+     * Nothing is stored. These live in the page for as long as the plugin says
+     * so: no waypoint is made, the game is never told, and closing the page
+     * takes them with it. A plugin that wants them to outlive a reload keeps
+     * them in its own rows and says them again on the next load.
+     *
+     * Each marker takes `Key` (this plugin's own name for it, unique among this
+     * plugin's markers), `Title`, `X`, `Y`, `Z`, and optionally `Icon`,
+     * `Color`, `Owner` and `Private`. Calling this replaces everything this
+     * plugin last said; calling it with an empty list takes them all away.
+     */
+    places(markers, onEdit) {
+      if (typeof onEdit === 'function') pluginPlaceEdits.set(id, onEdit);
+      const given = Array.isArray(markers) ? markers : [];
+      pluginPlaces.set(id, given.map((place, nth) => ({
+        Key: String(place.Key ?? nth),
+        Title: String(place.Title ?? ''),
+        X: Number(place.X) || 0,
+        Y: Number(place.Y) || 0,
+        Z: Number(place.Z) || 0,
+        Icon: place.Icon ? String(place.Icon) : '',
+        Color: colourOf(place.Color),
+        Owner: place.Owner ? String(place.Owner) : '',
+        Private: Boolean(place.Private),
+        // What the popup says under the heading, as markup the plugin has
+        // already made safe. The same trust `popup` on this handle takes.
+        Said: place.Said ? String(place.Said) : '',
+      })));
+      // Drawn from what is held rather than from what arrived, since the poll
+      // is what usually calls this and the poll is not what changed.
+      redrawPlaces();
+    },
+
+    /**
+     * A mark drawn the way the map draws its own markers.
+     *
+     * The same picture a waypoint of that colour and picture would be, from the
+     * one function that draws all of them, so a plugin's marks and the map's
+     * cannot come to differ. `picture` is a name the service offers under
+     * `/icons`; one it does not have is drawn as the diamond that stands in for
+     * a missing picture everywhere else.
+     */
+    markFor: (picture, colour) => markFor(picture, colourOf(colour)),
+
+    /**
+     * Asks the reader for a colour and a picture, in the map's own picker.
+     *
+     * The same swatches the marker form offers, over the same palette the game
+     * sent and the same pictures the service has — so a mod that adds a colour
+     * to the game's picker adds it here too, and a plugin does not ship a
+     * palette of its own to fall out of step with it.
+     *
+     * Nothing is stored. This asks a question and answers it; what is done with
+     * the answer, and where it is kept, is the plugin's own. A marker is not
+     * made and the map's own markers are not touched.
+     *
+     * Answers `{colour, picture}` when the reader chooses, and null when they
+     * close the window instead — a dismissal is an answer of "no change" rather
+     * than a failure, so it resolves rather than rejects.
+     */
+    pick({ colour = '#ffffff', picture = 'circle', title = 'Pick a mark' } = {}) {
+      return new Promise(answerWith => {
+        const held = { colour: colourOf(colour), picture };
+
+        // A window of the plugin's own, built the way its panels are, so this
+        // wears the map's furniture and answers Escape like everything else.
+        const asked = document.createElement('div');
+        asked.className = 'window';
+        asked.id = `plugin-${id}-pick`;
+
+        const titleBar = document.createElement('div');
+        titleBar.className = 'bar';
+        const heading = document.createElement('h2');
+        heading.textContent = title;
+        const shut = document.createElement('button');
+        shut.className = 'shut';
+        shut.type = 'button';
+        shut.title = 'Close';
+        shut.setAttribute('aria-label', 'Close');
+        shut.append(chromeMark('x'));
+        titleBar.append(heading, shut);
+
+        const body = document.createElement('div');
+        body.className = 'plugin-body scroll';
+
+        const { colours, pictures } = pickerFields(held);
+        body.append(colours, pictures);
+
+        const take = document.createElement('button');
+        take.type = 'button';
+        take.className = 'word go';
+        take.textContent = 'Use this';
+        body.append(take);
+
+        asked.append(titleBar, body);
+        document.body.append(asked);
+        dragBy(asked);
+        growBy(asked);
+        sizeWindow(asked, 320, 380);
+
+        // Answered once, whichever way the window goes. `shutting` is what runs
+        // on the close button, on Escape and on anything else that puts a
+        // window away, so the promise is settled from there rather than from
+        // the button alone.
+        let answered = false;
+        const finish = answer => {
+          if (answered) return;
+          answered = true;
+          shutting.delete(asked);
+          shutWindow(asked);
+          asked.remove();
+          answerWith(answer);
+        };
+
+        shutting.set(asked, () => finish(null));
+        take.addEventListener('click', () => finish({ ...held }));
+
+        openWindow(asked, true);
+      });
+    },
+
     mark({ x, z, icon, label, popup, pane, hover = true }) {
       // Built rather than written into an attribute. A `url()` in markup is a
       // string the browser resolves against the document, so one that is empty
@@ -299,12 +427,22 @@ function pluginHandle(id) {
       // resolves to the page itself and is fetched as `file:///` when the page
       // was not served over http. Quoted for the same reason: a path with a
       // bracket or a space in it is not a url() somebody wrote by hand.
-      const mark = document.createElement('span');
-      mark.className = icon ? 'plugin-mark' : 'plugin-mark plain';
-      if (icon) {
-        const url = `url("${String(icon).replace(/["\\]/g, '\\$&')}")`;
-        mark.style.webkitMaskImage = url;
-        mark.style.maskImage = url;
+      //
+      // An element rather than a path is taken as the mark itself, which is what
+      // `markFor` on this handle answers with: a plugin asking for one of the
+      // map's own marks hands it straight back rather than unpicking it into a
+      // url this would put together again.
+      let mark;
+      if (icon instanceof Element) {
+        mark = icon;
+      } else {
+        mark = document.createElement('span');
+        mark.className = icon ? 'plugin-mark' : 'plugin-mark plain';
+        if (icon) {
+          const url = `url("${String(icon).replace(/["\\]/g, '\\$&')}")`;
+          mark.style.webkitMaskImage = url;
+          mark.style.maskImage = url;
+        }
       }
       const drawn = L.marker(at(x, z), {
         icon: L.divIcon({ className: 'plugin-pin', iconSize: [0, 0], html: mark.outerHTML }),
@@ -344,8 +482,11 @@ function pluginHandle(id) {
       shut.append(chromeMark('x'));
       titleBar.append(heading, shut);
 
+      // The body is the scrolling box, so a plugin's bar stays put while its
+      // contents scroll under it — the same arrangement every other window on
+      // the page has, and a plugin gets it without asking.
       const body = document.createElement('div');
-      body.className = 'plugin-body';
+      body.className = 'plugin-body scroll';
 
       panel.append(titleBar, body);
       document.body.append(panel);
@@ -616,6 +757,76 @@ function pluginHandle(id) {
     beat: (fn, ms, what) => beat(fn, ms, what || `${id}'s poll`),
     started: (promise, what) => started(promise, what || `${id}'s work`),
   };
+}
+
+/**
+ * The markers each plugin is putting in the list, by plugin.
+ *
+ * A plugin's markers are the page's to draw and nobody's to keep: they are held
+ * here for as long as the plugin says so and are gone when the page is closed.
+ * Nothing is sent to the game and nothing reaches the service, which is what
+ * separates one of these from a waypoint — a waypoint is a thing in somebody's
+ * world, and one of these is a thing on a map of it.
+ *
+ * Keyed by plugin so that one plugin replacing its markers leaves every other
+ * plugin's alone, and so a plugin that stops saying anything takes only its own
+ * with it.
+ */
+const pluginPlaces = new Map();
+
+/**
+ * What each plugin asked to be told when one of its markers is changed, by
+ * plugin. A plugin that named nothing is not offered the edit.
+ */
+const pluginPlaceEdits = new Map();
+
+/**
+ * Hands one changed marker back to the plugin that put it there.
+ *
+ * The page does not keep the change: a plugin's markers are drawn from what the
+ * plugin last said, so an edit that the plugin does not act on is an edit that
+ * disappears on the next draw. That is the honest behaviour — what a marker
+ * says is the plugin's record to change, and this is the asking.
+ *
+ * The key handed back is the plugin's own, without the `plugin:{id}:` the page
+ * put in front of it, since the plugin never saw that.
+ */
+function changedPluginPlace(place, changes) {
+  const wanted = pluginPlaceEdits.get(place.Plugin);
+  if (!wanted) return;
+  const ownKey = String(place.Key).slice(`plugin:${place.Plugin}:`.length);
+  try {
+    wanted({ ...changes, Key: ownKey });
+  } catch (error) {
+    console.warn(`witchlight: ${place.Plugin} failed on a marker edit`, error);
+  }
+}
+
+/**
+ * Every plugin's markers, as one list, in the shape a waypoint takes.
+ *
+ * `Key` is written here rather than taken from the plugin: the map, the list and
+ * the hidden set all address a marker by it, and two plugins each numbering
+ * their markers from one would otherwise be two markers claiming one row. The
+ * plugin's own id is what makes it unambiguous.
+ *
+ * `Private` is carried through as the plugin set it, so a plugin's marker sits
+ * under the same all/public/private tabs every other marker does. `OwnerUid` is
+ * deliberately absent: `mayEdit` reads it to decide whether to offer the game's
+ * own edit, and a marker the game has never heard of has no edit to offer.
+ */
+function pluginMarkers() {
+  const all = [];
+  for (const [id, places] of pluginPlaces) {
+    for (const place of places) {
+      all.push({
+        ...place,
+        Key: `plugin:${id}:${place.Key}`,
+        Plugin: id,
+      });
+    }
+  }
+  return all;
 }
 
 /**

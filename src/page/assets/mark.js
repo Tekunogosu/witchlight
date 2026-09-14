@@ -156,3 +156,69 @@ function listedRow(picture, colour, name, under, shaded) {
   line.append(mark, open);
   return { line, open };
 }
+
+/**
+ * The colour and picture pickers, over state a caller holds.
+ *
+ * The marker form asks the same two questions of its own module-level choice,
+ * against markup the page declares under fixed ids. Neither is available to a
+ * plugin: a plugin cannot add an element to `page.html`, and a second caller
+ * writing the form's own `chosenColour` would move the marker form under
+ * whoever asked last. So the fields are built rather than found, and what is
+ * chosen lives in the object handed in.
+ *
+ * `held` is read for `colour` and `picture` and written back as they are
+ * chosen, which is what lets a caller open the picker on what it already has
+ * and read the answer off the same object. `changed` is called after each
+ * choice, for a caller drawing a preview beside them.
+ *
+ * Answers the two boxes. Where they are put, what sits around them and what
+ * ends the asking are the caller's, since a form's own buttons are not this
+ * function's to invent.
+ */
+function pickerFields(held, changed) {
+  const colours = document.createElement('div');
+  colours.className = 'swatches';
+  colours.setAttribute('aria-label', 'Colours');
+
+  const pictures = document.createElement('div');
+  pictures.className = 'swatches';
+  pictures.setAttribute('aria-label', 'Pictures');
+
+  const drawPicked = () => {
+    drawSwatches(colours, palette, colourOf(held.colour), colour => {
+      held.colour = colour;
+      drawPicked();
+      if (changed) changed(held);
+    });
+
+    pictures.textContent = '';
+    // The pictures are drawn in the chosen colour, so one near black leaves
+    // nothing to pick from. Lifted the way the marker form lifts it, against
+    // the same measure of how dark is too dark to read.
+    pictures.classList.toggle('lit', brightness(colourOf(held.colour)) < TOO_DARK_TO_READ);
+
+    const offered = [...icons].sort();
+    if (offered.length === 0) offered.push('circle');
+    if (!offered.includes(held.picture)) held.picture = offered[0];
+
+    for (const name of offered) {
+      const swatch = document.createElement('button');
+      swatch.type = 'button';
+      swatch.className = 'swatch' + (name === held.picture ? ' chosen' : '');
+      swatch.title = name;
+      swatch.setAttribute('aria-label', `Picture ${name}`);
+      swatch.setAttribute('aria-pressed', String(name === held.picture));
+      swatch.append(markFor(name, colourOf(held.colour)));
+      swatch.addEventListener('click', () => {
+        held.picture = name;
+        drawPicked();
+        if (changed) changed(held);
+      });
+      pictures.append(swatch);
+    }
+  };
+
+  drawPicked();
+  return { colours, pictures };
+}

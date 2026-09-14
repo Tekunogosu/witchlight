@@ -294,6 +294,41 @@ function shutWindow(panel) {
 }
 
 /**
+ * Puts everything under a window's bar into a box that scrolls on its own.
+ *
+ * The window used to be the scrolling box itself, which meant its bar scrolled
+ * with the contents: read to the bottom of a long list and the title and the
+ * close mark were gone off the top, and shutting the window meant scrolling back
+ * up to find the mark again. The bar is the one part that has to stay reachable,
+ * so everything below it moves into a box of its own and that box scrolls.
+ *
+ * The grip is left outside, because it is placed against the window rather than
+ * against the contents — a resize corner that scrolled away with the text would
+ * be the same bug one layer down.
+ *
+ * Windows that already give their own height to a list are left alone. They
+ * scroll a row of the window rather than the whole of it, which is what keeps
+ * their headings and search boxes still, and wrapping them would nest one
+ * scrolling box in another and draw two scrollbars.
+ */
+function scrollsInside(panel) {
+  if (panel.querySelector(':scope > .scroll')) return;
+
+  const box = document.createElement('div');
+  box.className = 'scroll';
+
+  // Everything after the bar, and not the grip. Taken as a list first because
+  // moving a node out of `childNodes` while walking it skips its neighbour.
+  const under = [...panel.childNodes].filter(
+    node => !(node.nodeType === 1 && (node.classList.contains('bar') || node.classList.contains('grip'))),
+  );
+  if (under.length === 0) return;
+
+  panel.querySelector(':scope > .bar').after(box);
+  box.append(...under);
+}
+
+/**
  * Gives every window its manners, in one place.
  *
  * Each of these used to be wired where its own panel was built, which meant the
@@ -306,6 +341,11 @@ function buildWindows() {
   // Only the two that list things. A form is as big as its fields and a window
   // with a size nobody can use is a corner that does nothing when pulled.
   for (const panel of [presetPanel, directory, claimsPanel]) growBy(panel);
+  // Every window but the ones that scroll a list of their own. Those already
+  // hold their bar still by giving their height to the list instead, and a box
+  // around that would be a second scrollbar around the first.
+  for (const panel of [composer, profile, claimPanel, claimView, accessibility])
+    scrollsInside(panel);
 }
 
 /**

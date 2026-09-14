@@ -144,6 +144,28 @@ async function askForMarker() {
     return;
   }
 
+  // A plugin's own marker. Nothing is asked of the game: what the form holds is
+  // handed back to the plugin that put the marker there, and what it does with
+  // it — keep it, refuse it, redraw from it — is the plugin's own. The window
+  // closes on the same gesture a saved marker closes on, because from the
+  // reader's side it is the same gesture.
+  if (mode === 'plugin') {
+    if (editing) {
+      const [wasX, wasZ] = meant(Number(markerX.value), Number(markerZ.value));
+      changedPluginPlace(editing, {
+        Title: markerName.value.trim(),
+        Icon: chosenPicture,
+        Color: chosenColour,
+        X: Number.isFinite(wasX) ? wasX : editing.X,
+        Y: Number.isFinite(Number(markerY.value)) ? Math.round(Number(markerY.value)) : editing.Y,
+        Z: Number.isFinite(wasZ) ? wasZ : editing.Z,
+        Private: privately,
+      });
+    }
+    closeCompose();
+    return;
+  }
+
   const x = Number(markerX.value);
   const y = Number(markerY.value);
   const z = Number(markerZ.value);

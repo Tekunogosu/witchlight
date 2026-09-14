@@ -337,7 +337,12 @@ function openCompose(spot, ground) {
  * for is `mode`, and the mod decides again for real either way.
  */
 function editCompose(place) {
-  mode = mayEdit(place) ? 'marker' : 'seen';
+  // A plugin's marker is not the game's, so neither answer `mayEdit` gives is
+  // the right one: the game has never heard of it, and the plugin that put it
+  // there is what decides what may change about it. It opens in a mode of its
+  // own — every field live, and the save handed back to the plugin rather than
+  // sent to a game server that has nothing to store.
+  mode = place.Plugin ? 'plugin' : (mayEdit(place) ? 'marker' : 'seen');
   editing = place;
   editingPreset = -1;
   // What the marker was put on, which the game read at the moment it was made
@@ -367,7 +372,7 @@ function editCompose(place) {
   // A marker somebody else owns is theirs to be seen by whoever they let; taking
   // it private would be taking it off their own map. Set before the form is drawn,
   // because it is what the mark that says so is drawn from.
-  mayKeep = Boolean(viewer && place.OwnerUid === viewer.Uid);
+  mayKeep = mode === 'plugin' || Boolean(viewer && place.OwnerUid === viewer.Uid);
   showFields();
   showCompose();
   // A marker made before the mod kept what it was put on. The map knows what it
@@ -627,7 +632,10 @@ function showCompose() {
   drawPictures();
   frame();
 
-  if (viewer && viewer.Name) {
+  // A plugin's marker is the page's own and asks the game for nothing, so it
+  // is saveable by whoever can see it — a login is what making a waypoint
+  // needs, not what changing a mark this page drew needs.
+  if (mode === 'plugin' || (viewer && viewer.Name)) {
     sayHere('');
     markerSave.disabled = false;
     // Nothing to type into a marker somebody else owns, so nothing is put under
@@ -647,6 +655,13 @@ function showCompose() {
   // offer. Asked again here rather than only at start, which is the same rule
   // the marker pictures follow.
   if (palette.length === 0) started(pollColours().then(drawColours), 'reading the colours');
+  // The pictures are asked for on the same terms. The set is written to disk by
+  // the mod, so a page that loaded before the mod had exported anything read an
+  // empty directory and kept it: the only other ask happens when a marker
+  // arrives naming a picture nobody has heard of, and a new server has no
+  // markers to name one. That left the picker offering the one stand-in circle
+  // until the page was reloaded by hand.
+  if (icons.size === 0) started(pollIcons().then(drawPictures), 'reading the pictures');
 }
 
 /**
@@ -661,6 +676,10 @@ function showCompose() {
 function showFields() {
   const preset = mode === 'preset';
   const reading = mode === 'seen';
+  // A preset is a shape a game marker starts from, so a plugin's marker is not
+  // offered one: what it would make is a waypoint, which is the one thing a
+  // plugin's marker is not.
+  const ownedByPlugin = mode === 'plugin';
   // A preset is already the thing the mark would make, so it is the one mode
   // that is not offered it. A marker being changed is offered it like a new one:
   // deciding a block should start this way is a thing somebody works out from a
@@ -668,7 +687,7 @@ function showFields() {
   // A preset is already the thing the mark would make. A marker nobody here may
   // change is offered a whole preset instead, on the button that would otherwise
   // save it, so the mark would be a second way to the same place.
-  markerRemember.style.display = preset || reading ? 'none' : '';
+  markerRemember.style.display = preset || reading || ownedByPlugin ? 'none' : '';
   document.getElementById('pattern-field').style.display =
     preset || alsoPreset ? '' : 'none';
   document.getElementById('place-field').style.display = preset ? 'none' : '';

@@ -170,6 +170,15 @@ let drawnPlaces = null;
 const drawnMarks = new Map();
 
 /**
+ * The markers the game last sent, before the plugins' own were added to them.
+ *
+ * Drawing again asks for this rather than for what was drawn: `listed` is the
+ * two sets already put together, and handing that back to be merged a second
+ * time is every plugin marker drawn twice.
+ */
+let fromGame = [];
+
+/**
  * Draws the markers, when they are not the ones already drawn.
  *
  * Markers change a few times an hour and arrive every two seconds. Rebuilding
@@ -177,7 +186,16 @@ const drawnMarks = new Map();
  * none of them had moved.
  */
 function drawPlaces(waypoints) {
-  const shape = JSON.stringify(waypoints);
+  // What the game last sent, kept apart from what the plugins are saying so
+  // that drawing again is drawing the same merge rather than merging what was
+  // already merged — which is a plugin's markers doubling on every redraw.
+  fromGame = waypoints;
+  // The game's markers and whatever the plugins are saying, as one set. Merged
+  // here rather than at either end because this is the one place that draws a
+  // marker: the list, the tabs, the search and the ordering all read what this
+  // leaves in `listed`, so a plugin's markers joining here join all of them.
+  const marked = [...waypoints, ...pluginMarkers()];
+  const shape = JSON.stringify(marked);
   if (shape === drawnPlaces) {
     return;
   }
@@ -188,7 +206,7 @@ function drawPlaces(waypoints) {
   forgetHovered();
   places.clearLayers();
   drawnMarks.clear();
-  for (const place of waypoints) {
+  for (const place of marked) {
     // Hidden by this reader, for this reader: still listed, not drawn.
     if (!markerShown(place)) continue;
     const picture = markFor(place.Icon, colourOf(place.Color)).outerHTML;
@@ -204,6 +222,10 @@ function drawPlaces(waypoints) {
     })
       .bindPopup(
         `<b class="said-name">${title}${kept}</b>` +
+        // What a plugin wanted said about its own marker, under the heading and
+        // above the line that says where it is. Given as already-escaped markup
+        // by the plugin, which is the same trust `popup` on the handle takes.
+        (place.Said || '') +
         `<span class="said-foot">` +
         `<span class="said-where">${x}, ${place.Y}, ${z}</span>${owner}</span>`)
       .addTo(places);
@@ -228,7 +250,7 @@ function drawPlaces(waypoints) {
   // the same moment they changed rather than from a clock of its own — and it is
   // drawn after the marks rather than before them, because what it finds is what
   // the map draws larger.
-  listed = waypoints;
+  listed = marked;
   drawDirectory();
 }
 
@@ -241,7 +263,7 @@ function drawPlaces(waypoints) {
  */
 function redrawPlaces() {
   drawnPlaces = null;
-  drawPlaces(listed);
+  drawPlaces(fromGame);
 }
 
 /**

@@ -9,6 +9,117 @@ which is where that rule is kept rather than in anybody's memory.
 A version that moved for the other half says so and lists nothing, which is not an
 omission: it is what "one release" looks like from the side that did not change.
 
+## 0.52.10
+
+**Deploy note:** both halves, upgraded together; nothing is cleared. No setting,
+no address, no stored file and no database table changes. The new keys are
+bound by default and can be rebound or cleared in the account window, beside
+the keys that were already there.
+
+- **Five more keys.** Shift and M shows the markers or hides them, Shift and G
+  the chunk grid, and Shift and F follows your own player the way clicking your
+  own card does — pressed again, it lets go. Shift with the plus and minus keys
+  zooms in and out. The two that turn a setting turn the same switch the
+  accessibility panel does, so the panel and the key never disagree; the zoom
+  keys press the map's own buttons, so they stop at the same limits a click
+  stops at. Each is listed under the map with the rest and can be rebound in the
+  account window.
+
+## 0.52.9
+
+**Deploy note:** both halves, upgraded together; nothing is cleared. No setting,
+no address, no stored file and no database table changes. Squares already drawn
+in the wrong season repair themselves as the year turns, once both halves are
+upgraded. Squares left blank fill in when somebody walks through them.
+
+- **Ground the map asked for once and never again now fills in.** A column the
+  game had not loaded was asked for, and the mod was told to load it so a later
+  ask would be answered. The record of having asked was never cleared, and the
+  queue refuses a column it has already seen, so the later ask never came and
+  nothing beside it could offer it again. The hole stayed for as long as the
+  service ran. A column is now asked for again after the load, up to five times,
+  and a column the game will not produce is given up on rather than asked for
+  forever. Giving up says so once, naming the chunk and what fills it in.
+- **A square of the wrong season no longer sits in the middle of the right one.**
+  Ground pulled straight from the game arrived with no season, so the map filed
+  the start of the year and drew a chunk of spring grass in an autumn field. The
+  mod now sends the season with the column, and takes that column into the set
+  the seasonal pass walks, so the year turning corrects it like everywhere else.
+  Ground pulled from a mod too old to send one keeps the old behaviour.
+
+## 0.52.8
+
+Moved for the server mod, which now sends a portrait again when a player changes
+what they are wearing. Nothing in the map service changed.
+
+## 0.52.7
+
+**Deploy note:** both halves, upgraded together; nothing is cleared. No setting,
+no address, no stored file and no database table changes. Everything here is the
+page's own script.
+
+- **The marker form fills in its pictures on a server that has just started.**
+  The pictures are files the mod writes beside the map, so a page opened before
+  the mod had written them read an empty directory and kept it. The set was asked
+  for once at start and then only when a marker arrived naming a picture nobody
+  had heard of, which a new server has no markers to do, so the picker offered
+  the one stand-in circle until the page was reloaded by hand. The form now asks
+  again when it opens with no pictures, which is the rule the colours beside them
+  already followed.
+
+## 0.52.6
+
+**Deploy note:** both halves, upgraded together; nothing is cleared. No setting,
+no address, no stored file and no database table changes. Everything here is the
+page's own script and styling.
+
+- **A plugin's marker can be changed in the marker editor.** A right click on one
+  opened the editor with every field dead, because `mayEdit` answers for a
+  waypoint and the game has never heard of a plugin's marker. It now opens in a
+  mode of its own: the fields are live, the save is handed back to the plugin
+  that put the marker there rather than sent to the game, and a login is not
+  asked for, since nothing is being asked of a game server. What the plugin does
+  with the change is the plugin's own — the page keeps nothing, so a plugin that
+  ignores an edit is a marker that goes back to what it was on the next draw.
+  `places` takes the callback beside the markers.
+- **A plugin's marker can say more than its name.** `Said` on a marker is markup
+  the popup shows under the heading, so a marker can open with a list or a table
+  rather than only a title and a position.
+
+## 0.52.5
+
+**Deploy note:** both halves, upgraded together; nothing is cleared. No setting,
+no address, no stored file and no database table changes. Everything here is the
+page's own script and styling.
+
+- **A plugin can ask for a colour and a picture, in the map's own picker.**
+  `pick` on the handle opens the swatches the marker form offers, over the
+  palette the game sent and the pictures the service has, and answers what was
+  chosen or null where the window was closed instead. A plugin no longer ships a
+  palette of its own to fall out of step with the game's. The picker itself is
+  `pickerFields` in `mark.js`, built as elements over state a caller holds: the
+  marker form's own binds to fixed ids and writes module-level state, which a
+  second caller cannot borrow without moving the form under whoever asked last.
+- **A plugin can draw one of the map's own marks.** `markFor` on the handle
+  answers the same element a waypoint of that colour and picture is drawn as, and
+  `mark`'s `icon` now takes an element as well as a path. A mark drawn this way
+  takes the reader's own mark size and the outline the map's markers wear, rather
+  than a size of the plugin's own.
+- **A plugin can put its own markers in the marker list.** `places` on the handle
+  hands the page a set of markers, which are drawn on the map and listed beside
+  the game's own under the same all/public/private tabs, the same search, the
+  same ordering and the same per-marker "show on map" box. They are merged where
+  `drawPlaces` leaves what the list reads, so they join every one of those at
+  once rather than each being wired separately. Nothing is stored: no waypoint is
+  made, the game is never told, and the set is gone when the page is closed. Keys
+  are namespaced by plugin, so two plugins cannot claim one row, and no
+  `OwnerUid` is written, so the game's own edit and the bulk privacy actions pass
+  them over.
+- **Drawing the markers again no longer doubles a plugin's own.** `redrawPlaces`
+  handed back the list it had already merged into, so every plugin marker gained
+  a copy on each redraw. What the game last sent is now kept apart from what the
+  plugins are saying.
+
 ## 0.52.2
 
 **Deploy note:** both halves, upgraded together; nothing is cleared. No setting,

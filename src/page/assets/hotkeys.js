@@ -1,10 +1,14 @@
-// One key per thing the corner offers.
+// One key per thing the page offers.
 //
-// A press does what the button does, through the button: every one of these
+// A press does what the control does, through the control: every one of these
 // already knows whether it is offered — signed in, allowed to take land — and
 // whether a press opens or shuts, so a key that reached past it would have to
 // know both again. The one exception is the marker, which the key puts under the
 // pointer rather than wherever the form last was, the way a right click does.
+//
+// A setting is a control too, and its owner is `setSetting` rather than a button:
+// the switch in the panel and the key are two ways to the same answer, so a key
+// that wrote the layer itself would leave the switch beside it saying otherwise.
 //
 // Which key is which follows the account. A keyboard's question is about the
 // hand on it rather than the screen in front of it, and the same hand reaches for
@@ -50,6 +54,55 @@ const hotkeys = {
     key: 'o',
     offered: () => accountBar.querySelector('a'),
     act: () => accountBar.querySelector('a').click(),
+  },
+  // What is drawn on the map, and how closely it is being looked at. Shift and
+  // the letter, so that the key for seeing the markers sits beside the key for
+  // the list of them rather than taking a letter of its own somewhere else.
+  //
+  // These two are switches rather than buttons, and are turned through the one
+  // owner of what a setting means — so the panel follows the key exactly as it
+  // follows the switch. Offered to everybody: what a reader sees on their own
+  // screen is nobody's business but theirs, signed in or not.
+  showMarkers: {
+    label: 'Show markers',
+    key: 'M',
+    offered: () => true,
+    act: () => setSetting('markers', !settings.markers.on),
+  },
+  showGrid: {
+    label: 'Chunk grid',
+    key: 'G',
+    offered: () => true,
+    act: () => setSetting('grid', !settings.grid.on),
+  },
+  // The same toggle the card is: pressed again it lets go, because following is
+  // a standing instruction rather than a place to jump to. Gated on the card
+  // existing rather than on being signed in, so the key is silent while the
+  // player it would follow is not on the page — which is the answer clicking a
+  // card that is not there gives.
+  followMe: {
+    label: 'Follow me',
+    key: 'F',
+    offered: () => Boolean(viewer && viewer.Uid && cards.get(String(viewer.Uid))),
+    act: () => follow(String(viewer.Uid)),
+  },
+  // Leaflet's own two, clicked rather than zoomed by hand: they already know the
+  // ceiling, the floor, and that a zoom while somebody is followed goes about the
+  // middle of the view instead of about the pointer.
+  //
+  // `+` and `_` are what Shift and those two keys produce, which is what a press
+  // is matched on — the shifted characters, not the keys they are printed on.
+  zoomIn: {
+    label: 'Zoom in',
+    key: '+',
+    offered: () => corner.querySelector('.leaflet-control-zoom-in'),
+    act: () => corner.querySelector('.leaflet-control-zoom-in').click(),
+  },
+  zoomOut: {
+    label: 'Zoom out',
+    key: '_',
+    offered: () => corner.querySelector('.leaflet-control-zoom-out'),
+    act: () => corner.querySelector('.leaflet-control-zoom-out').click(),
   },
 };
 

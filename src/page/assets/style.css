@@ -400,7 +400,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; color-scheme: dark;
    pixels apart — which is a window that jumps that far the moment it is grabbed.
    The widths below are the whole window for the same reason. */
 .window { position: absolute; z-index: 1100; box-sizing: border-box; display: none;
-          max-height: calc(100% - 24px); overflow-y: auto;
+          max-height: calc(100% - 24px); overflow: hidden;
           padding: var(--gap-3) var(--gap-4) var(--gap-4);
           background: var(--surface-veil);
           border: 1px solid var(--line); border-radius: var(--round);
@@ -417,6 +417,27 @@ html, body { margin: 0; height: 100%; overflow: hidden; color-scheme: dark;
    column. Only the strip at the end is allowed to be pushed away from its
    neighbours, and it is the one thing here that says so. */
 .window.open > * { flex: none; }
+/* What scrolls is the contents, not the window.
+   The window itself used to be the scrolling box, which put the bar inside the
+   scrolled area: a reader who scrolled down lost the title and the close mark
+   off the top of the window, and had to scroll back up to shut it. The bar is
+   the one part of a window that must always be reachable, so scrolling moved
+   inward to a box holding everything under it. Only windows that have not
+   already arranged their own scrolling get this — the ones listed further down
+   give their own height to a list instead, and two nested scrolling boxes is
+   two scrollbars. */
+.window.open > .scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto;
+                         scrollbar-gutter: stable;
+                         display: flex; flex-direction: column;
+                         /* The scrollbar stops short of the corner, so the grip
+                            is not sitting under the bar's lower end. Without
+                            this the two occupy the same pixels and the corner
+                            answers to whichever is on top, which is the
+                            scrollbar — a resize handle that cannot be grabbed. */
+                         padding-bottom: 18px;
+                         margin: 0 calc(var(--gap-4) * -1);
+                         padding-left: var(--gap-4); padding-right: var(--gap-4); }
+.window.open > .scroll > * { flex: none; }
 /* The bar is the handle. Full bleed against the window's own padding, so what
    can be grabbed is the whole strip and not a word in the middle of it. */
 .window > .bar { display: flex; align-items: center; gap: var(--gap-2);
@@ -470,7 +491,13 @@ html, body { margin: 0; height: 100%; overflow: hidden; color-scheme: dark;
    with the thirteenth marker narrows the rows by its own width — which slides
    every column out from under the heading that names it. */
 #preset-list, #marker-list, #claim-rows, #apply-list { flex: 1 1 auto; min-height: 0; overflow-y: auto;
-                             scrollbar-gutter: stable; max-height: 264px; }
+                             scrollbar-gutter: stable; max-height: 264px;
+                             /* The list stops short of the window's bottom edge
+                                so its scrollbar does not run down into the
+                                resize corner. Where the two overlapped the
+                                scrollbar won every click and the grip could not
+                                be grabbed at all. */
+                             padding-bottom: 18px; }
 /* Once a reader has said how tall the window is, the list is what fills it, so
    the standing cap on the list has to give way to what they asked for. */
 .window.sized #preset-list, .window.sized #marker-list, .window.sized #apply-list,
@@ -1453,8 +1480,24 @@ body.show-marker-names .marker .tag { display: block; }
 /* Centred on the position it names, the way a waypoint's own mark is: a pin
    drawn from its corner sits down and to the right of the block it is about. */
 .plugin-pin .plugin-mark { transform: translate(-50%, -50%); }
+/* A plugin mark drawn as one of the map's own, which is what `markFor` on the
+   handle answers with. It takes the reader's own mark size and the outline the
+   map's markers wear, so a plugin that asks for one is not a second set of
+   markers sitting at a size of their own beside them. The centring and the
+   scale are one declaration because they are one transform: written apart, the
+   second would replace the first and leave the mark hanging off its block. */
+.plugin-pin .masked, .plugin-pin .diamond {
+    display: block; width: 18px; height: 18px;
+    transform: translate(-50%, -50%) scale(var(--mark-scale));
+    transition: transform .12s ease-out;
+    filter: drop-shadow(0 0 1px #000) drop-shadow(0 0 2px #000a); }
+.plugin-pin .diamond { width: 11px; height: 11px; }
 /* A plugin fills this itself. Only the room it has to fill is said here. */
-.plugin-body { padding: var(--gap-3); overflow: auto; }
+/* The scrolling and the clearance under it come from `.scroll`, which this box
+   also wears. Only the inset is its own, and the horizontal half of it is
+   restated because `.scroll` pulls its own margins out to the window's edge so
+   a scrollbar sits against it. */
+.plugin-body { padding-top: var(--gap-3); }
 /* What a plugin's mark says when it is opened. The heading, the footer and the
    rule between them are the map's own — `said-name`, `said-may`, `said-foot` —
    so a plugin's popup and a claim's are the same object with different words in
