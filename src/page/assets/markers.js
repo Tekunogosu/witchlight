@@ -175,15 +175,6 @@ async function askForMarker() {
     return;
   }
 
-  // Asked for and impossible is worth saying out loud. A marker made from a
-  // right click carries the block it was made on, but one being changed carries
-  // nothing to key a preset to — so the pattern has to be typed, and a mark
-  // pressed to no effect is worse than a mark that says why.
-  if (alsoPreset && markerPattern.value.trim() === '' && !(clicked && clicked.code)) {
-    sayHere('A preset needs a block to start from: type one above.', true);
-    return;
-  }
-
   const [worldX, worldZ] = meant(x, z);
   const marker = {
     // Named here rather than left blank for the game to name. A marker with no
@@ -307,11 +298,10 @@ function refused(why) {
  * rather than only on the next load.
  */
 async function updatePreset() {
+  // An empty pattern is kept as it was typed. A preset that names no block
+  // matches nothing and is picked from the list by hand, which is a preset
+  // somebody may want.
   const pattern = markerPattern.value.trim();
-  if (pattern === '') {
-    sayHere('A preset needs something to match. An asterisk (*) stands for any run of characters.', true);
-    return;
-  }
 
   const presets = (mine.Presets || []).slice();
   const making = editingPreset < 0;
@@ -401,13 +391,12 @@ async function askPrivacy(place, hidden) {
   }
 }
 
-/** Keeps what this marker is, against whatever was clicked to place it. */
+/** Keeps what this marker is, under the pattern the form is showing. */
 async function rememberPreset(marker) {
-  // What was typed, or failing that what was clicked. Nothing to key it on is
-  // not worth stopping a marker over — the marker is the point and the preset is
-  // the extra.
-  const pattern = markerPattern.value.trim() || widened(clicked && clicked.code);
-  if (pattern === '') return;
+  // Exactly what the field says. The form fills it in from the block when it
+  // opens, so a field left empty was emptied on purpose, and the preset is kept
+  // naming no block rather than being keyed to the block underfoot.
+  const pattern = markerPattern.value.trim();
 
   const kept = {
     Pattern: pattern,

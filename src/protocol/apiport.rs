@@ -378,8 +378,8 @@ fn uid_asked(body: &str) -> Option<String> {
     (!asked.uid.is_empty()).then_some(asked.uid)
 }
 
-/// Holds whose preset this is and what it says. A preset with nothing to match
-/// is refused here rather than stored and never reached.
+/// Holds whose preset this is and what it says. A preset whose pattern is empty
+/// names no block and is kept, because it is picked from the list by hand.
 fn preset_asked(body: &str) -> Option<(String, Preset)> {
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "PascalCase")]
@@ -389,8 +389,7 @@ fn preset_asked(body: &str) -> Option<(String, Preset)> {
     }
 
     let asked: Asked = serde_json::from_str(body).ok()?;
-    (!asked.uid.is_empty() && !asked.preset.pattern.trim().is_empty())
-        .then_some((asked.uid, asked.preset))
+    (!asked.uid.is_empty()).then_some((asked.uid, asked.preset))
 }
 
 /// Names who the mod is asking a login token for.

@@ -42,6 +42,9 @@ const LONGEST_WORD: usize = 128;
 /// both the code under the pointer and the presets to try against it. A `*`
 /// stands for any run of characters, so a preset saved against copper ore in one
 /// rock can be widened by hand to every rock it appears in.
+///
+/// An empty pattern names no block. A preset with one never matches anything and
+/// is reached only by picking it from the list by hand.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct Preset {
@@ -132,9 +135,6 @@ impl Person {
             clip(&mut preset.icon);
             clip(&mut preset.color);
         }
-        // A preset that matches nothing can never be reached and would sit in
-        // the window being scrolled past.
-        self.presets.retain(|preset| !preset.pattern.is_empty());
         self.color = crate::util::text::hex_colour(&self.color).unwrap_or_default();
         // A key is a guid, so anything longer is not one. A list longer than
         // the map could hold means the browser sent something other than
@@ -375,13 +375,15 @@ mod tests {
     }
 
     #[test]
-    fn a_pattern_that_matches_nothing_is_dropped() {
+    fn a_preset_naming_no_block_is_kept_with_an_empty_pattern() {
         let preferences = store();
         let mut asked = ferns();
         asked.presets.push(Preset { pattern: "   ".to_owned(), ..Preset::default() });
         preferences.set("uid-ada", asked);
 
-        assert_eq!(preferences.of("uid-ada").presets.len(), 1);
+        let held = preferences.of("uid-ada").presets;
+        assert_eq!(held.len(), 2, "a preset that names no block is still a preset");
+        assert_eq!(held[1].pattern, "", "and its pattern is stored empty rather than as spaces");
     }
 
     #[test]

@@ -9,6 +9,35 @@ which is where that rule is kept rather than in anybody's memory.
 A version that moved for the other half says so and lists nothing, which is not an
 omission: it is what "one release" looks like from the side that did not change.
 
+## 0.52.12
+
+**Deploy note:** both halves, upgraded together; nothing is cleared. No setting,
+no address, no stored file and no database table changes. The mod half changed.
+The map service is unchanged and moves with it.
+
+- **The icon picker is labelled "Marker Icon".** Both in-game marker windows
+  labelled it "Picture". The window a marker is made in and the window that
+  opens on somebody else's marker now read the label from one place, so the two
+  cannot name the same control differently again.
+
+## 0.52.11
+
+**Deploy note:** both halves, upgraded together; nothing is cleared. No setting,
+no address, no stored file and no database table changes. Presets already kept
+are untouched. Anybody who rebound the zoom keys by hand keeps the keys they
+chose; anybody who did not gets the new defaults.
+
+- **A preset can name no block.** Clearing the block field on a preset now keeps
+  it cleared. Such a preset matches nothing and is used only by picking it from
+  the list, which is what an empty field says. Previously the map filled an
+  emptied field back in from the block under the marker, so the preset was
+  quietly kept against that block and then matched it in game.
+- **The zoom keys are the keys they are printed on.** Zoom in is the equals key
+  and zoom out is the minus key, pressed on their own. They were the shifted
+  characters those keys produce, so the reminder under the map named a key that
+  was not the one to press. Both are still rebound in the account window, and
+  the wheel and the map's own buttons zoom as they did.
+
 ## 0.52.10
 
 **Deploy note:** both halves, upgraded together; nothing is cleared. No setting,

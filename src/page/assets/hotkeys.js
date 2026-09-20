@@ -90,17 +90,17 @@ const hotkeys = {
   // ceiling, the floor, and that a zoom while somebody is followed goes about the
   // middle of the view instead of about the pointer.
   //
-  // `+` and `_` are what Shift and those two keys produce, which is what a press
-  // is matched on — the shifted characters, not the keys they are printed on.
+  // `=` and `-` are the unshifted characters those two keys produce, which is
+  // what a press is matched on. Both are rebound in the account window.
   zoomIn: {
     label: 'Zoom in',
-    key: '+',
+    key: '=',
     offered: () => corner.querySelector('.leaflet-control-zoom-in'),
     act: () => corner.querySelector('.leaflet-control-zoom-in').click(),
   },
   zoomOut: {
     label: 'Zoom out',
-    key: '_',
+    key: '-',
     offered: () => corner.querySelector('.leaflet-control-zoom-out'),
     act: () => corner.querySelector('.leaflet-control-zoom-out').click(),
   },
