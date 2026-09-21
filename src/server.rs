@@ -16,6 +16,7 @@ use tiny_http::Server;
 use crate::protocol::api::Api;
 use crate::util::error::{Error, Result};
 use crate::mapdata::facts;
+use crate::util::faults;
 use crate::util::net;
 use crate::render::pyramid;
 use crate::web::routes;
@@ -119,7 +120,7 @@ fn start_frontier(puller: &Arc<crate::protocol::pull::Puller>, state: &Arc<State
     {
         let puller = Arc::clone(puller);
         let state = Arc::clone(state);
-        std::thread::spawn(move || {
+        faults::forever("frontier-near", move || {
             loop {
                 std::thread::sleep(NEAR_EVERY);
                 let whereabouts = state.live.whereabouts();
@@ -153,7 +154,7 @@ fn start_frontier(puller: &Arc<crate::protocol::pull::Puller>, state: &Arc<State
 
     let puller = Arc::clone(puller);
     let state = Arc::clone(state);
-    std::thread::spawn(move || {
+    faults::forever("frontier-edge", move || {
         loop {
             std::thread::sleep(FRONTIER_EVERY);
             let Ok(world) = state.world.read() else { continue };
@@ -169,7 +170,7 @@ const COLLECT_EVERY: std::time::Duration = std::time::Duration::from_secs(60);
 /// Starts the thread that frees chunk versions nobody references.
 fn start_collecting(state: &Arc<State>) {
     let state = Arc::clone(state);
-    std::thread::spawn(move || {
+    faults::forever("collector", move || {
         loop {
             std::thread::sleep(COLLECT_EVERY);
             state.memory.collect();
@@ -251,7 +252,32 @@ fn answer(server: &Server, state: &Arc<State>) {
             continue;
         }
 
-        let response = routes::route(&mut request, state);
+        // Answer inside a catch, so that one request that panics costs that
+        // request and not the service.
+        //
+        // This loop runs on the main thread as well as on the workers, and a
+        // panic reaching the main thread unwinds out of `serve` and ends the
+        // run. That is the whole service gone because one reader asked for one
+        // thing. The panic is still reported by the hook in
+        // [`crate::util::faults`], which names the request below.
+        //
+        // `AssertUnwindSafe` because the state behind the request is shared
+        // and already guarded by its own locks, and those locks hand back
+        // their contents after a panic rather than staying poisoned. See
+        // `crate::util::log::gate` for the same choice.
+        let url = request.url().to_owned();
+        let answered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            routes::route(&mut request, state)
+        }));
+
+        let response = match answered {
+            Ok(response) => response,
+            Err(_) => {
+                warn!("the request that panicked was for {url}, and was answered 500");
+                crate::util::http::text(500, "that request could not be answered")
+            }
+        };
+
         if let Err(error) = request.respond(response) {
             warn!("response failed: {error}");
         }

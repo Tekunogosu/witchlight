@@ -477,7 +477,7 @@ impl State {
     pub fn drop_remembered(&self, uid: &str, regions: &[(i32, i32)]) {
         let Ok(mut cache) = self.cache.lock() else { return };
         cache.remove_where(|key, (level, x, z)| {
-            if key.is_empty() || !key.split(|c| c == ':' || c == ',' || c == ';').any(|part| part == uid) {
+            if key.is_empty() || !key.split([':', ',', ';']).any(|part| part == uid) {
                 return false;
             }
             let span = 1i32 << level;

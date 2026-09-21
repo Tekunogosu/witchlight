@@ -466,18 +466,8 @@ fn union_in(inner: &Inner, view: &View, region: (i32, i32)) -> Option<[u8; BITSE
 mod tests {
     use super::*;
     use crate::mapdata::store::Arrived;
+    use crate::render::columns::testing::record;
     use std::time::SystemTime;
-
-    fn record(edge: usize, block: u16) -> Vec<u8> {
-        let mut record = Vec::with_capacity(edge * edge * 6);
-        for index in 0..edge * edge {
-            record.extend_from_slice(&block.to_le_bytes());
-            record.extend_from_slice(&(index as i16).to_le_bytes());
-            record.push(80);
-            record.push(90);
-        }
-        record
-    }
 
     /// Builds a map with one chunk at spawn, plus the memory over it.
     fn spawn() -> (Arc<Store>, Memory, Stored) {

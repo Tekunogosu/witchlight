@@ -424,8 +424,10 @@ mod tests {
     #[test]
     fn hidden_markers_are_kept_and_tidied() {
         let preferences = Preferences::load(Arc::new(Store::in_memory()));
-        let mut person = Person::default();
-        person.hidden_markers = vec!["b".to_owned(), "a".to_owned(), "".to_owned(), "a".to_owned()];
+        let person = Person {
+            hidden_markers: vec!["b".to_owned(), "a".to_owned(), "".to_owned(), "a".to_owned()],
+            ..Default::default()
+        };
         assert!(preferences.set("uid-ada", person));
         assert_eq!(preferences.of("uid-ada").hidden_markers, vec!["a", "b"], "sorted, deduplicated, nothing empty");
         assert!(!serde_json::to_string(&Person::default()).unwrap().contains("HiddenMarkers"),

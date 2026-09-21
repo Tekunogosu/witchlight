@@ -206,16 +206,8 @@ async function askForMarker() {
   let answer;
   try {
     answer = editing
-      ? await fetch(`/markers/${encodeURIComponent(editing.Key)}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(marker),
-      })
-      : await fetch('/markers', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(marker),
-      });
+      ? await fetch(`/markers/${encodeURIComponent(editing.Key)}`, sending('PUT', marker))
+      : await fetch('/markers', sending('POST', marker));
   } catch (error) {
     sayHere('The map service is not answering.', true);
     markerSave.disabled = false;
@@ -380,11 +372,10 @@ function markerFrom(place, changes) {
  */
 async function askPrivacy(place, hidden) {
   try {
-    const answer = await fetch(`/markers/${encodeURIComponent(place.Key)}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(markerFrom(place, { Private: hidden })),
-    });
+    const answer = await fetch(
+      `/markers/${encodeURIComponent(place.Key)}`,
+      sending('PUT', markerFrom(place, { Private: hidden })),
+    );
     return answer.ok;
   } catch (error) {
     return false;

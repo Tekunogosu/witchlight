@@ -150,8 +150,44 @@ function noteChanges(reached, tiles) {
  */
 const FADE_MS = 200;
 
-/** Soft enough to read the terrain through, strong enough to count squares by. */
-const GRID_COLOUR = '#ffffff26';
+/**
+ * The colour the chunk grid is drawn in, as `#rrggbb`, and how opaque it is.
+ *
+ * White at fifteen percent to begin with: soft enough to read the terrain
+ * through, strong enough to count squares by. A reader who cannot see it
+ * against their ground sets both in the accessibility window.
+ *
+ * Two values rather than one, because the browser's colour picker answers only
+ * in `#rrggbb` and drops any alpha given to it. The pair is composed into the
+ * eight digit hex a canvas takes by `gridStroke`.
+ */
+const GRID_COLOUR = '#ffffff';
+const GRID_ALPHA = 0.15;
+
+let gridColour = GRID_COLOUR;
+let gridAlpha = GRID_ALPHA;
+
+/** The colour and opacity together, as the eight digit hex a canvas strokes with. */
+function gridStroke() {
+  // Rounded to a byte and padded, since `.toString(16)` of a number below 16 is
+  // one digit and a seven digit colour is not a colour.
+  const alpha = Math.round(Math.min(Math.max(gridAlpha, 0), 1) * 255);
+  return `${gridColour}${alpha.toString(16).padStart(2, '0')}`;
+}
+
+/**
+ * Draws the grid in a new colour, opacity, or both.
+ *
+ * Every tile already drawn holds the old colour in its canvas, so the layer is
+ * asked to draw them again. `redraw` on a grid costs nothing the terrain layer's
+ * would: these tiles are drawn in the browser from numbers already in hand, and
+ * nothing is fetched.
+ */
+function setGridColour(colour, alpha) {
+  if (typeof colour === 'string' && /^#[0-9a-f]{6}$/i.test(colour)) gridColour = colour.toLowerCase();
+  if (Number.isFinite(alpha)) gridAlpha = Math.min(Math.max(alpha, 0), 1);
+  if (grid) grid.redraw();
+}
 
 /**
  * Where a tile's chunk lines fall, in pixels across it.
@@ -192,7 +228,7 @@ const Grid = L.GridLayer.extend({
     const scale = scaleAt(coords.z, NATIVE_ZOOM);
     const context = canvas.getContext('2d');
     context.scale(ratio, ratio);
-    context.strokeStyle = GRID_COLOUR;
+    context.strokeStyle = gridStroke();
     context.lineWidth = 1;
     context.beginPath();
 

@@ -298,7 +298,7 @@ impl Chunk {
     /// it does not hold a square number of entries.
     #[must_use]
     pub fn edge_of(record_len: usize) -> Option<usize> {
-        if record_len % ENTRY_BYTES != 0 {
+        if !record_len.is_multiple_of(ENTRY_BYTES) {
             return None;
         }
         let entries = record_len / ENTRY_BYTES;
@@ -648,6 +648,22 @@ pub mod testing {
     use super::*;
     use std::io::Write as _;
 
+    /// Builds one chunk's record, every entry the same block.
+    ///
+    /// The three test modules that need a record need the same one, and a record
+    /// whose entry layout drifted from [`ENTRY_BYTES`] would be read back as a
+    /// different chunk rather than as an error.
+    pub fn record(edge: usize, block: u16) -> Vec<u8> {
+        let mut record = Vec::with_capacity(edge * edge * ENTRY_BYTES);
+        for index in 0..edge * edge {
+            record.extend_from_slice(&block.to_le_bytes());
+            record.extend_from_slice(&(index as i16).to_le_bytes());
+            record.push(80);
+            record.push(90);
+        }
+        record
+    }
+
     /// Builds one region the way the mod builds one, so both halves are tested
     /// against the same bytes.
     ///
@@ -665,13 +681,7 @@ pub mod testing {
         file[16..18].copy_from_slice(&(SLOTS as u16).to_le_bytes());
 
         for &(slot, season, block) in chunks {
-            let mut record = Vec::with_capacity(edge * edge * ENTRY_BYTES);
-            for index in 0..edge * edge {
-                record.extend_from_slice(&block.to_le_bytes());
-                record.extend_from_slice(&(index as i16).to_le_bytes());
-                record.push(80);
-                record.push(90);
-            }
+            let record = record(edge, block);
 
             let mut packing =
                 flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::best());

@@ -247,6 +247,11 @@ html, body { margin: 0; height: 100%; overflow: hidden; color-scheme: dark;
 /* What a player is drawn in until they choose: one mark's own colour is set on
    the mark, over this, by `colourMark`. */
 :root { --player-colour: var(--accent); }
+/* What the swatch beside the grid colour button shows until a reader picks
+   something, which is what the grid itself is drawn in until then. Set on the
+   swatch, over these, by `gridColourRow`. The same two numbers as
+   `GRID_COLOUR` and `GRID_ALPHA` in `map.js`, which is what the grid reads. */
+:root { --grid-swatch: #ffffff; --grid-swatch-alpha: .15; }
 /* How large a player's mark is drawn, as a multiple of the size the mark was
    designed at — the accessibility window's slider. Its own number: a mark
    somebody needs larger to find is not a marker they need larger to read. */
@@ -361,6 +366,43 @@ html, body { margin: 0; height: 100%; overflow: hidden; color-scheme: dark;
 #access-panel .sizes h3 { grid-column: 1 / -1; }
 #access-panel .slide { display: block; padding: var(--gap-1) 0; min-height: 0; }
 #access-panel .slide input { display: block; width: 100%; margin-top: 2px; }
+/* What colour the chunk grid is drawn in: a swatch of it, what it is, and the
+   button that opens the picker pushed to the right edge. The row sits on the
+   same plane as the switches above it, so it reads as one more answer about
+   this screen rather than as a section of its own.
+
+   The width and alignment are stated against this row because `#access-panel
+   button` lays every button in this panel out as a full-width block for the
+   sake of the filter and vision choices, and a full-width button cannot sit
+   beside anything. */
+#access-panel .grid-colour { display: flex; align-items: center; gap: var(--gap-2);
+                             min-height: 22px; padding: 2px 0; font-size: var(--font-sm);
+                             color: var(--text); }
+#access-panel .grid-colour-name { flex: 1 1 auto; min-width: 0; }
+#access-panel button.grid-colour-set { position: relative; display: inline-block;
+                                       width: auto; flex: 0 0 auto; text-align: center;
+                                       border-color: var(--line); }
+/* The colour as it will actually be drawn, over a backdrop standing in for the
+   map: a grid is read through, so a swatch of the colour alone would promise a
+   line far stronger than the one that appears. The chosen colour is laid over
+   that backdrop at the chosen opacity, which is what the grid does to terrain. */
+#access-panel .grid-swatch { flex: 0 0 auto; width: 22px; height: 16px;
+                             border: 1px solid var(--line); border-radius: var(--round-sm);
+                             background-color: var(--surface-on);
+                             background-image:
+                               linear-gradient(rgba(0, 0, 0, .35), rgba(0, 0, 0, .35)),
+                               linear-gradient(var(--grid-swatch, #fff), var(--grid-swatch, #fff));
+                             background-blend-mode: normal; position: relative; }
+/* The colour sits over the backdrop at its own opacity rather than being mixed
+   into it, so what is shown is the line over ground and not a flat average. */
+#access-panel .grid-swatch::after { content: ""; position: absolute; inset: 0;
+                                    background: var(--grid-swatch, #fff);
+                                    opacity: var(--grid-swatch-alpha, .15); }
+/* The picker itself is never seen. The button is what a reader presses, and
+   this is only what opens their system's colour picker when it does. */
+#access-panel .grid-colour-input { position: absolute; left: 0; bottom: 0;
+                                   width: 1px; height: 1px; opacity: 0;
+                                   pointer-events: none; border: 0; padding: 0; }
 #access-panel button:hover { background: var(--surface-bar); color: #fff; }
 #access-panel button[aria-pressed="true"] { background: var(--surface-on);
                                        border-color: var(--accent); color: var(--text-strong); }

@@ -117,6 +117,8 @@ impl Levels {
     /// This calls [`pyramid::from_above`] through this type, so a level still in
     /// memory counts.
     #[must_use]
+    // Named to match `pyramid::from_above`, which this forwards to.
+    #[allow(clippy::wrong_self_convention)]
     pub fn from_above(&self, level: u32, x: i32, z: i32, size: u32, ceiling: u32) -> Option<RgbImage> {
         pyramid::from_above(|level, x, z| self.image((level, x, z)), level, x, z, size, ceiling)
     }

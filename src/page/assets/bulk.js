@@ -354,16 +354,12 @@ async function applyToTicked() {
 /** Asks for one marker to be made what the preset says it is. */
 async function askShape(place, preset) {
   try {
-    const answer = await fetch(`/markers/${encodeURIComponent(place.Key)}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(markerFrom(place, {
-        Title: preset.Title || UNNAMED,
-        Icon: preset.Icon || place.Icon,
-        Color: colourOf(preset.Color || place.Color),
-        Block: preset.Pattern || '',
-      })),
-    });
+    const answer = await fetch(`/markers/${encodeURIComponent(place.Key)}`, sending('PUT', markerFrom(place, {
+      Title: preset.Title || UNNAMED,
+      Icon: preset.Icon || place.Icon,
+      Color: colourOf(preset.Color || place.Color),
+      Block: preset.Pattern || '',
+    })));
     return answer.ok;
   } catch (error) {
     return false;

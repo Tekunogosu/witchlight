@@ -42,3 +42,23 @@ function beat(work, every, what) {
   };
   setTimeout(again, every);
 }
+
+/**
+ * Asks the service for something, as JSON.
+ *
+ * Every write the page makes sends a JSON body, and each one spelled out the
+ * method, the content type and the encoding itself. They are the same three
+ * lines at every call, so they live here once and a caller names only the
+ * method and what it is sending.
+ *
+ * This returns the response untouched. What a refusal means differs at every
+ * call — one puts a message beside a field, one puts the mark back where it
+ * was, one gives up quietly — so reading `ok` stays with the caller.
+ */
+function sending(method, body) {
+  return {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  };
+}

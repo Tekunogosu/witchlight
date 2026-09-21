@@ -502,10 +502,10 @@ impl Puller {
     /// the queue offers a given-up column again whenever something is drawn
     /// beside it, and a warning per pass would bury the first one.
     fn gave_up(&self, cx: i32, cz: i32) {
-        if let Ok(mut said) = self.said.lock() {
-            if !said.insert((cx, cz)) {
-                return;
-            }
+        if let Ok(mut said) = self.said.lock()
+            && !said.insert((cx, cz))
+        {
+            return;
         }
         warn!(
             "gave up asking for the ground at chunk ({cx}, {cz}) after {MOST_ATTEMPTS} tries: \

@@ -128,7 +128,7 @@ fn stored(request: &mut Request, state: &State, path: &str) -> Reply {
         let sources = state.plugin_sources(name, who.as_ref().map(|who| who.uid.as_str()));
         // Use the whole address rather than the path, because the ranges asked
         // for are in the query and this is the one address that reads one.
-        let asked = urls::ranges(&request.url().to_owned());
+        let asked = urls::ranges(request.url());
         return match plugin.read(&sources, &asked) {
             Ok(body) => http::json(&body),
             // A reader can ask for a range of a column the plugin never

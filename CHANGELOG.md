@@ -9,6 +9,68 @@ which is where that rule is kept rather than in anybody's memory.
 A version that moved for the other half says so and lists nothing, which is not an
 omission: it is what "one release" looks like from the side that did not change.
 
+## 0.53.0
+
+**Deploy note:** both halves, upgraded together; nothing is cleared. No setting,
+no address, no stored file and no database table changes.
+
+- **The service is built and released by GitHub.** A workflow builds the binary
+  for Linux and Windows and attaches both, and their archives, to a release. It
+  runs when a tag beginning with `v` is pushed and when it is started by hand;
+  pushing commits runs nothing. A tag whose commit `omega` does not contain is
+  refused, as is a tag that does not match the version in `Cargo.toml`.
+- Each half is built on the machine it targets. SQLite is compiled from C into
+  the binary, so a target needs a C compiler that produces code for it, and a
+  machine of that kind already has one.
+
+## 0.52.14
+
+**Deploy note:** both halves, upgraded together; nothing is cleared. No setting,
+no address, no stored file and no database table changes. The chunk grid is the
+colour it has always been until somebody changes it.
+
+- **The chunk grid can be set to any colour.** The accessibility window now has
+  a swatch of the colour the grid is drawn in, a **Set Grid Color** button that
+  opens the browser's own colour picker, and a slider for how strong the lines
+  are. A grid that disappeared into one person's terrain is now theirs to move
+  off it. What is chosen is kept in that browser, like the sizes and the colour
+  filters beside it, because it is an answer about one screen and one pair of
+  eyes.
+
+  The colour and the opacity are set separately because a colour picker answers
+  only in `#rrggbb` and drops any transparency handed to it. The slider stops
+  at five percent, since a grid fainter than that is a grid switched on and
+  drawing nothing, which reads as a fault rather than as a setting.
+
+## 0.52.13
+
+**Deploy note:** both halves, upgraded together; nothing is cleared. No setting,
+no address, no stored file and no database table changes. Nothing a reader or an
+operator can see changes. This is tidying before the release.
+
+- **The store is filed by what it holds.** Every one of its methods lived in one
+  block of seven hundred lines, so the sessions, the plugin register, the ground
+  and what each person has explored were read past to reach one another. They are
+  now five files, each named for the tables it touches and opening with what those
+  tables are for. It is the same type with the same methods over the same one
+  connection, and every caller is unchanged.
+- **The store writes through one place.** Eleven write methods each spelled out
+  the lock, the statement and the error wording. They now call one `run` helper,
+  the write side of the `rows` helper the read methods already shared. The SQL,
+  the parameters and every error message are unchanged.
+- **The page sends JSON through one place.** Eight places in the viewer each wrote
+  out the method, the content type and the encoding by hand to send a marker, a
+  claim or a preference. They now call one `sending` helper. One of the eight sent
+  its body with no content type and now sends one; the service never read that
+  header, so nothing it answers changes.
+- **One builder makes a test record.** Three test modules each built a chunk's
+  record with the same loop, one of them against a hard-coded entry width rather
+  than the constant. There is now one builder beside the format it writes, and it
+  reads that width from the format.
+- **Six lint warnings are gone.** A character split, a nested `if`, a remainder
+  test, a needless copy and a test's field assignment are written the way the
+  linter asks. Behaviour is the same at all six.
+
 ## 0.52.12
 
 **Deploy note:** both halves, upgraded together; nothing is cleared. No setting,

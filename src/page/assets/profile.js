@@ -100,11 +100,7 @@ async function keepMine(asked) {
   const before = mine;
   mine = asked;
   try {
-    const answer = await fetch('/me/preferences', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(asked),
-    });
+    const answer = await fetch('/me/preferences', sending('PUT', asked));
     if (!answer.ok) throw new Error(answer.status);
     mine = await answer.json();
     return true;

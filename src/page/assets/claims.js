@@ -704,14 +704,10 @@ async function saveClaim() {
 
   let answer;
   try {
-    answer = await fetch(`/claims/${encodeURIComponent(editingClaim.Key)}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        Description: claimName.value.trim(),
-        Allowed: guestsAsked(),
-      }),
-    });
+    answer = await fetch(`/claims/${encodeURIComponent(editingClaim.Key)}`, sending('PUT', {
+      Description: claimName.value.trim(),
+      Allowed: guestsAsked(),
+    }));
   } catch (error) {
     sayClaim('The map service is not answering.', true);
     save.disabled = false;
@@ -810,15 +806,11 @@ async function askForClaim() {
 
   let answer;
   try {
-    answer = await fetch('/claims', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...asked,
-        Description: claimName.value.trim(),
-        Allowed: guestsAsked(),
-      }),
-    });
+    answer = await fetch('/claims', sending('POST', {
+      ...asked,
+      Description: claimName.value.trim(),
+      Allowed: guestsAsked(),
+    }));
   } catch (error) {
     sayClaim('The map service is not answering.', true);
     save.disabled = false;

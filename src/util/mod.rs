@@ -5,6 +5,7 @@
 
 pub mod cache;
 pub mod error;
+pub mod faults;
 pub mod files;
 pub mod history;
 pub mod http;

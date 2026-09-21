@@ -25,6 +25,7 @@ use crate::render::palette::Palette;
 use crate::render::tiles::Renderer;
 use crate::state::State;
 use crate::util::error::{self, Result};
+use crate::util::faults;
 
 #[derive(Debug, Parser)]
 #[command(name = "witchlight", version, about = "Serve a Vintage Story world map")]
@@ -89,10 +90,32 @@ enum Command {
 }
 
 fn main() -> ExitCode {
+    // Before anything else, so that a panic while the settings are being read
+    // is reported the same way as one while the map is being served.
+    faults::report_panics();
+
     match run() {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(()) => {
+            // Say that the run is over and that it was meant to be. The mod
+            // reports an exit code and nothing else, and exit 0 alone does not
+            // distinguish a service told to stop from one that ran off the end
+            // of its own accord.
+            if faults::panicked() {
+                warn!(
+                    "stopping. Something panicked during this run, so part of the service \
+                     may have stopped working before now. The panic is above."
+                );
+            } else {
+                say!("stopping, having been asked to");
+            }
+            ExitCode::SUCCESS
+        }
         Err(error) => {
+            // Name the error and say the run is ending because of it, rather
+            // than leaving the last line of the log looking like a warning the
+            // service carried on from.
             warn!("{error}");
+            warn!("stopping: the service cannot carry on from that, and exits 1");
             ExitCode::FAILURE
         }
     }

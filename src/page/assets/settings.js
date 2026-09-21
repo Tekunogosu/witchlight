@@ -268,6 +268,100 @@ function sizeSliders() {
 }
 
 /**
+ * The least opaque the chunk grid may be set to.
+ *
+ * Below this the lines are not there to see, and a reader who has dragged the
+ * slider to nothing is left with a switched-on grid that draws nothing and no
+ * way to tell that from a fault.
+ */
+const LEAST_GRID_ALPHA = 0.05;
+
+/**
+ * The row that sets what colour the chunk grid is drawn in.
+ *
+ * A swatch of the colour as it will actually be drawn, then the button that
+ * opens the picker. The browser's own picker, reached the way the player colour
+ * reaches it: an `input` of type `color` sat invisibly inside the button, so
+ * what a reader presses is a button and what opens is whatever picker their
+ * system gives them.
+ *
+ * The opacity is a slider of its own because a picker answers in `#rrggbb` and
+ * drops any alpha handed to it — and a grid is a thing read through, so how
+ * strong it is matters as much as what colour it is.
+ */
+function gridColourRow() {
+  const line = document.createElement('div');
+  line.className = 'grid-colour';
+
+  const shown = document.createElement('span');
+  shown.className = 'grid-swatch';
+  shown.setAttribute('aria-hidden', 'true');
+
+  const name = document.createElement('span');
+  name.className = 'grid-colour-name';
+  name.textContent = 'Chunk grid colour';
+
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'word grid-colour-set';
+  button.textContent = 'Set Grid Color';
+  button.title = 'Choose the colour the chunk grid is drawn in';
+
+  const chooser = document.createElement('input');
+  chooser.type = 'color';
+  chooser.className = 'grid-colour-input';
+  chooser.setAttribute('aria-label', 'Chunk grid colour');
+  chooser.tabIndex = -1;
+  button.append(chooser);
+
+  const opacity = document.createElement('label');
+  opacity.className = 'slide grid-opacity';
+  opacity.append(document.createTextNode('Grid opacity'));
+  const slider = document.createElement('input');
+  slider.type = 'range';
+  slider.min = String(LEAST_GRID_ALPHA);
+  slider.max = '1';
+  slider.step = '0.05';
+  slider.setAttribute('aria-label', 'Chunk grid opacity');
+  opacity.append(slider);
+
+  /** Shows the swatch as the grid will be drawn, and keeps both controls level. */
+  const show = () => {
+    chooser.value = gridColour;
+    slider.value = String(gridAlpha);
+    // The colour over the swatch's own backdrop, so what is previewed is the
+    // colour at the opacity chosen rather than the colour alone. A faint grid
+    // looks faint here too, which is the question a reader is asking.
+    shown.style.setProperty('--grid-swatch', gridColour);
+    shown.style.setProperty('--grid-swatch-alpha', String(gridAlpha));
+  };
+
+  const take = () => {
+    setGridColour(chooser.value, Number(slider.value));
+    show();
+    remember();
+  };
+
+  chooser.addEventListener('input', take);
+  chooser.addEventListener('change', take);
+  // `input` rather than `change` alone: a grid redraws from numbers already in
+  // hand, so it can follow the thumb, and watching it is how the right opacity
+  // is found.
+  slider.addEventListener('input', take);
+  slider.addEventListener('change', take);
+  // The button is the control; the input inside it is only how the picker is
+  // opened. Without this a press that lands on the button and not the input
+  // does nothing.
+  button.addEventListener('click', event => {
+    if (event.target !== chooser) chooser.click();
+  });
+
+  show();
+  line.append(shown, name, button);
+  return [line, opacity];
+}
+
+/**
  * Takes a size, once the hand has let go of the slider.
  *
  * Kept as it is set rather than waiting for a Save, because the whole of what a
@@ -412,7 +506,7 @@ const switchBoxes = new Map();
  * looks for a thing to turn a layer off.
  *
  * Added after `buildSettings` has run, since a plugin registers long after the
- * panel is built, so the row is appended here rather than waiting for a pass
+ * panel is built, so the line is appended here rather than waiting for a pass
  * that has already happened. What was remembered is read now for the same
  * reason: `recall` ran before this setting existed.
  */
@@ -499,6 +593,13 @@ function buildSettings() {
     (setting.panel === 'access' ? access : panel).append(switchFor(name, setting));
   }
 
+  // Directly under the switches it belongs with, above the sections that
+  // follow: what colour the grid is drawn in is the same kind of answer as
+  // whether the map zooms deeper — about this screen and these eyes — and the
+  // switch that turns the grid on is in the other panel, where a colour picker
+  // would not fit.
+  access.append(...gridColourRow());
+
   // Hung on the button that opens it rather than placed near it. It used to be
   // pinned 92 pixels down the page, which is a guess at where the cog is — one
   // that a scaled toolbar or a second button in the row makes wrong, and which
@@ -571,6 +672,7 @@ function remember() {
     for (const [part, scale] of Object.entries(scales)) sizes[part] = scale.at;
     const state = {
       scales: sizes, filter: filterName, vision: visionName, sorting, bars: barsHidden,
+      gridColour: { colour: gridColour, alpha: gridAlpha },
     };
     for (const [key, setting] of Object.entries(settings)) state[key] = setting.on;
     localStorage.setItem('witchlight.settings', JSON.stringify(state));
@@ -608,6 +710,22 @@ function recall() {
     // a list that throws on the first marker it is handed.
     if (state.sorting && sorts[state.sorting.by]) {
       sorting = { by: state.sorting.by, down: state.sorting.down === true };
+    }
+    // Checked rather than taken as read, for the reason the sizes are: what is
+    // here came out of a browser. A colour that is not one, or an opacity that
+    // would draw no grid at all, leaves the default standing rather than
+    // leaving a reader with a grid they cannot see and cannot find the cause of.
+    // Under its own key rather than `grid`, which is the switch that turns the
+    // chunk grid on: the switches are written into this same object by name,
+    // and a setting sharing a name with one is overwritten by it.
+    if (state.gridColour && typeof state.gridColour === 'object') {
+      // Bounded at both ends, as the sizes are, rather than clamped. A number
+      // outside the range the slider offers did not come from the slider, so
+      // the default is the better answer than the nearest edge of it: clamping
+      // a stored 99 would draw a solid grid over the map and read as a fault.
+      const alpha = Number(state.gridColour.alpha);
+      const usable = Number.isFinite(alpha) && alpha >= LEAST_GRID_ALPHA && alpha <= 1;
+      setGridColour(state.gridColour.colour, usable ? alpha : undefined);
     }
   } catch (error) {
     /* whatever was stored is not usable, so the defaults stand */

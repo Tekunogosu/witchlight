@@ -1,0 +1,179 @@
+# Builds the map service for Linux and Windows and attaches the archives to a
+# GitHub release.
+#
+# This runs when a tag beginning with v is pushed, and when it is started by
+# hand. Pushing commits to omega does not run it. A release is therefore always
+# something chosen, never something a push caused.
+#
+# A tag names a commit and does not belong to a branch, so the tag filter below
+# cannot say "on omega". The guard job says it instead: it refuses a tag whose
+# commit omega does not contain.
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  BINARY: witchlight
+
+jobs:
+  # Refuses a tag that was pushed from some other branch. Every build job waits
+  # on this, so a tag on the wrong branch costs one short job rather than a full
+  # matrix.
+  guard:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # --contains reads branch refs, and a shallow checkout has none.
+          fetch-depth: 0
+
+      - name: Refuse a tag that is not on omega
+        if: github.event_name == 'push'
+        run: |
+          if ! git branch --contains "${{ github.ref_name }}" --format='%(refname:short)' \
+               | grep -qx omega; then
+            echo "::error::${{ github.ref_name }} is not on omega. Nothing was built."
+            exit 1
+          fi
+
+      # The version the crate states. The tag is checked against it so that a
+      # release cannot be cut under a number the binary does not report.
+      - name: Read the version
+        id: version
+        run: |
+          version=$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -1)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "the crate is $version"
+
+      - name: Check the tag against the version
+        if: github.event_name == 'push'
+        run: |
+          tag="${{ github.ref_name }}"
+          version="${{ steps.version.outputs.version }}"
+          if [ "$tag" != "v$version" ]; then
+            echo "::error::tag $tag does not match Cargo.toml version $version."
+            exit 1
+          fi
+
+  build:
+    needs: guard
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Both halves build on the machine they target. rusqlite is built with
+          # its bundled feature, which compiles SQLite from C, so every target
+          # needs a C compiler that produces code for it. A native runner has
+          # one already and a cross-compiler is one more thing to keep working.
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            platform: linux-x64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            platform: win-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      # The archive carries the notice the licences ask to travel with the
+      # binary, and the mod's packaging refuses a binary that arrives without
+      # one.
+      - name: Stage the archive
+        shell: bash
+        run: |
+          version="${{ needs.guard.outputs.version }}"
+          stage="stage/$BINARY-$version-${{ matrix.platform }}"
+          mkdir -p "$stage"
+
+          binary="target/${{ matrix.target }}/release/$BINARY"
+          [ "${{ runner.os }}" = "Windows" ] && binary="$binary.exe"
+          cp "$binary" "$stage/"
+          cp THIRD-PARTY.md "$stage/"
+          [ -f LICENSE ] && cp LICENSE "$stage/" || true
+          echo "stage=$stage" >> "$GITHUB_ENV"
+          echo "name=$BINARY-$version-${{ matrix.platform }}" >> "$GITHUB_ENV"
+
+      # tar keeps the execute bit; the zip is for the platform that does not
+      # carry one.
+      - name: Archive
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            7z a "$name.zip" "./$stage/*" > /dev/null
+          else
+            tar czf "$name.tar.gz" -C stage "$name"
+          fi
+
+      # The mod's release downloads this to bundle the service, so the binary is
+      # uploaded on its own as well as inside the archive. Uploaded unzipped so
+      # the Linux binary keeps its execute bit.
+      - name: Upload the binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: service-${{ matrix.platform }}
+          path: ${{ env.stage }}
+          compression-level: 0
+
+      - name: Upload the archive
+        uses: actions/upload-artifact@v7
+        with:
+          name: archive-${{ matrix.platform }}
+          path: |
+            *.tar.gz
+            *.zip
+          if-no-files-found: error
+
+  release:
+    needs: [guard, build]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: archive-*
+          path: archives
+          merge-multiple: true
+
+      # The mod's release reads the loose binaries from this release rather than
+      # unpacking an archive, so both shapes are attached.
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: service-*
+          path: binaries
+
+      - name: Name the loose binaries for the platform they are
+        run: |
+          mkdir -p loose
+          cp binaries/service-linux-x64/witchlight loose/witchlight-linux-x64
+          cp binaries/service-win-x64/witchlight.exe loose/witchlight-win-x64.exe
+          chmod +x loose/witchlight-linux-x64
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --repo "${{ github.repository }}" \
+            --title "${{ github.ref_name }}" \
+            --generate-notes \
+            archives/* loose/*

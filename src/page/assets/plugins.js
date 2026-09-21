@@ -603,10 +603,7 @@ function pluginHandle(id) {
 
     /** Replaces that set. The whole of it, since it is one answer. */
     async shareWith(groups) {
-      const answer = await fetch(`/data/${id}/shares`, {
-        method: 'PUT',
-        body: JSON.stringify(groups),
-      });
+      const answer = await fetch(`/data/${id}/shares`, sending('PUT', groups));
       return answer.ok;
     },
 
