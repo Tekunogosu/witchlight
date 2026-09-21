@@ -39,8 +39,12 @@ jobs:
       - name: Refuse a tag that is not on omega
         if: github.event_name == 'push'
         run: |
-          if ! git branch --contains "${{ github.ref_name }}" --format='%(refname:short)' \
-               | grep -qx omega; then
+          # A tag push checks out the tag alone: no branch ref comes with it, so
+          # omega is fetched here before anything can be asked about it.
+          git fetch --no-tags origin +refs/heads/omega:refs/remotes/origin/omega
+
+          if ! git branch -r --contains "${{ github.ref_name }}" --format='%(refname:short)' \
+               | grep -qx origin/omega; then
             echo "::error::${{ github.ref_name }} is not on omega. Nothing was built."
             exit 1
           fi
