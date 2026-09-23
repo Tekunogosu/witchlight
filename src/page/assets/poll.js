@@ -51,7 +51,13 @@ async function pollColours() {
   }
 }
 
-/** Players move constantly; markers rarely. Both are cheap to fetch. */
+/**
+ * Reads what moves constantly: who is online and what time it is.
+ *
+ * The markers and the claims are not here. Each is read from its own address,
+ * on the beat the service says it moved, and once at the start. See
+ * `takeWhatMoved` and `firstReading`.
+ */
 async function pollLive() {
   if (pushed) return;
   try {
@@ -60,6 +66,36 @@ async function pollLive() {
   } catch (error) {
     /* the service may be restarting */
   }
+}
+
+/**
+ * Takes the markers the page now holds: draws them and answers what was asked.
+ *
+ * Shared by the whole reading from `/live` and by the markers' own address, so
+ * what happens when markers arrive is written once however they arrived.
+ */
+async function markersArrived() {
+  // A marker naming a picture nobody has heard of means the set has grown.
+  if (waypointsHeld.some(place => place.Icon && !icons.has(String(place.Icon)))) {
+    await pollIcons();
+    // The pictures changed, so what is drawn no longer matches what was drawn,
+    // and the form's picker is short of one.
+    drawnPlaces = null;
+    if (composer.classList.contains('open')) drawPictures();
+  }
+
+  // The one honest confirmation there is: the marker this page asked for is now
+  // among the markers the service is sending, which means the game made it.
+  if (awaiting) {
+    if (arrived(waypointsHeld)) landed();
+    else if (Date.now() - askedAt > MARKER_PATIENCE) await lost();
+  }
+
+  drawPlaces(waypointsHeld);
+  // The form may be open on a marker whose pin was set from another browser, or
+  // refused by the game since it was pressed. The mark is drawn from what
+  // arrived rather than from what was asked for.
+  if (composer.classList.contains('open')) showPin();
 }
 
 /**
@@ -102,21 +138,7 @@ async function takeLive(live) {
       takePins(live.Pins);
     }
 
-    // A marker naming a picture nobody has heard of means the set has grown.
-    if (waypointsHeld.some(place => place.Icon && !icons.has(String(place.Icon)))) {
-      await pollIcons();
-      // The pictures changed, so what is drawn no longer matches what was drawn,
-      // and the form's picker is short of one.
-      drawnPlaces = null;
-      if (composer.classList.contains('open')) drawPictures();
-    }
-
-    // The one honest confirmation there is: the marker this page asked for is
-    // now among the markers the service is sending, which means the game made it.
-    if (awaiting) {
-      if (arrived(waypointsHeld)) landed();
-      else if (Date.now() - askedAt > MARKER_PATIENCE) await lost();
-    }
+    await markersArrived();
 
     drawPlayers();
     // How far away every listed marker is moves with the reader rather than with
@@ -124,11 +146,6 @@ async function takeLive(live) {
     showDistances();
     drawWho();
     keepUp();
-    drawPlaces(waypointsHeld);
-    // The form may be open on a marker whose pin was set from another browser,
-    // or refused by the game since it was pressed. The mark is drawn from what
-    // arrived rather than from what was asked for.
-    if (composer.classList.contains('open')) showPin();
     drawClaims(claims);
     showClaims();
     watchClaim();
@@ -225,6 +242,79 @@ let pushed = false;
 let liveSeqs = { players: 0, markers: 0, claims: 0, world: 0, plugins: 0 };
 
 /**
+ * How long to leave between reading the parts served on their own address.
+ *
+ * Only ever used where the wait on `/events` is not running, so this is the
+ * fallback's clock rather than the ordinary one. Slower than the live beat
+ * because markers and claims change a few times an hour.
+ */
+const HELD_BEAT = 15000;
+
+/**
+ * Reads the markers and the claims, for a page that is not being told.
+ *
+ * Does nothing while the service is telling this page of changes, because then
+ * each is read on the beat it moved and reading again on a clock would ask for
+ * what the page already holds.
+ */
+async function pollHeld() {
+  if (pushed) return;
+  await pollMarkers();
+  await pollClaims();
+}
+
+/**
+ * Reads everything once, at the start.
+ *
+ * The parts served on their own address are not sent again until they change,
+ * and a page that has just opened holds none of them. Two reads at load are what
+ * that costs, against sending the same markers on every beat forever.
+ */
+async function firstReading() {
+  await pollLive();
+  await pollMarkers();
+  await pollClaims();
+}
+
+/**
+ * Fetches the parts that are served on their own address, where they moved.
+ *
+ * Called with the sequences the page held before the wait answered. A part whose
+ * number has moved since is read from its own address; one that has not is left
+ * alone, which is the ordinary case for both of these.
+ */
+async function takeWhatMoved(was) {
+  if (liveSeqs.markers > was.markers) await pollMarkers();
+  if (liveSeqs.claims > was.claims) await pollClaims();
+}
+
+/** Reads the markers this person may see, and which of them they pin. */
+async function pollMarkers() {
+  try {
+    const sent = await (await fetch('/markers')).json();
+    waypointsHeld = sent.Waypoints || [];
+    takePins(sent.Pins);
+    await markersArrived();
+  } catch (error) {
+    /* the service may be restarting */
+  }
+}
+
+/** Reads the claims this person may see, and what they are allowed. */
+async function pollClaims() {
+  try {
+    const sent = await (await fetch('/claims')).json();
+    claims = sent.Claims || [];
+    allowance = sent.Claiming || null;
+    worldHeight = Number.isFinite(sent.Height) ? sent.Height : worldHeight;
+    drawClaims(claims);
+    showClaims();
+  } catch (error) {
+    /* the service may be restarting */
+  }
+}
+
+/**
  * Waits on the service for the next change, takes it, and waits again.
  *
  * Nothing is asked while the map's first reading is still on its way: the wait
@@ -240,6 +330,7 @@ async function pushLoop() {
       continue;
     }
     try {
+      const was = { ...liveSeqs };
       const held = new URLSearchParams({ since: String(generation) });
       for (const [part, seq] of Object.entries(liveSeqs)) held.set(part, String(seq));
       const answer = await fetch(`/events?${held}`, { cache: 'no-store' });
@@ -253,6 +344,11 @@ async function pushLoop() {
       }
       if (moved.info) takeInfo(moved.info);
       if (moved.live) await takeLive(moved.live);
+      // The markers and the claims are served on their own addresses and are
+      // fetched when the wait says they moved. They are the bulk of what there
+      // is to send and change a few times an hour, so they are asked for on the
+      // beat they changed rather than carried on every beat.
+      await takeWhatMoved(was);
     } catch (error) {
       pushed = false;
       await new Promise(resolve => setTimeout(resolve, 5000));
@@ -284,9 +380,14 @@ for (const setting of Object.values(settings)) setting.apply(setting.on);
 // A beat rather than an interval: each answer is waited for before the next
 // question is counted, so a service slower than the gap is not asked twice over.
 beat(pollLive, LIVE_BEAT, 'the live poll');
+// The parts served on their own address are read on the wait's word, and the
+// wait is what a page on this clock has lost. Read on a clock of their own
+// instead, slower, because they change a few times an hour and this is the
+// fallback rather than the ordinary way.
+beat(pollHeld, HELD_BEAT, 'the markers and claims');
 // What this person has set, which the game can change as well as this page — see
 // `watchMine`. Slower, because presets change a few times a day.
 beat(watchMine, 15000, 'what this person has set');
 beat(pollWorld, 2000, 'the terrain poll');
-started(pollWorld().then(pollIcons).then(pollColours).then(pollLive), 'the first poll');
+started(pollWorld().then(pollIcons).then(pollColours).then(firstReading), 'the first poll');
 started(pushLoop(), 'waiting on the service for changes');

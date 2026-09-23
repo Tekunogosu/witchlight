@@ -271,8 +271,14 @@ fn stored(request: &mut Request, state: &State, path: &str) -> Reply {
 /// available. A service that said "done" here would report on something it does
 /// not do.
 fn made(request: &mut Request, state: &State) -> Reply {
+    // The method says which of the two this address means, as a claim's does. A
+    // GET reads the markers this person may see; a POST asks for a new one.
+    if *request.method() == Method::Get {
+        let who = state.sessions.who(&http::cookies(request));
+        return http::json(&state.live.markers_body(who.as_ref().map(|who| who.uid.as_str())));
+    }
     if *request.method() != Method::Post {
-        return http::text(405, "markers are made with a POST");
+        return http::text(405, "a marker is made with a POST, and the markers are read with a GET");
     }
 
     let (who, body) = match asked(request, state, "make a marker") {
@@ -304,8 +310,21 @@ fn made(request: &mut Request, state: &State) -> Reply {
 /// The page is told the request was taken and watches for the claim to appear
 /// among the ones it is sent.
 fn claimed(request: &mut Request, state: &State) -> Reply {
+    // The method says which of the two this address means, as a marker's does.
+    // A GET asks what became of what this reader asked for, which is the same
+    // subject read the other way round.
+    if *request.method() == Method::Get {
+        // Two different readings share this address: what became of an ask, and
+        // the claims themselves. The ask is the narrower question, so it says so
+        // with a parameter, and a bare GET reads the claims.
+        if urls::param(request.url(), "answered").is_some() {
+            return became(request, state);
+        }
+        let who = state.sessions.who(&http::cookies(request));
+        return http::json(&state.live.claims_body(who.as_ref().map(|who| who.uid.as_str())));
+    }
     if *request.method() != Method::Post {
-        return http::text(405, "claims are made with a POST");
+        return http::text(405, "a claim is asked for with a POST, and what became of one is read with a GET");
     }
 
     let (who, body) = match asked(request, state, "claim land") {
@@ -318,16 +337,29 @@ fn claimed(request: &mut Request, state: &State) -> Reply {
         Err(why) => return http::text(400, why),
     };
 
+    let ticket = drawn.ticket.clone();
     if !state.pending.claim(drawn) {
         return http::text(503, "the game server is not collecting claims");
     }
 
-    // There is nothing to name a claim by. A marker is answered with the name
-    // it will be made under, because this service mints that name. A land claim
-    // is the game's own and carries nothing this service could decide
-    // beforehand, so the page is told it was taken and watches the ground it drew
-    // on.
-    http::json(&serde_json::json!({ "Asked": true }).to_string()).with_status_code(202)
+    // Answered with the ticket rather than with the claim. A land claim is the
+    // game's own and carries no name this service could decide beforehand, so
+    // what the page is given is the name of its ask. It reads what became of
+    // that ask from this same address.
+    http::json(&serde_json::json!({ "Asked": true, "Ticket": ticket }).to_string())
+        .with_status_code(202)
+}
+
+/// Answers what the game made of the claims this reader asked for.
+///
+/// Reading takes them, so a page is told once. An empty list means nothing has
+/// been answered yet, which is the ordinary case while the mod has not collected.
+fn became(request: &mut Request, state: &State) -> Reply {
+    let Some(who) = state.sessions.who(&http::cookies(request)) else {
+        return unknown("read what became of a claim");
+    };
+    let answered = state.answers.take(&who.uid);
+    http::json(&serde_json::json!({ "Answered": answered }).to_string())
 }
 
 /// Accepts a change to a marker that already exists.
@@ -424,11 +456,12 @@ fn claim_changed(request: &mut Request, state: &State, key: &str) -> Reply {
         Err(why) => return http::text(400, why),
     };
 
+    let ticket = edit.ticket.clone();
     if !state.pending.claim_edit(edit) {
         return http::text(503, "the game server is not collecting claims");
     }
 
-    accepted(key)
+    claim_accepted(key, &ticket)
 }
 
 /// Accepts a claim somebody asked to give up.
@@ -446,11 +479,12 @@ fn claim_removed(request: &mut Request, state: &State, key: &str) -> Reply {
         Err(why) => return http::text(400, why),
     };
 
+    let ticket = gone.ticket.clone();
     if !state.pending.claim_gone(gone) {
         return http::text(503, "the game server is not collecting claims");
     }
 
-    accepted(key)
+    claim_accepted(key, &ticket)
 }
 
 /// Serves and accepts what one person has set for themselves.
@@ -534,4 +568,13 @@ fn unknown(doing: &str) -> Reply {
 /// The status code says so, and so does the page.
 fn accepted(key: &str) -> Reply {
     http::json(&serde_json::json!({ "Key": key }).to_string()).with_status_code(202)
+}
+
+/// Returns the response for a claim ask that was taken and not yet done.
+///
+/// It names the claim and the ask. The page watches the ask, because what became
+/// of it is the thing it is waiting to be told.
+fn claim_accepted(key: &str, ticket: &str) -> Reply {
+    http::json(&serde_json::json!({ "Key": key, "Ticket": ticket }).to_string())
+        .with_status_code(202)
 }

@@ -16,6 +16,7 @@ use crate::protocol::api::Api;
 use crate::protocol::auth::Who;
 use crate::util::error::{Error, Result};
 use crate::util::http::{self, Reply};
+use crate::protocol::answers::Answer;
 use crate::protocol::live::Took;
 use crate::protocol::preferences::{Person, Preset};
 use crate::state::State;
@@ -111,6 +112,26 @@ fn posted(request: &mut Request, channel: &Channel) -> Reply {
                         + r#""Claims":{"Make":[],"Change":[],"Remove":[]}}"#
                 }),
         ),
+
+        // Take what the game made of the claims it collected. The mod reports
+        // against the ticket this service minted when the ask was queued, so the
+        // browser that asked recognises the answer to its own ask.
+        //
+        // Reported for what was refused and for what was done, because a page
+        // that is only told about refusals learns nothing from silence: a claim
+        // that worked and a game server that stopped look the same.
+        "/claims/answered" => match answered(&body) {
+            Some(answers) => {
+                for (uid, answer) in answers {
+                    channel.state.answers.keep(&uid, answer);
+                }
+                http::text(204, "")
+            }
+            None => http::text(
+                400,
+                "expected [{\"Uid\":…, \"Ticket\":…, \"Doing\":…, \"Done\":…, \"Why\":…}]",
+            ),
+        },
 
         // Return what somebody has set for themselves, for the part of the mod
         // that makes a marker in game. The map's own form reads and writes the
@@ -284,6 +305,43 @@ fn kept_rows(channel: &Channel, id: &str, body: &str) -> Reply {
         }
         Err(error) => http::text(500, &error.to_string()),
     }
+}
+
+/// Reads what the mod says became of the claims it collected.
+///
+/// Returns nothing when the post is not the shape this build reads, so a whole
+/// post is refused rather than half-kept. Each answer carries whose ask it was,
+/// because only the mod knows which uid is which player.
+fn answered(body: &str) -> Option<Vec<(String, Answer)>> {
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "PascalCase")]
+    struct Said {
+        uid: String,
+        ticket: String,
+        #[serde(default)]
+        doing: String,
+        done: bool,
+        #[serde(default)]
+        why: String,
+    }
+
+    let said = serde_json::from_str::<Vec<Said>>(body).ok()?;
+    Some(
+        said.into_iter()
+            .filter(|one| !one.uid.is_empty() && !one.ticket.is_empty())
+            .map(|one| {
+                (
+                    one.uid,
+                    Answer {
+                        ticket: one.ticket,
+                        doing: one.doing,
+                        done: one.done,
+                        why: one.why,
+                    },
+                )
+            })
+            .collect(),
+    )
 }
 
 /// Accepts a live post and tells every open browser, or refuses it.

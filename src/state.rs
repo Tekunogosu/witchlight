@@ -31,6 +31,7 @@ use crate::render::levels::Levels;
 use crate::protocol::live::Live;
 use crate::mapdata::memory::Memory;
 use crate::render::palette::Palette;
+use crate::protocol::answers::Answers;
 use crate::protocol::pending::Pending;
 use crate::protocol::preferences::Preferences;
 use crate::render::pyramid::{self, TILE, TileFormat};
@@ -73,6 +74,9 @@ pub struct State {
     pub sessions: Arc<Sessions>,
     /// Holds markers asked for on the map that the mod has not yet collected.
     pub pending: Arc<Pending>,
+    /// Holds what the game made of each claim asked for, until the browser that
+    /// asked reads it. The return leg of `pending`.
+    pub answers: Arc<Answers>,
     /// Holds every plugin keeping rows here. It is empty until a plugin
     /// registers. Registration is the only thing that adds to it. Nothing is
     /// loaded from disk and no plugin code runs in this process.
@@ -202,6 +206,7 @@ impl State {
             live,
             sessions,
             pending: Arc::new(Pending::new()),
+            answers: Arc::new(Answers::new()),
             plugins: Arc::new(crate::mapdata::plugins::Plugins::default()),
             plugin_shares: Mutex::new(HashMap::new()),
             preferences,

@@ -354,12 +354,18 @@ fn sequences_in(url: &str) -> Sequences {
     }
 }
 
-/// Which parts moved past what the page holds.
+/// Which parts of the live body to write for a page that holds these sequences.
+///
+/// The markers and the claims are not among them. They are the bulk of what
+/// there is to send and they change a few times an hour, so each is served on
+/// its own address and this only says that it moved. The page fetches the one
+/// that moved, which is one round trip on the rare beat it changed rather than
+/// its whole weight on every beat it did not.
 fn moved(seen: Sequences, now: Sequences) -> Parts {
     Parts {
         players: now.players > seen.players,
-        markers: now.markers > seen.markers,
-        claims: now.claims > seen.claims,
+        markers: false,
+        claims: false,
         world: now.world > seen.world,
     }
 }

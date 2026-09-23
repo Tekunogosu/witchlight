@@ -9,6 +9,74 @@ which is where that rule is kept rather than in anybody's memory.
 A version that moved for the other half says so and lists nothing, which is not an
 omission: it is what "one release" looks like from the side that did not change.
 
+## 0.53.4
+
+**Deploy note:** the service only; the mod moves with it and is unchanged. Nothing
+is cleared, and no setting, address, stored file or database table changes. A
+plugin reading `markers` or `claims` from what it is handed on each beat keeps
+working and needs no change.
+
+- **`/live` carries who is online and what time it is, and nothing else.** It
+  held the markers, the pins, the claims, the allowance and the world's height as
+  well, though it is read whenever somebody takes a step. It is now 118 bytes on
+  a server whose markers made it 89 kilobytes. A page reads the markers and the
+  claims from their own addresses once at load, and after that only when the
+  service says they moved.
+
+- **A plugin is handed what the page holds rather than what last arrived.** The
+  feed arrives in parts, so the reading that carries a player's new position says
+  nothing about the markers. A plugin given that reading was told the world had
+  none. It is now built from what the page holds, which is every part at its
+  latest, however each arrived.
+
+- **A page the service cannot tell still sees markers change.** Where the wait on
+  `/events` is refused and the page falls back to its own clock, the markers and
+  the claims are read on a slower clock of their own rather than not at all.
+
+## 0.53.3
+
+**Deploy note:** the service only; the mod moves with it and is unchanged. Nothing
+is cleared, and no setting, address, stored file or database table changes.
+
+- **The markers and the claims are served on addresses of their own.** Both were
+  written into the body every browser reads on every beat, though they are the
+  bulk of what there is to send and change a few times an hour. `GET /markers`
+  now serves the markers this person may see with the pins they keep, and
+  `GET /claims` serves the claims with their allowance. The wait on `/events`
+  says which of them moved and carries neither, so a page fetches the one that
+  changed on the beat it changed. A marker changing now costs a 120-byte wake-up
+  and one read, instead of every marker on every beat.
+
+- **What became of a claim is read with `GET /claims?answered=1`.** The claims
+  and the answers share an address, and the question says which of the two it is
+  asking.
+
+## 0.53.2
+
+**Deploy note:** both halves, upgraded together; nothing is cleared. No setting,
+no address, no stored file and no database table changes. A mod older than this
+build still has its claims applied, and the page falls back to waiting for the
+ground to appear.
+
+- **A claim the game refuses now says so on the page, in the game's own words.**
+  A claim that overlapped somebody else's was refused by the game server, written
+  to its log, and never mentioned to the person who drew it: the form sat on
+  "Waiting for the game server" until it gave up twenty seconds later and printed
+  a guess at one of five possible reasons. The service now mints a ticket for
+  each claim asked for, the mod answers against that ticket with what the game
+  decided, and the page shows the refusal in red in the claims window. The
+  attempt is cleared, the window stays open, and what was typed is still there to
+  nudge and ask again.
+
+- **The same answer covers changing a claim and giving one up.** All three asks
+  had the same dead end, and all three now report.
+
+- **A claim is confirmed by being answered rather than by being recognised.** The
+  page used to watch for ground of its own covering the middle of the rectangle
+  it drew, because nothing named a claim before it existed. It now reads the
+  answer to the ask it made. Ground appearing is still taken as a yes, so a mod
+  older than this build is no worse off than before.
+
 ## 0.53.1
 
 **Deploy note:** both halves, upgraded together; nothing is cleared. No setting,

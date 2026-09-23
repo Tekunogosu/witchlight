@@ -682,6 +682,18 @@ let changingClaim = null;
 let droppingClaim = null;
 let claimAskedAt = 0;
 
+/**
+ * What the service calls the ask this page is waiting on.
+ *
+ * The service mints it when the ask is queued and the game answers against it,
+ * so an answer is matched to the ask that earned it rather than guessed at from
+ * whether the ground appeared.
+ */
+let claimTicket = null;
+
+/** Whether an answer is already being asked for, so a slow one is not asked twice. */
+let askingBecame = false;
+
 /** Who the form says may build here, as the mod reads it. */
 function guestsAsked() {
   return {
@@ -725,6 +737,7 @@ async function saveClaim() {
   // keeps the ground, so the key does not change and the only honest sign it
   // took is the description coming back as what was asked for.
   changingClaim = { key: editingClaim.Key, description: claimName.value.trim() };
+  claimTicket = (await answer.json().catch(() => ({}))).Ticket || null;
   claimAskedAt = Date.now();
   sayClaim('Waiting for the game server…');
 }
@@ -759,6 +772,7 @@ async function dropClaim() {
   }
 
   droppingClaim = editingClaim.Key;
+  claimTicket = (await answer.json().catch(() => ({}))).Ticket || null;
   claimAskedAt = Date.now();
   sayClaim('Waiting for the game server…');
 }
@@ -828,6 +842,7 @@ async function askForClaim() {
   // service — so what is watched for is a claim of this reader's own covering
   // the ground they drew on, which is the thing they asked to be true.
   claiming = { x: (asked.X1 + asked.X2) / 2, z: (asked.Z1 + asked.Z2) / 2 };
+  claimTicket = (await answer.json().catch(() => ({}))).Ticket || null;
   claimAskedAt = Date.now();
   save.disabled = false;
   sayClaim('Waiting for the game server…');
@@ -844,32 +859,81 @@ function claimArrived() {
 }
 
 /**
- * Watches for the claim to appear, and gives up on it after a while.
+ * Watches for the game's answer, and gives up after a while.
  *
- * The same patience a marker is given, for the same reason: the mod collects
- * every two seconds, so a claim that has not arrived by then is a game server
- * that has stopped rather than one that is busy. Called on the live poll.
+ * The game answers against the ticket the service minted, so what became of the
+ * ask is read rather than inferred. The ground appearing is still taken as a yes
+ * — it is the same news by another route, and it arrives whichever half is
+ * older. Called on the live poll.
  */
 function watchClaim() {
   if (!(claiming || changingClaim || droppingClaim)) return;
 
   if (claimSettled()) {
-    claiming = changingClaim = droppingClaim = null;
-    sayClaim('');
-    shutWindow(claimPanel);
+    settleClaim();
     return;
   }
 
+  started(askWhatBecame(), 'asking what became of a claim');
+
   if (Date.now() - claimAskedAt > MARKER_PATIENCE) {
-    claiming = changingClaim = droppingClaim = null;
-    // What the game refused and why is said in game, not here: the rules a claim
-    // is judged by are the server's, and a page inventing a reason would be
-    // guessing at one of five. So this says what is true — it did not happen —
-    // and points at where the answer is.
+    forgetClaimAsk();
+    // Reached when the game never answered, which is a game server that has
+    // stopped rather than one that refused. A refusal says why in its own words
+    // and says so above, so this says only what is true of silence.
     sayClaim(
-      'The game server refused it. Check /land in game for why: a new claim '
-      + 'may overlap another or exceed your allowance, and a change needs '
-      + 'the claim to still be yours.', true);
+      'The game server is not answering. The claim was not made — '
+      + 'check that the server is up, and try again.', true);
+  }
+}
+
+/** Forgets whichever ask was outstanding, whatever became of it. */
+function forgetClaimAsk() {
+  claiming = changingClaim = droppingClaim = null;
+  claimTicket = null;
+}
+
+/** Takes the ask as done: says nothing more and shuts the form. */
+function settleClaim() {
+  forgetClaimAsk();
+  sayClaim('');
+  shutWindow(claimPanel);
+}
+
+/**
+ * Asks what the game made of the ask this page is waiting on.
+ *
+ * Asked only while one is outstanding, and one at a time. A refused ask is said
+ * here in the game's own words, because the rules a claim is judged by are the
+ * game's and it is the only half that knows which one was broken.
+ *
+ * The form stays open on a refusal, holding what was typed. What was refused is
+ * usually a rectangle worth nudging rather than one worth drawing again.
+ */
+async function askWhatBecame() {
+  if (!claimTicket || askingBecame) return;
+  askingBecame = true;
+
+  try {
+    const answer = await fetch('/claims?answered=1');
+    if (!answer.ok) return;
+    const answered = (await answer.json()).Answered || [];
+    const ours = answered.find(one => one.Ticket === claimTicket);
+    if (!ours) return;
+
+    if (ours.Done) {
+      settleClaim();
+      return;
+    }
+
+    forgetClaimAsk();
+    const save = document.getElementById('claim-save');
+    if (save) save.disabled = false;
+    sayClaim(`The game server refused it: ${ours.Why}`, true);
+  } catch (error) {
+    /* the service may be restarting; the patience above is what gives up */
+  } finally {
+    askingBecame = false;
   }
 }
 

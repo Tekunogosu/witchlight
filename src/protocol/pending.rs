@@ -226,6 +226,13 @@ const LONGEST_DESCRIPTION: usize = 128;
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct Claim {
+    /// What this ask is called, so the mod can say what became of it.
+    ///
+    /// Minted here for the same reason a marker's name is: the game gives a
+    /// claim nothing either end could agree on before it exists, and the browser
+    /// that asked has to recognise the answer to its own ask among everybody
+    /// else's. The mod reports against this and never invents one.
+    pub ticket: String,
     /// Who asked, taken from their session and never from the page.
     pub uid: String,
     pub description: String,
@@ -285,6 +292,7 @@ impl Claim {
         }
 
         Ok(Self {
+            ticket: guid(),
             uid: uid.to_owned(),
             description: description.to_owned(),
             x1,
@@ -353,6 +361,8 @@ const LONGEST_NAME: usize = 64;
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct ClaimEdit {
+    /// What this ask is called. See [`Claim::ticket`].
+    pub ticket: String,
     /// The claim to change, by the name the mod gave it.
     pub key: String,
     /// Who asked, taken from their session. The mod decides whether they may.
@@ -365,6 +375,8 @@ pub struct ClaimEdit {
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct ClaimGone {
+    /// What this ask is called. See [`Claim::ticket`].
+    pub ticket: String,
     pub key: String,
     /// Who asked, taken from their session. The mod decides whether they may.
     pub uid: String,
@@ -396,6 +408,7 @@ impl ClaimEdit {
         }
 
         Ok(Self {
+            ticket: guid(),
             key: key.to_owned(),
             uid: uid.to_owned(),
             description: description.to_owned(),
@@ -409,7 +422,7 @@ impl ClaimGone {
         if !claim_named(key) {
             return Err("that is not a claim this map knows");
         }
-        Ok(Self { key: key.to_owned(), uid: uid.to_owned() })
+        Ok(Self { ticket: guid(), key: key.to_owned(), uid: uid.to_owned() })
     }
 }
 

@@ -863,27 +863,32 @@ function registerPlugin(id, plugin) {
  * What the live feed last said, as a plugin is shown it.
  *
  * Built once per beat and handed to every plugin, rather than each of them
- * fetching `/live` again: the page has just read all of this, and a plugin
+ * fetching the feed again: the page has just read all of this, and a plugin
  * asking for it a second time doubles the traffic to say what the page already
  * knows. Frozen shallowly so that one plugin cannot hand the next a changed
  * copy — the arrays inside are the page's own and are not to be written to.
+ *
+ * Read from what the page holds rather than from the reading that arrived. The
+ * feed comes in parts and each arrives on its own beat, so a reading that says
+ * only that the clock ticked says nothing about the markers — and a plugin
+ * handed that reading would be told this world has none.
  */
-function livePassed(live) {
+function livePassed() {
   return Object.freeze({
     /** Every player the reader may see, as the mod described them. */
-    players: live.Players || [],
+    players,
     /** How many are on, which is not the same as how many are listed. */
-    online: Number.isFinite(live.Online) ? live.Online : (live.Players || []).length,
+    online,
     /** Which of them share a group with whoever is looking. */
-    grouped: live.Grouped || [],
+    grouped: [...grouped],
     /** Every marker this reader may see. */
-    markers: live.Waypoints || [],
+    markers: waypointsHeld,
     /** Every land claim this reader may see. */
-    claims: live.Claims || [],
+    claims,
     /** The world's own clock, as the game last said it. */
-    world: live.World || null,
+    world: worldSaid,
     /** How tall the world is, in blocks. */
-    height: live.Height,
+    height: worldHeight,
     /** How long the service asks the page to leave between beats, in ms. */
     every: LIVE_BEAT,
   });
@@ -899,7 +904,7 @@ function livePassed(live) {
 function pluginsChanged(live) {
   // Not `said`: that is the page's own coordinate helper, and a local of that
   // name shadows it for everything below.
-  const reading = livePassed(live || {});
+  const reading = livePassed();
   for (const [id, { plugin, handle }] of plugins) {
     if (typeof plugin.onChange !== 'function') continue;
     try {

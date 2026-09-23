@@ -5,6 +5,7 @@
 //! [`live`], [`pending`], [`preferences`] and [`auth`] define the payloads that
 //! cross. [`watch`] notices when the mod writes new palette or block-name data.
 
+pub mod answers;
 pub mod api;
 pub mod apiport;
 pub mod auth;

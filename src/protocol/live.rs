@@ -471,30 +471,50 @@ impl Live {
         self.markers.lock().map_or_else(|_| "[]".to_owned(), |held| held.colors.clone())
     }
 
-    /// Returns what the viewer asks for: who is online, and every marker they
-    /// may see.
+    /// Returns what moves constantly: who is online and what time it is.
     ///
-    /// Who is asking decides which markers those are. Everyone gets the ones
-    /// their owners share, and somebody logged in also gets their own. A private
-    /// marker never leaves this process for a browser that is not its owner's,
-    /// because a page cannot be trusted to hide what it has been handed.
+    /// Who is asking decides which players those are. Everyone gets the ones the
+    /// mod shares, and somebody logged in also gets whoever shares a group with
+    /// them. A player the mod hid never leaves this process for a browser that
+    /// may not see them, because a page cannot be trusted to hide what it has
+    /// been handed.
     ///
-    /// An empty result stays empty. There is no fallback to any file this build
-    /// does not write.
+    /// The markers and the claims are not here. They are the bulk of what there
+    /// is to send and change a few times an hour, while this is read whenever
+    /// somebody takes a step, so each is served on its own address. See
+    /// [`Self::markers_body`] and [`Self::claims_body`].
     ///
     /// `colors` is everybody's chosen colour by uid, as JSON. It belongs to the
-    /// preferences and is carried here because this is the one body every browser
-    /// polls.
-    #[must_use]
+    /// preferences and is carried here because it is read beside the players and
+    /// changes about as rarely as a person picks one.
     pub fn body(&self, uid: Option<&str>, colors: &str) -> String {
         let (players, online, grouped) = self.who_is_on(uid);
-        let (markers, pins) = self.markers_for(uid);
-        let (claims, claiming, height) = self.claims_for(uid);
         let world = self.clock();
 
         format!(
-            r#"{{"Players":{players},"Online":{online},"Grouped":{grouped},"Colors":{colors},"Waypoints":{markers},"Pins":{pins},"Claims":{claims},"Claiming":{claiming},"Height":{height},"World":{world}}}"#
+            r#"{{"Players":{players},"Online":{online},"Grouped":{grouped},"Colors":{colors},"World":{world}}}"#
         )
+    }
+
+    /// Writes the markers this reader may see, and which of them they pin.
+    ///
+    /// Served on the markers' own address. They are the bulk of what there is to
+    /// send and they change a few times an hour, so a browser asks for them when
+    /// it is told they moved rather than carrying them on every beat.
+    #[must_use]
+    pub fn markers_body(&self, uid: Option<&str>) -> String {
+        let (markers, pins) = self.markers_for(uid);
+        format!(r#"{{"Waypoints":{markers},"Pins":{pins}}}"#)
+    }
+
+    /// Writes the claims this reader may see, their allowance and the world's
+    /// height.
+    ///
+    /// Served on the claims' own address, for the same reason the markers are.
+    #[must_use]
+    pub fn claims_body(&self, uid: Option<&str>) -> String {
+        let (claims, claiming, height) = self.claims_for(uid);
+        format!(r#"{{"Claims":{claims},"Claiming":{claiming},"Height":{height}}}"#)
     }
 
     /// Writes only the parts of the feed a browser has not got.
@@ -807,18 +827,18 @@ mod tests {
         );
 
         let again = Live::load(Arc::clone(&store), &[]);
-        assert!(again.body(Some("uid-ada"), "{}").contains("ada's hoard"), "read back from the database");
+        assert!(again.markers_body(Some("uid-ada")).contains("ada's hoard"), "read back from the database");
     }
 
     #[test]
     fn a_pin_reaches_whoever_set_it_and_nobody_else() {
         let live = told();
 
-        assert!(live.body(Some("uid-ada"), "{}").contains(r#""Pins":["a"]"#), "Ada is sent her own");
+        assert!(live.markers_body(Some("uid-ada")).contains(r#""Pins":["a"]"#), "Ada is sent her own");
         // Bob and a stranger are shown the marker Ada pinned but told nothing
         // about her keeping it.
-        assert!(live.body(Some("uid-bob"), "{}").contains(r#""Pins":[]"#));
-        assert!(live.body(None, "{}").contains(r#""Pins":[]"#));
+        assert!(live.markers_body(Some("uid-bob")).contains(r#""Pins":[]"#));
+        assert!(live.markers_body(None).contains(r#""Pins":[]"#));
     }
 
     #[test]
@@ -828,24 +848,24 @@ mod tests {
             r##"{"Colors":[],"Public":[{"Title":"trader","Key":"a"}],"Private":{}}"##.to_owned()).ok());
         // An empty array rather than a hole, because a page cannot parse what
         // it was not sent.
-        assert!(live.body(Some("uid-ada"), "{}").contains(r#""Pins":[]"#));
+        assert!(live.markers_body(Some("uid-ada")).contains(r#""Pins":[]"#));
     }
 
     #[test]
     fn a_private_marker_reaches_its_owner_and_nobody_else() {
         let live = told();
 
-        let ada = live.body(Some("uid-ada"), "{}");
+        let ada = live.markers_body(Some("uid-ada"));
         assert!(ada.contains("ada's hoard"), "Ada is sent her own");
         assert!(!ada.contains("bob's hoard"), "and never Bob's");
 
-        let bob = live.body(Some("uid-bob"), "{}");
+        let bob = live.markers_body(Some("uid-bob"));
         assert!(bob.contains("bob's hoard"));
         assert!(!bob.contains("ada's hoard"));
 
         // The map stays public, so a stranger is still shown the markers whose
         // owners share them, and only those.
-        let stranger = live.body(None, "{}");
+        let stranger = live.markers_body(None);
         assert!(stranger.contains("trader"));
         assert!(!stranger.contains("hoard"), "nobody's private markers reach a stranger");
     }
@@ -854,7 +874,7 @@ mod tests {
     fn everybody_is_shown_what_is_shared() {
         let live = told();
         for who in [None, Some("uid-ada"), Some("uid-bob"), Some("uid-nobody")] {
-            assert!(live.body(who, "{}").contains("trader"), "{who:?} is shown the shared marker");
+            assert!(live.markers_body(who).contains("trader"), "{who:?} is shown the shared marker");
         }
     }
 
@@ -862,7 +882,7 @@ mod tests {
     fn an_owner_is_sent_one_list_a_browser_can_read() {
         let live = told();
         let body: serde_json::Value =
-            serde_json::from_str(&live.body(Some("uid-ada"), "{}")).expect("valid JSON");
+            serde_json::from_str(&live.markers_body(Some("uid-ada"))).expect("valid JSON");
 
         let markers = body["Waypoints"].as_array().expect("an array of markers");
         assert_eq!(markers.len(), 2, "the shared one and her own, joined end to end");
@@ -879,7 +899,7 @@ mod tests {
         // behalf.
         assert!(!live.set_markers(r#"[{"Title":"trader"}]"#.to_owned()).ok());
         assert!(!live.set_markers("not json".to_owned()).ok());
-        assert!(!live.body(Some("uid-ada"), "{}").contains("trader"));
+        assert!(!live.markers_body(Some("uid-ada")).contains("trader"));
     }
 
     #[test]
@@ -888,7 +908,9 @@ mod tests {
         let body: serde_json::Value =
             serde_json::from_str(&live.body(None, "{}")).expect("valid JSON");
         assert_eq!(body["Players"].as_array().expect("an array").len(), 0);
-        assert_eq!(body["Waypoints"].as_array().expect("an array").len(), 0);
+        let markers: serde_json::Value =
+            serde_json::from_str(&live.markers_body(None)).expect("valid JSON");
+        assert_eq!(markers["Waypoints"].as_array().expect("an array").len(), 0);
         assert_eq!(live.colors(), "[]");
     }
 
@@ -1022,7 +1044,7 @@ mod tests {
     fn a_claim_reaches_whoever_the_mod_named_and_nobody_else() {
         let live = claimed();
 
-        let ada = live.body(Some("uid-ada"), "{}");
+        let ada = live.claims_body(Some("uid-ada"));
         assert!(ada.contains(r#""Key":"a""#), "Ada was named, so Ada is sent them");
 
         // A reader the mod did not name is sent an empty list rather than a
@@ -1030,7 +1052,7 @@ mod tests {
         // hide what it has already been handed.
         for who in [None, Some("uid-bob")] {
             assert!(
-                live.body(who, "{}").contains(r#""Claims":[]"#),
+                live.claims_body(who).contains(r#""Claims":[]"#),
                 "{who:?} was not named and is sent no claims"
             );
         }
@@ -1046,7 +1068,7 @@ mod tests {
             r#"{"Everyones":true,"Claims":[{"Key":"a"}],"Seen":[],"Making":{}}"#.to_owned()
         ).ok());
         for who in [None, Some("uid-bob")] {
-            assert!(live.body(who, "{}").contains(r#""Key":"a""#), "{who:?} is shown an open claim");
+            assert!(live.claims_body(who).contains(r#""Key":"a""#), "{who:?} is shown an open claim");
         }
     }
 
@@ -1054,7 +1076,7 @@ mod tests {
     fn what_somebody_may_claim_is_said_to_them_alone() {
         let live = claimed();
 
-        let ada = live.body(Some("uid-ada"), "{}");
+        let ada = live.claims_body(Some("uid-ada"));
         assert!(ada.contains(r#""Allowance":262144"#), "Ada is told her own allowance");
         assert!(ada.contains(r#""Height":256"#), "and how tall the world is");
 
@@ -1062,7 +1084,7 @@ mod tests {
         // may not claim at all is told nothing rather than zero.
         for who in [None, Some("uid-bob")] {
             assert!(
-                live.body(who, "{}").contains(r#""Claiming":null"#),
+                live.claims_body(who).contains(r#""Claiming":null"#),
                 "{who:?} may not claim, so there is nothing to tell them"
             );
         }
@@ -1073,7 +1095,7 @@ mod tests {
         let live = Live::load(Arc::new(Store::in_memory()), &[]);
         assert!(!live.set_claims(r#"[{"Key":"a"}]"#.to_owned()).ok(), "a bare array is not the envelope");
         assert!(!live.set_claims("not json".to_owned()).ok());
-        assert!(live.body(Some("uid-ada"), "{}").contains(r#""Claims":[]"#));
+        assert!(live.claims_body(Some("uid-ada")).contains(r#""Claims":[]"#));
     }
 
     #[test]

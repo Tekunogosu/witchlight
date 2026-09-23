@@ -133,6 +133,15 @@ for (const [over, said, apart] of [['year', 'date', false], ['season', 'time', t
 L.DomEvent.disableClickPropagation(whenBar);
 
 /**
+ * What the world's clock last said, as the service sent it.
+ *
+ * Held because the feed arrives in parts: a reading that carries only a player's
+ * new position says nothing about the clock, and a plugin asking what time it is
+ * on that beat must not be told there is no clock.
+ */
+let worldSaid = null;
+
+/**
  * Says what the clock says, or takes itself off the map.
  *
  * Shown only where there is something to show: a service running without a game
@@ -140,6 +149,7 @@ L.DomEvent.disableClickPropagation(whenBar);
  * widget rather than an honest absence.
  */
 function showWhen(clock) {
+  worldSaid = clock || null;
   const has = Boolean(clock && (clock.Date || clock.Time));
   whenBar.style.display = has ? '' : 'none';
   if (!has) return;
