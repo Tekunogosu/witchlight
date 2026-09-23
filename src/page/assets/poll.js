@@ -62,34 +62,48 @@ async function pollLive() {
   }
 }
 
-/** Takes one reading of the live feed, however it arrived. */
+/**
+ * Takes one reading of the live feed, however it arrived.
+ *
+ * The feed arrives in parts and a part that did not move is absent, so each is
+ * read only where it is present. A whole reading from `/live` carries every
+ * part and sets all of them. Reading an absent part as empty would clear the
+ * markers every time the clock ticked.
+ */
 async function takeLive(live) {
   try {
-    players = live.Players || [];
-    // How many are on, and who of them is in a group with whoever is asking.
-    // Both are worked out by the mod and passed through per viewer, because a
-    // browser cannot be asked to hide what it has already been handed.
-    online = Number.isFinite(live.Online) ? live.Online : players.length;
-    grouped = new Set(live.Grouped || []);
-    playerColours = (live.Colors && typeof live.Colors === 'object') ? live.Colors : {};
-    // Both from the same post: the claims this reader may be sent, and whether
-    // the mod says they may draw one. The second rides the live poll rather than
+    if ('Players' in live) {
+      players = live.Players || [];
+      // How many are on, and who of them is in a group with whoever is asking.
+      // Both are worked out by the mod and passed through per viewer, because a
+      // browser cannot be asked to hide what it has already been handed.
+      online = Number.isFinite(live.Online) ? live.Online : players.length;
+      grouped = new Set(live.Grouped || []);
+      playerColours = (live.Colors && typeof live.Colors === 'object') ? live.Colors : {};
+    }
+    // Both from the same part: the claims this reader may be sent, and whether
+    // the mod says they may draw one. The second rides the live feed rather than
     // `/me` because it is the mod's answer and arrives when the mod does —
     // a page opened before the game server was up learns it on the next beat
     // instead of needing a reload.
-    claims = live.Claims || [];
-    allowance = live.Claiming || null;
-    worldHeight = Number.isFinite(live.Height) ? live.Height : worldHeight;
-    showWhen(live.World);
-    const waypoints = live.Waypoints || [];
-    // Which of them this reader keeps in sight in game. Sent to whoever set them
-    // and to nobody else, so what arrives is already this reader's own answer —
-    // except where this page has just asked for one and the game has not
-    // answered yet, which `takePins` is what holds.
-    takePins(live.Pins);
+    if ('Claims' in live) {
+      claims = live.Claims || [];
+      allowance = live.Claiming || null;
+      worldHeight = Number.isFinite(live.Height) ? live.Height : worldHeight;
+    }
+    if ('World' in live) showWhen(live.World);
+    // The pins travel with the markers, so they are read together. Which of
+    // them this reader keeps in sight in game is sent to whoever set them and to
+    // nobody else, so what arrives is already this reader's own answer — except
+    // where this page has just asked for one and the game has not answered yet,
+    // which `takePins` is what holds.
+    if ('Waypoints' in live) {
+      waypointsHeld = live.Waypoints || [];
+      takePins(live.Pins);
+    }
 
     // A marker naming a picture nobody has heard of means the set has grown.
-    if (waypoints.some(place => place.Icon && !icons.has(String(place.Icon)))) {
+    if (waypointsHeld.some(place => place.Icon && !icons.has(String(place.Icon)))) {
       await pollIcons();
       // The pictures changed, so what is drawn no longer matches what was drawn,
       // and the form's picker is short of one.
@@ -100,7 +114,7 @@ async function takeLive(live) {
     // The one honest confirmation there is: the marker this page asked for is
     // now among the markers the service is sending, which means the game made it.
     if (awaiting) {
-      if (arrived(waypoints)) landed();
+      if (arrived(waypointsHeld)) landed();
       else if (Date.now() - askedAt > MARKER_PATIENCE) await lost();
     }
 
@@ -110,7 +124,7 @@ async function takeLive(live) {
     showDistances();
     drawWho();
     keepUp();
-    drawPlaces(waypoints);
+    drawPlaces(waypointsHeld);
     // The form may be open on a marker whose pin was set from another browser,
     // or refused by the game since it was pressed. The mark is drawn from what
     // arrived rather than from what was asked for.
@@ -199,8 +213,16 @@ function takeInfo(info) {
  */
 let pushed = false;
 
-/** The live feed's own clock, as the service numbers it. */
-let liveSeq = 0;
+/**
+ * What this page holds of each part of the live feed, as the service numbers
+ * them.
+ *
+ * One number per part rather than one for the feed, because the parts move at
+ * unrelated rates: the world's clock ticks every second and the markers change a
+ * few times an hour. Sent back on each wait, and the service answers with the
+ * parts that have moved past them. See the service's `events.rs`.
+ */
+let liveSeqs = { players: 0, markers: 0, claims: 0, world: 0, plugins: 0 };
 
 /**
  * Waits on the service for the next change, takes it, and waits again.
@@ -218,11 +240,17 @@ async function pushLoop() {
       continue;
     }
     try {
-      const answer = await fetch(`/events?since=${generation}&live=${liveSeq}`, { cache: 'no-store' });
+      const held = new URLSearchParams({ since: String(generation) });
+      for (const [part, seq] of Object.entries(liveSeqs)) held.set(part, String(seq));
+      const answer = await fetch(`/events?${held}`, { cache: 'no-store' });
       if (!answer.ok) throw new Error(String(answer.status));
       const moved = await answer.json();
       pushed = true;
-      liveSeq = Number.isFinite(moved.liveSeq) ? moved.liveSeq : liveSeq;
+      if (moved.seqs && typeof moved.seqs === 'object') {
+        for (const part of Object.keys(liveSeqs)) {
+          if (Number.isFinite(moved.seqs[part])) liveSeqs[part] = moved.seqs[part];
+        }
+      }
       if (moved.info) takeInfo(moved.info);
       if (moved.live) await takeLive(moved.live);
     } catch (error) {

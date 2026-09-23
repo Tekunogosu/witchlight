@@ -261,6 +261,50 @@ struct Held {
     height: i32,
 }
 
+/// Which parts of the live feed to write.
+///
+/// Each names one block of the body. They are grouped as they are read rather
+/// than one per JSON field: pins belong to the markers, and the allowance and
+/// the world's height to the claims.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Parts {
+    pub players: bool,
+    pub markers: bool,
+    pub claims: bool,
+    pub world: bool,
+}
+
+/// What a post did.
+///
+/// A post that parsed and a post that changed something are different answers,
+/// and the caller acts on each differently: a malformed post is refused, and an
+/// unchanged one is accepted and wakes nobody. One `bool` for both conflated
+/// them, and every well-formed post woke every browser and resent the whole
+/// feed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Took {
+    /// The post differed from what was held, which is now replaced.
+    Changed,
+    /// The post was well formed and says what is already held.
+    Same,
+    /// The post is not the shape this build reads, and nothing was stored.
+    Wrong,
+}
+
+impl Took {
+    /// Whether the post was accepted, however little it said.
+    #[must_use]
+    pub fn ok(self) -> bool {
+        !matches!(self, Self::Wrong)
+    }
+
+    /// Whether anything actually moved, which is what a browser is woken for.
+    #[must_use]
+    pub fn changed(self) -> bool {
+        matches!(self, Self::Changed)
+    }
+}
+
 pub struct Live {
     players: Mutex<Option<(Seen, Instant)>>,
     /// The world's clock as the mod last reported it. It is held in memory and
@@ -307,14 +351,17 @@ impl Live {
 
     /// Stores a report of who is online, sorted by who may see them. It is held
     /// in memory only, because a position goes stale before a write would finish.
-    pub fn set_players(&self, body: String) -> bool {
+    /// Positions are always taken as a change. A player standing still still
+    /// reports, and the report carries the time it was made, which `body` reads
+    /// to refuse a position older than the timeout.
+    pub fn set_players(&self, body: String) -> Took {
         let Some(taken) = watching(&body, &self.hidden) else {
-            return false;
+            return Took::Wrong;
         };
         if let Ok(mut players) = self.players.lock() {
             *players = Some((taken, Instant::now()));
         }
-        true
+        Took::Changed
     }
 
     /// Returns where every player the mod last posted is standing, in blocks,
@@ -358,28 +405,33 @@ impl Live {
     /// Only that the payload is an object is checked. The mod chooses the wording
     /// and the page reads it, and a service that interpreted the words would be a
     /// third place for a date format to disagree.
-    pub fn set_world(&self, body: String) -> bool {
+    pub fn set_world(&self, body: String) -> Took {
         if !body.trim_start().starts_with('{') {
-            return false;
+            return Took::Wrong;
         }
-        if let Ok(mut world) = self.world.lock() {
-            *world = Some((body, Instant::now()));
-        }
-        true
+        let Ok(mut world) = self.world.lock() else {
+            return Took::Same;
+        };
+        // Stored on every post so it does not go stale, and counted as a change
+        // only when it reads differently. It is posted every second, and the
+        // wording changes far less often than that.
+        let same = world.as_ref().is_some_and(|(held, _)| *held == body);
+        *world = Some((body, Instant::now()));
+        if same { Took::Same } else { Took::Changed }
     }
 
     /// Stores the markers, writing only when they differ from what is already
     /// held. A post that says nothing new costs no write.
-    pub fn set_markers(&self, body: String) -> bool {
+    pub fn set_markers(&self, body: String) -> Took {
         let Some(taken) = sorted(&body) else {
-            return false;
+            return Took::Wrong;
         };
 
         let Ok(mut markers) = self.markers.lock() else {
-            return true;
+            return Took::Same;
         };
         if markers.body == body {
-            return true;
+            return Took::Same;
         }
 
         if let Err(error) = self.store.put_markers(&body) {
@@ -387,7 +439,7 @@ impl Live {
         }
 
         *markers = taken;
-        true
+        Took::Changed
     }
 
     /// Stores the land claims, sorted by who the mod says may see them.
@@ -395,17 +447,19 @@ impl Live {
     /// Unlike the markers these are held in memory only. See [`Claims`] for why a
     /// list that arrives with its own permissions must not be read back off disk
     /// on a later day.
-    pub fn set_claims(&self, body: String) -> bool {
+    pub fn set_claims(&self, body: String) -> Took {
         let Some(taken) = held(&body) else {
-            return false;
+            return Took::Wrong;
         };
 
-        if let Ok(mut claims) = self.claims.lock()
-            && claims.body != body
-        {
-            *claims = taken;
+        let Ok(mut claims) = self.claims.lock() else {
+            return Took::Same;
+        };
+        if claims.body == body {
+            return Took::Same;
         }
-        true
+        *claims = taken;
+        Took::Changed
     }
 
     /// Returns the colours the game offers for a marker, for the page's form.
@@ -433,12 +487,55 @@ impl Live {
     /// polls.
     #[must_use]
     pub fn body(&self, uid: Option<&str>, colors: &str) -> String {
-        // Build who is online, which of them this person may see, and who
-        // shares a group with them. A report older than the timeout means the
-        // game server is gone, and a dot saying somebody is standing somewhere
-        // is worse than no dot at all.
-        let (players, online, grouped) = self
-            .players
+        let (players, online, grouped) = self.who_is_on(uid);
+        let (markers, pins) = self.markers_for(uid);
+        let (claims, claiming, height) = self.claims_for(uid);
+        let world = self.clock();
+
+        format!(
+            r#"{{"Players":{players},"Online":{online},"Grouped":{grouped},"Colors":{colors},"Waypoints":{markers},"Pins":{pins},"Claims":{claims},"Claiming":{claiming},"Height":{height},"World":{world}}}"#
+        )
+    }
+
+    /// Writes only the parts of the feed a browser has not got.
+    ///
+    /// A part left out is absent from the object rather than written as null, so
+    /// a page can tell a part that did not move from one that moved and is now
+    /// empty. The colours ride with the players, because they are read beside
+    /// them and change about as rarely as a person picks one.
+    #[must_use]
+    pub fn parts(&self, uid: Option<&str>, colors: &str, want: Parts) -> String {
+        let mut said: Vec<String> = Vec::new();
+
+        if want.players {
+            let (players, online, grouped) = self.who_is_on(uid);
+            said.push(format!(
+                r#""Players":{players},"Online":{online},"Grouped":{grouped},"Colors":{colors}"#
+            ));
+        }
+        if want.markers {
+            let (markers, pins) = self.markers_for(uid);
+            said.push(format!(r#""Waypoints":{markers},"Pins":{pins}"#));
+        }
+        if want.claims {
+            let (claims, claiming, height) = self.claims_for(uid);
+            said.push(format!(
+                r#""Claims":{claims},"Claiming":{claiming},"Height":{height}"#
+            ));
+        }
+        if want.world {
+            said.push(format!(r#""World":{}"#, self.clock()));
+        }
+
+        format!("{{{}}}", said.join(","))
+    }
+
+    /// Who is online, how many, and which of them share a group with this reader.
+    ///
+    /// A report older than the timeout means the game server is gone, and a dot
+    /// saying somebody is standing somewhere is worse than no dot at all.
+    fn who_is_on(&self, uid: Option<&str>) -> (String, u32, String) {
+        self.players
             .lock()
             .ok()
             .and_then(|held| {
@@ -450,13 +547,16 @@ impl Live {
                          grouped_with(&seen.groups, uid))
                     })
             })
-            .unwrap_or_else(|| ("[]".to_owned(), 0, "[]".to_owned()));
+            .unwrap_or_else(|| ("[]".to_owned(), 0, "[]".to_owned()))
+    }
 
-        // Build the markers this person may see, and which of them they keep in
-        // sight in game. Pins go only to whoever set them, so the page asks
-        // whether this marker is pinned for them rather than searching a list per
-        // player.
-        let (markers, pins) = self.markers.lock().map_or_else(
+    /// The markers this person may see, and which of them they keep in sight in
+    /// game.
+    ///
+    /// Pins go only to whoever set them, so the page asks whether this marker is
+    /// pinned for them rather than searching a list per player.
+    fn markers_for(&self, uid: Option<&str>) -> (String, String) {
+        self.markers.lock().map_or_else(
             |_| ("[]".to_owned(), "[]".to_owned()),
             |held| {
                 (
@@ -466,15 +566,18 @@ impl Live {
                         .unwrap_or_else(|| "[]".to_owned()),
                 )
             },
-        );
+        )
+    }
 
-        // Send every claim or none. Unlike the markers there is nothing to join,
-        // because a reader is entitled to the whole list or to none of it.
-        //
-        // This reader's own claim allowance goes out beside the claims and only
-        // to them. The form needs it to state a rectangle's cost before asking
-        // for it. See the mod's `ClaimAllowance`.
-        let (claims, claiming, height) = self.claims.lock().map_or_else(
+    /// Every claim or none, with this reader's own allowance and the world's
+    /// height.
+    ///
+    /// Unlike the markers there is nothing to join, because a reader is entitled
+    /// to the whole list or to none of it. The allowance goes out beside the
+    /// claims and only to them: the form needs it to state a rectangle's cost
+    /// before asking for it. See the mod's `ClaimAllowance`.
+    fn claims_for(&self, uid: Option<&str>) -> (String, String, i32) {
+        self.claims.lock().map_or_else(
             |_| ("[]".to_owned(), "null".to_owned(), 0),
             |held| {
                 let allowed = held.everyones
@@ -486,20 +589,19 @@ impl Live {
                     .unwrap_or_else(|| "null".to_owned());
                 (list, mine, held.height)
             },
-        );
+        )
+    }
 
-        let world = self
-            .world
+    /// What the world's clock last reported, or null when it is stale.
+    fn clock(&self) -> String {
+        self.world
             .lock()
             .ok()
             .and_then(|held| held.clone())
             .filter(|(_, at)| at.elapsed() < PLAYERS_GOOD_FOR)
-            .map_or_else(|| "null".to_owned(), |(body, _)| body);
-
-        format!(
-            r#"{{"Players":{players},"Online":{online},"Grouped":{grouped},"Colors":{colors},"Waypoints":{markers},"Pins":{pins},"Claims":{claims},"Claiming":{claiming},"Height":{height},"World":{world}}}"#
-        )
+            .map_or_else(|| "null".to_owned(), |(body, _)| body)
     }
+
 }
 
 /// Joins what everybody is shown with whatever one person is shown on top.
@@ -689,7 +791,7 @@ mod tests {
 
     fn told() -> Live {
         let live = Live::load(Arc::new(Store::in_memory()), &[]);
-        assert!(live.set_markers(POSTED.to_owned()), "the envelope this build posts is taken");
+        assert!(live.set_markers(POSTED.to_owned()).ok(), "the envelope this build posts is taken");
         live
     }
 
@@ -697,8 +799,12 @@ mod tests {
     fn markers_survive_a_restart_through_the_database() {
         let store = Arc::new(Store::in_memory());
         let first = Live::load(Arc::clone(&store), &[]);
-        assert!(first.set_markers(POSTED.to_owned()));
-        assert!(first.set_markers(POSTED.to_owned()), "the same post again is taken and costs no write");
+        assert_eq!(first.set_markers(POSTED.to_owned()), Took::Changed);
+        assert_eq!(
+            first.set_markers(POSTED.to_owned()),
+            Took::Same,
+            "the same post again is taken, costs no write and wakes nobody"
+        );
 
         let again = Live::load(Arc::clone(&store), &[]);
         assert!(again.body(Some("uid-ada"), "{}").contains("ada's hoard"), "read back from the database");
@@ -719,7 +825,7 @@ mod tests {
     fn a_post_from_a_mod_that_knows_nothing_of_pins_has_none() {
         let live = Live::load(Arc::new(Store::in_memory()), &[]);
         assert!(live.set_markers(
-            r##"{"Colors":[],"Public":[{"Title":"trader","Key":"a"}],"Private":{}}"##.to_owned()));
+            r##"{"Colors":[],"Public":[{"Title":"trader","Key":"a"}],"Private":{}}"##.to_owned()).ok());
         // An empty array rather than a hole, because a page cannot parse what
         // it was not sent.
         assert!(live.body(Some("uid-ada"), "{}").contains(r#""Pins":[]"#));
@@ -771,8 +877,8 @@ mod tests {
         // A bare array is what an older mod posted. It says nothing about who
         // may see what, and reading it as all-public would decide on the owners'
         // behalf.
-        assert!(!live.set_markers(r#"[{"Title":"trader"}]"#.to_owned()));
-        assert!(!live.set_markers("not json".to_owned()));
+        assert!(!live.set_markers(r#"[{"Title":"trader"}]"#.to_owned()).ok());
+        assert!(!live.set_markers("not json".to_owned()).ok());
         assert!(!live.body(Some("uid-ada"), "{}").contains("trader"));
     }
 
@@ -815,7 +921,7 @@ mod tests {
                 "Groups":{"1":{"Name":"the guild","Members":["b","c"]},
                           "2":{"Name":"xlib","Members":["a","b","c"]}}}"#
                 .to_owned()
-        ));
+        ).ok());
         live
     }
 
@@ -859,7 +965,7 @@ mod tests {
             r#"{"Online":0,"Public":[],"Private":{},
                 "Groups":{"7":{"Name":"the guild","Members":["a","b","c"]},"x":{"Name":"nonsense"}}}"#
                 .to_owned()
-        ));
+        ).ok());
         let groups = live.groups();
         assert_eq!(groups.len(), 1, "a group whose id is not a number is not a group");
         assert_eq!(groups[&7].name, "the guild");
@@ -908,7 +1014,7 @@ mod tests {
 
     fn claimed() -> Live {
         let live = Live::load(Arc::new(Store::in_memory()), &[]);
-        assert!(live.set_claims(CLAIMED.to_owned()), "the envelope this build posts is taken");
+        assert!(live.set_claims(CLAIMED.to_owned()).ok(), "the envelope this build posts is taken");
         live
     }
 
@@ -938,7 +1044,7 @@ mod tests {
         let live = Live::load(Arc::new(Store::in_memory()), &[]);
         assert!(live.set_claims(
             r#"{"Everyones":true,"Claims":[{"Key":"a"}],"Seen":[],"Making":{}}"#.to_owned()
-        ));
+        ).ok());
         for who in [None, Some("uid-bob")] {
             assert!(live.body(who, "{}").contains(r#""Key":"a""#), "{who:?} is shown an open claim");
         }
@@ -965,8 +1071,8 @@ mod tests {
     #[test]
     fn a_claim_post_this_build_cannot_read_is_refused() {
         let live = Live::load(Arc::new(Store::in_memory()), &[]);
-        assert!(!live.set_claims(r#"[{"Key":"a"}]"#.to_owned()), "a bare array is not the envelope");
-        assert!(!live.set_claims("not json".to_owned()));
+        assert!(!live.set_claims(r#"[{"Key":"a"}]"#.to_owned()).ok(), "a bare array is not the envelope");
+        assert!(!live.set_claims("not json".to_owned()).ok());
         assert!(live.body(Some("uid-ada"), "{}").contains(r#""Claims":[]"#));
     }
 
@@ -975,7 +1081,7 @@ fn a_report_in_the_shape_an_older_mod_posted_is_refused() {
         // A bare array meant every player to everybody. Reading it that way
         // would be exactly what an operator turned the setting off to prevent.
         let live = Live::load(Arc::new(Store::in_memory()), &[]);
-        assert!(!live.set_players(r#"[{"Name":"ada"}]"#.to_owned()));
+        assert!(!live.set_players(r#"[{"Name":"ada"}]"#.to_owned()).ok());
         assert!(!live.body(None, "{}").contains("ada"));
     }
 }

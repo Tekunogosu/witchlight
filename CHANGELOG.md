@@ -9,6 +9,27 @@ which is where that rule is kept rather than in anybody's memory.
 A version that moved for the other half says so and lists nothing, which is not an
 omission: it is what "one release" looks like from the side that did not change.
 
+## 0.53.1
+
+**Deploy note:** both halves, upgraded together; nothing is cleared. No setting,
+no address, no stored file and no database table changes.
+
+- **The live feed is counted in parts, and a browser is sent only the parts that
+  moved.** The feed carried one sequence number for everything in it, so a world
+  clock that ticks every second resent every marker, every claim and every
+  position to every open browser on every tick. On a server with 359 markers an
+  idle page was sent 9.6 MB a minute, of which 99.7% was markers that had not
+  changed. Players, markers, claims, the world clock and plugin rows now each
+  carry their own sequence, and an answer holds only what the browser has not
+  got. The same server and the same markers now send 105 KB a minute, and the
+  markers go out when a marker changes.
+
+- **A post that says nothing new wakes nobody.** The mod already declined to
+  resend an unchanged marker list, and the service woke every browser anyway and
+  sent the list back from its own copy, because the only thing a post reported
+  was whether it parsed. It now reports whether it changed what was held, which
+  is a different question, and only a change wakes a browser.
+
 ## 0.53.0
 
 **Deploy note:** both halves, upgraded together; nothing is cleared. No setting,

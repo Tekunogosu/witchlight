@@ -477,6 +477,15 @@ function arrived(waypoints) {
 let pins = new Set();
 
 /**
+ * Every marker this reader may see, as the service last sent them.
+ *
+ * Held here rather than read fresh from each answer because the feed arrives in
+ * parts: an answer carrying only a player's new position says nothing about the
+ * markers, and the map still has to draw the ones it already had.
+ */
+let waypointsHeld = [];
+
+/**
  * Pins asked for and not yet seen back, by key: which way it was asked, and when.
  *
  * A pin is a round trip like everything else here — the service holds the ask,

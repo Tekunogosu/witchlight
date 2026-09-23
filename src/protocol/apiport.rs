@@ -16,10 +16,12 @@ use crate::protocol::api::Api;
 use crate::protocol::auth::Who;
 use crate::util::error::{Error, Result};
 use crate::util::http::{self, Reply};
+use crate::protocol::live::Took;
 use crate::protocol::preferences::{Person, Preset};
 use crate::state::State;
 use crate::mapdata::store::Arrived;
 use crate::util::urls;
+use crate::web::events::Feed;
 use crate::util::log::{say, warn};
 
 /// Holds everything the mod may reach on this channel.
@@ -131,21 +133,21 @@ fn posted(request: &mut Request, channel: &Channel) -> Reply {
         },
 
         "/live/players" => {
-            let ok = channel.state.live.set_players(body);
-            if ok {
+            let took = channel.state.live.set_players(body);
+            if took.ok() {
                 // Group membership arrives on the player post, and a map shared
                 // with a group is shared against it.
                 channel.state.memory.set_groups(channel.state.live.groups());
             }
-            moved(channel, ok)
+            moved(channel, Feed::Players, took)
         }
         // Take the land claims, with the names of everybody the mod says may
         // see them. Seeing claims is a privilege, and only the mod knows who
         // holds one. See the `Live` this hands them to for why the names travel
         // beside the claims rather than as a per-person copy.
-        "/live/claims" => moved(channel, channel.state.live.set_claims(body)),
-        "/live/world" => moved(channel, channel.state.live.set_world(body)),
-        "/live/markers" => moved(channel, channel.state.live.set_markers(body)),
+        "/live/claims" => moved(channel, Feed::Claims, channel.state.live.set_claims(body)),
+        "/live/world" => moved(channel, Feed::World, channel.state.live.set_world(body)),
+        "/live/markers" => moved(channel, Feed::Markers, channel.state.live.set_markers(body)),
 
         // Report what the map already holds, for a mod that just started and
         // has no memory of what it sent a previous service. It returns
@@ -277,7 +279,7 @@ fn kept_rows(channel: &Channel, id: &str, body: &str) -> Reply {
             // Tell every browser, as a marker's arrival does. A plugin's rows
             // are live data, and a page holding them should not wait on a poll
             // to learn they moved.
-            channel.state.events.live_changed();
+            channel.state.events.live_changed(Feed::Plugins);
             http::text(204, "")
         }
         Err(error) => http::text(500, &error.to_string()),
@@ -285,11 +287,15 @@ fn kept_rows(channel: &Channel, id: &str, body: &str) -> Reply {
 }
 
 /// Accepts a live post and tells every open browser, or refuses it.
-fn moved(channel: &Channel, ok: bool) -> Reply {
-    if ok {
-        channel.state.events.live_changed();
+///
+/// Wakes browsers only where the post changed what is held. The mod posts the
+/// clock every second and the markers only when they differ, so waking on every
+/// well-formed post sent every marker to every browser once a second.
+fn moved(channel: &Channel, feed: Feed, took: Took) -> Reply {
+    if took.changed() {
+        channel.state.events.live_changed(feed);
     }
-    taken(ok)
+    taken(took.ok())
 }
 
 /// Accepts a post, or refuses it because it is not the shape this build reads.

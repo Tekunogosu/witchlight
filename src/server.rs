@@ -20,6 +20,8 @@ use crate::util::faults;
 use crate::util::net;
 use crate::render::pyramid;
 use crate::web::routes;
+use crate::web::events::Sequences;
+use crate::protocol::live::Parts;
 use crate::state::State;
 use crate::protocol::watch;
 use crate::util::log::{say, warn};
@@ -284,33 +286,90 @@ fn answer(server: &Server, state: &Arc<State>) {
     }
 }
 
-/// Answers `/events`. Waits until the map or the live feed has moved past what
-/// the page last saw, then reports what changed. The wait happens on the thread
-/// this function was given.
+/// Answers `/events`. Waits until the map or some part of the live feed has
+/// moved past what the page last saw, then reports what changed. The wait
+/// happens on the thread this function was given.
+///
+/// Each part of the live feed carries its own sequence. A page sends the ones it
+/// holds and is answered with the parts that moved past them, so a clock that
+/// ticks every second does not resend every marker to every browser.
 fn wait_for_events(request: tiny_http::Request, state: &State) {
     let url = request.url().to_owned();
     let since = crate::util::urls::param(&url, "since").and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
-    let live = crate::util::urls::param(&url, "live").and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
     let who = state.sessions.who(&crate::util::http::cookies(&request));
     let uid = who.map(|who| who.uid);
 
-    let waited = state.events.wait(|| state.generation() > since || state.events.live_seq() > live);
+    let seen = sequences_in(&url);
+    let moved_on = |now: Sequences| {
+        now.players > seen.players
+            || now.markers > seen.markers
+            || now.claims > seen.claims
+            || now.world > seen.world
+            || now.plugins > seen.plugins
+    };
+
+    let waited = state
+        .events
+        .wait(|| state.generation() > since || moved_on(state.events.sequences()));
     let reply = match waited {
         None => crate::util::http::text(503, "too many clients waiting — retry later"),
         Some(_) => {
             let scope = state.scope_for(uid.as_deref());
             let generation = state.generation();
-            let live_now = state.events.live_seq();
+            let now = state.events.sequences();
             // Carry only what changed. A page told the map moved forty times a
             // second must not receive forty copies of every player's position.
             let info = if generation > since { state.info(&scope, Some(since)) } else { "null".to_owned() };
-            let feed = if live_now > live { state.live.body(uid.as_deref(), &state.preferences.colors()) } else { "null".to_owned() };
+            let feed = state.live.parts(
+                uid.as_deref(),
+                &state.preferences.colors(),
+                moved(seen, now),
+            );
             crate::util::http::json(&format!(
-                r#"{{"generation":{generation},"liveSeq":{live_now},"info":{info},"live":{feed}}}"#
+                r#"{{"generation":{generation},"seqs":{seqs},"info":{info},"live":{feed}}}"#,
+                seqs = said_seqs(now),
             ))
         }
     };
     let _ = request.respond(reply);
+}
+
+/// Reads the sequences a page says it holds.
+///
+/// A part the page did not name is read as never seen, so a page that has just
+/// loaded, or one built before the parts were counted separately, is sent every
+/// part once and settles from there.
+fn sequences_in(url: &str) -> Sequences {
+    let read = |name: &str| {
+        crate::util::urls::param(url, name)
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(0)
+    };
+    Sequences {
+        players: read("players"),
+        markers: read("markers"),
+        claims: read("claims"),
+        world: read("world"),
+        plugins: read("plugins"),
+    }
+}
+
+/// Which parts moved past what the page holds.
+fn moved(seen: Sequences, now: Sequences) -> Parts {
+    Parts {
+        players: now.players > seen.players,
+        markers: now.markers > seen.markers,
+        claims: now.claims > seen.claims,
+        world: now.world > seen.world,
+    }
+}
+
+/// Writes the sequences the page should send back next time.
+fn said_seqs(now: Sequences) -> String {
+    format!(
+        r#"{{"players":{},"markers":{},"claims":{},"world":{},"plugins":{}}}"#,
+        now.players, now.markers, now.claims, now.world, now.plugins
+    )
 }
 
 /// Returns the number of request threads to run. A setting of zero picks a
